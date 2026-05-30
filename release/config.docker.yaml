@@ -1,0 +1,33 @@
+# Wyze Sense to MQTT Bridge (Rust) Docker Configuration
+# ----------------------------------
+# This config is pre-configured for Docker container paths.
+# Mount this file at /app/config/config.yaml
+
+# USB Dongle Settings
+# In Docker, the host device is mapped to /dev/hidraw0 via docker-compose devices:
+usb:
+  dongle: "/dev/hidraw0"
+
+# Web Console Panel Settings
+web:
+  enabled: true
+  port: 8080
+
+# MQTT Broker Gateway Integration Settings
+# Uncomment and configure to enable Home Assistant auto-discovery
+mqtt:
+  enabled: false
+  # host: "mqtt-broker"      # Use Docker service name or IP
+  # port: 1883
+  # username: "homeassistant"
+  # password: "your_secure_password"
+  # self_topic_root: "wyzesense2mqtt"
+  # hass_topic_root: "homeassistant"
+
+# Logging with daily rotation
+# Logs are written to /app/logs/ (mounted as a Docker volume)
+# Relative paths resolve against this config file's directory (/app/config/)
+logging:
+  level: "info"
+  log_file: "/app/logs/wyzesense2mqtt-rs.log"
+  max_log_files: 7

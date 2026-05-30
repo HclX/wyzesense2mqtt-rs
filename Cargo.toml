@@ -1,0 +1,22 @@
+[package]
+name = "wyzesense2mqtt-rs"
+version = "0.1.0"
+edition = "2024"
+default-run = "wyzesense2mqtt-rs"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+binrw = "0.14"
+serde = { version = "1.0", features = ["derive"] }
+serde_yaml = "0.9"
+serde_json = "1.0"
+async-trait = "0.1"
+rumqttc = "0.24"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+axum = "0.7"
+tower-http = { version = "0.5", features = ["cors"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+tracing-appender = "0.2.5"
+
+[dev-dependencies]

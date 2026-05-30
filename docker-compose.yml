@@ -1,0 +1,62 @@
+# wyzesense2mqtt-rs Docker Compose
+# =============================================================================
+# Quick start:
+#   1. cp config/config.yaml.template config/config.yaml
+#   2. Edit config/config.yaml with your MQTT broker details
+#   3. docker compose up -d
+#
+# USB Device:
+#   The Wyze Sense dongle appears as /dev/hidrawN. To find it:
+#     ls -la /dev/hidraw*
+#     # or check dmesg for "Wyze" / "WCDONGLE"
+#
+# Environment variables (all optional, config.yaml takes precedence):
+#   PUID              - Run as this UID for volume ownership (default: 1000)
+#   PGID              - Run as this GID for volume ownership (default: 1000)
+#   USB_DONGLE        - HID device path on host (default: /dev/hidraw0)
+#   MQTT_HOST         - MQTT broker hostname
+#   MQTT_PORT         - MQTT broker port (default: 1883)
+#   MQTT_USERNAME     - MQTT auth username
+#   MQTT_PASSWORD     - MQTT auth password
+#   LOG_LEVEL         - trace/debug/info/warn/error (default: info)
+#   WEB_PORT          - Web dashboard port (default: 8080)
+#   TZ                - Timezone (default: UTC)
+# =============================================================================
+
+services:
+  wyzesense2mqtt-rs:
+    container_name: wyzesense2mqtt-rs
+    hostname: wyzesense2mqtt-rs
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # Alternatively, use a pre-built image:
+    # image: ghcr.io/hclx/wyzesense2mqtt-rs:latest
+    restart: unless-stopped
+    stop_signal: SIGINT
+
+    # USB dongle passthrough — required for HID device access
+    devices:
+      - "${USB_DONGLE:-/dev/hidraw0}:/dev/hidraw0"
+
+    # Expose web dashboard
+    ports:
+      - "${WEB_PORT:-8080}:8080"
+
+    # Persistent volumes
+    volumes:
+      - ./config:/app/config        # config.yaml lives here
+      - ./logs:/app/logs             # daily-rotated log files
+      - ./state:/app/state           # sensor state database
+
+    # Environment variable overrides (optional, config.yaml takes precedence)
+    environment:
+      PUID: "${PUID:-1000}"          # Run as this UID (maps volume ownership)
+      PGID: "${PGID:-1000}"          # Run as this GID
+      TZ: "${TZ:-UTC}"
+      USB_DONGLE: "${USB_DONGLE:-auto}"
+      MQTT_HOST: "${MQTT_HOST:-}"
+      MQTT_PORT: "${MQTT_PORT:-1883}"
+      MQTT_USERNAME: "${MQTT_USERNAME:-}"
+      MQTT_PASSWORD: "${MQTT_PASSWORD:-}"
+      LOG_LEVEL: "${LOG_LEVEL:-info}"

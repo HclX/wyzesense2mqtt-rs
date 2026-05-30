@@ -1,0 +1,14 @@
+target/
+scratch/
+config/
+logs/
+state/
+*.log
+*.jsonl
+.git/
+.gitignore
+tests/captures/
+docker-compose.yml
+Dockerfile
+README.md
+docs/

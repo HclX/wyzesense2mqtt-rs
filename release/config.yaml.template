@@ -1,0 +1,33 @@
+# Wyze Sense to MQTT Bridge (Rust) Sectioned Configuration Template
+# ----------------------------------------------
+
+# USB Dongle Settings
+# (Set to "auto" to dynamically discover the dongle via sysfs)
+usb:
+  dongle: "auto"
+
+# Web Console Panel Settings
+web:
+  enabled: true
+  port: 8080
+
+# MQTT Broker Gateway Integration Settings
+# (Set host to automatically enable publishing)
+mqtt:
+  enabled: false
+  host: "localhost"
+  port: 1883
+  username: "homeassistant"
+  password: "your_secure_password"
+  self_topic_root: "wyzesense2mqtt"
+  hass_topic_root: "homeassistant"
+
+# Diagnostics Structural Logging Level
+# (Options: trace, debug, info, warn, error)
+# Set log_file to enable daily-rotating file logging (default: stdout only)
+# Relative paths are resolved against this config file's directory.
+# max_log_files controls how many rotated files to keep (default: 7)
+logging:
+  level: "info"
+  # log_file: "logs/wyzesense2mqtt-rs.log"
+  # max_log_files: 7

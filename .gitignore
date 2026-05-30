@@ -1,0 +1,13 @@
+/target
+
+# Log files
+*.log
+
+# Capture files (recorded by --capture flag)
+*.jsonl
+
+# Runtime config/state
+/config/
+
+# Scratch / working files
+/scratch/
