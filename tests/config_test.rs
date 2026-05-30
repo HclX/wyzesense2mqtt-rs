@@ -9,6 +9,7 @@ use tokio::sync::mpsc;
 use wyzesense2mqtt_rs::config::sensors::{SensorsConfig, SensorMetadata};
 use wyzesense2mqtt_rs::config::state::{SystemState, SensorState};
 use wyzesense2mqtt_rs::config::monitor::AvailabilityMonitor;
+use wyzesense2mqtt_rs::protocol::sensor::SensorManager;
 
 fn get_temp_file(name: &str) -> PathBuf {
     let mut dir = std::env::temp_dir();
@@ -93,82 +94,98 @@ fn test_system_state_persistence() {
 async fn test_availability_monitor() {
     let _ = tracing_subscriber::fmt::try_init();
 
-    // 1. Setup config
-    let mut sensors = HashMap::new();
-    sensors.insert(
-        "777A1234".to_string(),
-        SensorMetadata {
-            name: "Front Door".to_string(),
-            r#type: "contact".to_string(),
-            timeout_sec: Some(5), // 5 seconds timeout for testing
-        },
-    );
-    let sensors_config = SensorsConfig { sensors };
+    let config_path = get_temp_file("test_monitor_sensors.yaml");
+    let state_path = get_temp_file("test_monitor_state.yaml");
 
-    // 2. Setup state
+    // 1. Clean up any stale files
+    let _ = fs::remove_file(&config_path);
+    let _ = fs::remove_file(&state_path);
+
+    // 2. Write a test config with a 3 seconds timeout
+    let config_yaml = r#"
+sensors:
+  "777A1234":
+    name: "Front Door"
+    type: "contact"
+    timeout_sec: 3
+"#;
+    fs::write(&config_path, config_yaml).unwrap();
+
+    // 3. Write a warm state file with last seen = now
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_secs();
 
-    let mut state = SystemState::default();
-    // This one is recently seen
-    state.sensors.insert(
-        "777A1234".to_string(),
-        SensorState {
-            mac: "777A1234".to_string(),
-            sensor_type: "contact".to_string(),
-            version: "1".to_string(),
-            last_seen: now,
-            battery: 100,
-            signal: -55,
-        },
+    let state_yaml = format!(
+        r#"
+sensors:
+  "777A1234":
+    mac: "777A1234"
+    sensor_type: "switch"
+    version: "1"
+    last_seen: {}
+    battery: 100
+    signal: -55
+"#,
+        now
     );
+    fs::write(&state_path, state_yaml).unwrap();
 
-    let state_arc = Arc::new(RwLock::new(state));
+    // 4. Setup SensorManager and load
+    let sensor_manager = Arc::new(std::sync::Mutex::new(SensorManager::new(
+        config_path.to_str().unwrap().to_string(),
+        state_path.to_str().unwrap().to_string(),
+    )));
+
+    {
+        let mut manager = sensor_manager.lock().unwrap();
+        manager.load_sensors(&["777A1234".to_string()]).unwrap();
+    }
+
+    // 5. Instantiate AvailabilityMonitor with 1 second check interval
     let (offline_tx, mut offline_rx) = mpsc::channel(10);
-
     let monitor = AvailabilityMonitor::new(
-        sensors_config,
-        state_arc.clone(),
-        Duration::from_secs(10),
-        Duration::from_secs(1), // 1 second check interval
+        Arc::clone(&sensor_manager),
+        Duration::from_secs(1), // check interval
         offline_tx,
     );
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
-    
-    // Start monitor in background
     let monitor_handle = tokio::spawn(async move {
         monitor.start(shutdown_rx).await;
     });
 
-    // Wait 1.5 seconds, should NOT be offline
+    // Wait 1.5 seconds. Sensor timeout is 3 seconds, so it should NOT be offline yet
     tokio::time::sleep(Duration::from_millis(1500)).await;
     assert!(offline_rx.try_recv().is_err());
 
-    // Now simulate time passing by updating last_seen to 8 seconds ago
+    // Now simulate time passing by manually updating the sensor's last seen to 5 seconds ago
     {
-        let mut state = state_arc.write().await;
-        if let Some(sensor) = state.sensors.get_mut("777A1234") {
-            sensor.last_seen = now - 8;
+        let mut manager = sensor_manager.lock().unwrap();
+        if let Some(sensor) = manager.get_sensors_mut().get_mut("777A1234") {
+            sensor.set_last_seen(now - 5);
         }
     }
 
-    // Wait for monitor to check (should check within 1 second)
+    // Wait for monitor to sweep and detect timeout (should happen within 1-2 seconds)
     let mut received = None;
     tokio::select! {
         res = offline_rx.recv() => {
             received = res;
         }
-        _ = tokio::time::sleep(Duration::from_secs(3)) => {
-            // Timeout waiting for notification
+        _ = tokio::time::sleep(Duration::from_secs(4)) => {
+            // Timeout
         }
     }
 
     assert_eq!(received, Some("777A1234".to_string()));
 
-    // Shutdown monitor
+    // Clean up monitor tasks
     let _ = shutdown_tx.send(());
     let _ = monitor_handle.await;
+
+    // Clean up temp files
+    let _ = fs::remove_file(config_path);
+    let _ = fs::remove_file(state_path);
 }

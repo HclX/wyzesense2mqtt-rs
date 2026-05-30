@@ -15,6 +15,8 @@ pub trait WyzeSensor: Send + Sync {
     fn set_friendly_name(&mut self, name: String);
     fn last_seen(&self) -> u64;
     fn set_last_seen(&mut self, time: u64);
+    fn timeout_sec(&self) -> u64;
+    fn set_timeout_sec(&mut self, timeout: u64);
 
     fn get_state_payload(&self) -> Value;
     fn get_discovery_payloads(&self, topic_root: &str) -> Vec<(String, Value)>;
@@ -56,6 +58,7 @@ fn push_common_discovery_payloads(
             "value_template": "{{ value_json.battery }}",
             "device_class": "battery",
             "unit_of_measurement": "%",
+            "state_class": "measurement",
             "unique_id": format!("{}_battery", device_id),
             "device": device,
             "availability": availability,
@@ -71,6 +74,7 @@ fn push_common_discovery_payloads(
             "value_template": "{{ value_json.signal_strength }}",
             "device_class": "signal_strength",
             "unit_of_measurement": "dBm",
+            "state_class": "measurement",
             "unique_id": format!("{}_signal_strength", device_id),
             "device": device,
             "availability": availability,
@@ -93,6 +97,7 @@ pub struct ContactSensor {
     is_online: bool,
     last_seen: u64,
     is_open: bool,
+    timeout_sec: u64,
 }
 
 impl ContactSensor {
@@ -101,6 +106,10 @@ impl ContactSensor {
         sensor_type: SensorType,
         friendly_name: String,
     ) -> Self {
+        let default_timeout = match sensor_type {
+            SensorType::ContactV1 => 3600 * 8, // 8 hours for V1
+            _ => 3600 * 4,                     // 4 hours for V2
+        };
         Self {
             mac,
             sensor_type,
@@ -114,6 +123,7 @@ impl ContactSensor {
                 .unwrap_or_default()
                 .as_secs(),
             is_open: false,
+            timeout_sec: default_timeout,
         }
     }
 }
@@ -130,6 +140,8 @@ impl WyzeSensor for ContactSensor {
     fn set_friendly_name(&mut self, name: String) { self.friendly_name = name; }
     fn last_seen(&self) -> u64 { self.last_seen }
     fn set_last_seen(&mut self, time: u64) { self.last_seen = time; }
+    fn timeout_sec(&self) -> u64 { self.timeout_sec }
+    fn set_timeout_sec(&mut self, timeout: u64) { self.timeout_sec = timeout; }
 
     fn get_state_payload(&self) -> Value {
         json!({
@@ -228,6 +240,7 @@ pub struct MotionSensor {
     is_online: bool,
     last_seen: u64,
     is_active: bool,
+    timeout_sec: u64,
 }
 
 impl MotionSensor {
@@ -236,6 +249,10 @@ impl MotionSensor {
         sensor_type: SensorType,
         friendly_name: String,
     ) -> Self {
+        let default_timeout = match sensor_type {
+            SensorType::MotionV1 => 3600 * 8, // 8 hours for V1
+            _ => 3600 * 4,                    // 4 hours for V2
+        };
         Self {
             mac,
             sensor_type,
@@ -249,6 +266,7 @@ impl MotionSensor {
                 .unwrap_or_default()
                 .as_secs(),
             is_active: false,
+            timeout_sec: default_timeout,
         }
     }
 }
@@ -265,6 +283,8 @@ impl WyzeSensor for MotionSensor {
     fn set_friendly_name(&mut self, name: String) { self.friendly_name = name; }
     fn last_seen(&self) -> u64 { self.last_seen }
     fn set_last_seen(&mut self, time: u64) { self.last_seen = time; }
+    fn timeout_sec(&self) -> u64 { self.timeout_sec }
+    fn set_timeout_sec(&mut self, timeout: u64) { self.timeout_sec = timeout; }
 
     fn get_state_payload(&self) -> Value {
         json!({
@@ -365,6 +385,7 @@ pub struct LeakSensor {
     is_wet: bool,
     probe_connected: bool,
     probe_available: bool,
+    timeout_sec: u64,
 }
 
 impl LeakSensor {
@@ -388,6 +409,7 @@ impl LeakSensor {
             is_wet: false,
             probe_connected: false,
             probe_available: false,
+            timeout_sec: 3600 * 4, // 4 hours for V2 leak sensor
         }
     }
 }
@@ -404,6 +426,8 @@ impl WyzeSensor for LeakSensor {
     fn set_friendly_name(&mut self, name: String) { self.friendly_name = name; }
     fn last_seen(&self) -> u64 { self.last_seen }
     fn set_last_seen(&mut self, time: u64) { self.last_seen = time; }
+    fn timeout_sec(&self) -> u64 { self.timeout_sec }
+    fn set_timeout_sec(&mut self, timeout: u64) { self.timeout_sec = timeout; }
 
     fn get_state_payload(&self) -> Value {
         json!({
@@ -455,7 +479,7 @@ impl WyzeSensor for LeakSensor {
             json!({
                 "name": "Probe Connected",
                 "state_topic": state_topic.clone(),
-                "value_template": "{{ 'ON' if value_json.probe_connected else 'OFF' }}",
+                "value_template": "{{ 'ON' if value_json.probe_available else 'OFF' }}",
                 "device_class": "connectivity",
                 "unique_id": format!("{}_probe", device_id),
                 "device": device,
@@ -521,6 +545,7 @@ pub struct ClimateSensor {
     last_seen: u64,
     temperature: f32,
     humidity: u8,
+    timeout_sec: u64,
 }
 
 impl ClimateSensor {
@@ -543,6 +568,7 @@ impl ClimateSensor {
                 .as_secs(),
             temperature: 0.0,
             humidity: 0,
+            timeout_sec: 3600 * 4, // 4 hours for V2 climate sensor
         }
     }
 }
@@ -559,6 +585,8 @@ impl WyzeSensor for ClimateSensor {
     fn set_friendly_name(&mut self, name: String) { self.friendly_name = name; }
     fn last_seen(&self) -> u64 { self.last_seen }
     fn set_last_seen(&mut self, time: u64) { self.last_seen = time; }
+    fn timeout_sec(&self) -> u64 { self.timeout_sec }
+    fn set_timeout_sec(&mut self, timeout: u64) { self.timeout_sec = timeout; }
 
     fn get_state_payload(&self) -> Value {
         json!({
@@ -637,7 +665,7 @@ impl WyzeSensor for ClimateSensor {
                     return Err("Climate telemetry payload too short");
                 }
                 let battery = remaining[1];
-                let temp_hi = remaining[4];
+                let temp_hi = remaining[4] as i8;
                 let temp_lo = remaining[5];
                 let humidity = remaining[6];
                 let rssi = (remaining[9] as i8).saturating_neg();
@@ -673,6 +701,7 @@ pub struct UnknownSensor {
     sw_version: String,
     is_online: bool,
     last_seen: u64,
+    timeout_sec: u64,
 }
 
 impl UnknownSensor {
@@ -689,6 +718,7 @@ impl UnknownSensor {
                 .duration_since(SystemTime::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_secs(),
+            timeout_sec: 1800, // 30 minutes default for unknown sensors
         }
     }
 }
@@ -705,6 +735,8 @@ impl WyzeSensor for UnknownSensor {
     fn set_friendly_name(&mut self, name: String) { self.friendly_name = name; }
     fn last_seen(&self) -> u64 { self.last_seen }
     fn set_last_seen(&mut self, time: u64) { self.last_seen = time; }
+    fn timeout_sec(&self) -> u64 { self.timeout_sec }
+    fn set_timeout_sec(&mut self, timeout: u64) { self.timeout_sec = timeout; }
 
     fn get_state_payload(&self) -> Value {
         json!({
@@ -857,19 +889,26 @@ impl SensorManager {
                 "unknown".to_string()
             };
 
-            // Auto-populate missing NVRAM sensors in sensors.yaml as "unknown"
-            if !sensors_config.sensors.contains_key(mac) {
-                sensors_config.sensors.insert(mac.clone(), SensorMetadata {
-                    name: friendly_name.clone(),
-                    r#type: "unknown".to_string(),
-                    timeout_sec: Some(1800),
-                });
-                config_changed = true;
-            }
-
             // Create the sensor object
-            match SensorFactory::create_from_str(mac.clone(), &type_str, friendly_name) {
+            match SensorFactory::create_from_str(mac.clone(), &type_str, friendly_name.clone()) {
                 Ok(mut sensor) => {
+                    // Load custom timeout if it exists in user config
+                    if let Some(m) = metadata {
+                        if let Some(t) = m.timeout_sec {
+                            sensor.set_timeout_sec(t);
+                        }
+                    }
+
+                    // Auto-populate missing NVRAM sensors in sensors.yaml
+                    if !sensors_config.sensors.contains_key(mac) {
+                        sensors_config.sensors.insert(mac.clone(), SensorMetadata {
+                            name: friendly_name.clone(),
+                            r#type: type_str.clone(),
+                            timeout_sec: Some(sensor.timeout_sec()),
+                        });
+                        config_changed = true;
+                    }
+
                     // Warm up battery, rssi, and version from system state cache if available
                     if let Some(cached) = system_state.sensors.get(mac) {
                         let event = DongleEvent {
@@ -931,7 +970,7 @@ impl SensorManager {
         });
 
         // 2. Determine settings: preserve existing custom metadata if re-pairing
-        let (name, timeout_sec) = if let Some(existing) = config.sensors.get(&mac) {
+        let (name, mut custom_timeout) = if let Some(existing) = config.sensors.get(&mac) {
             let current_name = if existing.name.starts_with("Wyze Sense") || existing.name.starts_with("Wyze Sensor") || existing.name.starts_with("Wyze UNKNOWN") {
                 let suffix = &mac[mac.len() - 4..];
                 format!("Wyze {} {}", type_str.to_uppercase(), suffix)
@@ -940,30 +979,38 @@ impl SensorManager {
             };
             (
                 current_name,
-                existing.timeout_sec.unwrap_or(1800),
+                existing.timeout_sec,
             )
         } else {
             let suffix = &mac[mac.len() - 4..];
             (
                 format!("Wyze {} {}", type_str.to_uppercase(), suffix),
-                1800,
+                None,
             )
         };
 
         // 3. Construct and insert the in-memory sensor object
-        let sensor = SensorFactory::create(
+        let mut sensor = SensorFactory::create(
             mac.clone(),
             sensor_type,
             name.clone(),
         )?;
-        self.sensors.insert(mac.clone(), sensor);
+
+        // Load custom timeout if it exists in user config
+        if let Some(t) = custom_timeout {
+            sensor.set_timeout_sec(t);
+        } else {
+            custom_timeout = Some(sensor.timeout_sec());
+        }
 
         // 4. Update metadata in config
-        config.sensors.insert(mac, SensorMetadata {
+        config.sensors.insert(mac.clone(), SensorMetadata {
             name,
             r#type: type_str.to_string(),
-            timeout_sec: Some(timeout_sec),
+            timeout_sec: custom_timeout,
         });
+
+        self.sensors.insert(mac.clone(), sensor);
 
         // 5. Save both configurations atomically to disk
         config.save_to_yaml_atomic(&self.config_path)?;
@@ -1027,5 +1074,39 @@ impl SensorManager {
             let _ = self.save_state_to_disk();
         }
         success
+    }
+
+    /// Periodically sweep all registered sensors to verify availability timeouts.
+    /// Returns a list of MAC addresses of sensors that newly went offline.
+    pub fn check_timeouts(&mut self) -> Vec<String> {
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        let mut newly_offline = Vec::new();
+
+        for (mac, sensor) in &mut self.sensors {
+            if !sensor.is_online() {
+                continue; // Already offline, skip
+            }
+
+            let timeout_sec = sensor.timeout_sec();
+
+            if now.saturating_sub(sensor.last_seen()) > timeout_sec {
+                warn!("Sensor {} timed out (last seen {} seconds ago). Setting offline.", mac, now.saturating_sub(sensor.last_seen()));
+                sensor.set_online(false);
+                newly_offline.push(mac.clone());
+            }
+        }
+
+        // If any sensor went offline, persist the dynamic states to state.yaml
+        if !newly_offline.is_empty() {
+            if let Err(e) = self.save_state_to_disk() {
+                error!("Failed to save system state after timeout check: {}", e);
+            }
+        }
+
+        newly_offline
     }
 }

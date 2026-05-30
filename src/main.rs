@@ -1,12 +1,12 @@
 use wyzesense2mqtt_rs::engine::Engine;
 use wyzesense2mqtt_rs::transport::hidraw::HidrawTransport;
 use wyzesense2mqtt_rs::transport::AsyncTransport;
-use wyzesense2mqtt_rs::protocol::telemetry::TelemetryData;
-use wyzesense2mqtt_rs::protocol::telemetry::DongleEvent;
+use wyzesense2mqtt_rs::protocol::telemetry::{TelemetryData, DongleEvent, SensorType};
 use wyzesense2mqtt_rs::web::start_web_server;
 use wyzesense2mqtt_rs::config::app_config::AppConfig;
 use wyzesense2mqtt_rs::gateway::mqtt::{MqttGateway, GatewayCommand};
 use wyzesense2mqtt_rs::protocol::sensor::SensorManager;
+use wyzesense2mqtt_rs::config::monitor::AvailabilityMonitor;
 use std::sync::Mutex;
 
 use std::time::Duration;
@@ -230,7 +230,7 @@ async fn run_daemon<T: wyzesense2mqtt_rs::transport::AsyncTransport + Clone + 's
     // Instantiate the core engine
     let state_path = "config/state.yaml";
     let config_path = "config/sensors.yaml";
-    let mut engine = Engine::new(transport, event_tx, Some(state_path.to_string()));
+    let mut engine = Engine::new(transport, event_tx.clone(), Some(state_path.to_string()));
 
     // Instantiate the SensorManager
     let sensor_manager = Arc::new(Mutex::new(SensorManager::new(
@@ -268,10 +268,45 @@ async fn run_daemon<T: wyzesense2mqtt_rs::transport::AsyncTransport + Clone + 's
             return Err(e.into());
         }
         Err(_) => {
-            error!("Dongle handshake timed out! Make sure USB device is connected.");
+        error!("Dongle handshake timed out! Make sure USB device is connected.");
             return Err("Handshake timeout".into());
         }
     }
+
+    // Start dynamic Availability Monitor in the background
+    let (offline_tx, mut offline_rx) = mpsc::channel::<String>(32);
+    let monitor = AvailabilityMonitor::new(
+        Arc::clone(&sensor_manager),
+        Duration::from_secs(30), // Run sweep check every 30 seconds
+        offline_tx,
+    );
+    let (_monitor_shutdown_tx, monitor_shutdown_rx) = tokio::sync::oneshot::channel();
+    tokio::spawn(async move {
+        monitor.start(monitor_shutdown_rx).await;
+    });
+
+    // Forward offline events from AvailabilityMonitor to the central Event queue
+    let event_tx_timeout = event_tx.clone();
+    let sensor_manager_timeout = Arc::clone(&sensor_manager);
+    tokio::spawn(async move {
+        while let Some(mac) = offline_rx.recv().await {
+            warn!("AvailabilityMonitor: Sensor {} timed out! Emitting offline telemetry event.", mac);
+            let s_type = {
+                let manager = sensor_manager_timeout.lock().unwrap();
+                manager.get_sensors().get(&mac)
+                    .map(|s| s.sensor_type())
+                    .unwrap_or(SensorType::Unknown(0))
+            };
+            let offline_evt = DongleEvent {
+                mac,
+                timestamp: std::time::SystemTime::now(),
+                sensor_type: s_type,
+                event_type: 0x00,
+                data: TelemetryData::Offline,
+            };
+            let _ = event_tx_timeout.send(offline_evt).await;
+        }
+    });
 
     // Setup Output Gateways Concurrently
     

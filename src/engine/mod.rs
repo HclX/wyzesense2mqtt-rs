@@ -219,48 +219,7 @@ impl<T: AsyncTransport + Clone + 'static> Engine<T> {
             }
         });
 
-        // Spawn availability monitor loop
-        let sensors_timeout = Arc::clone(&self.sensors);
-        let event_tx_timeout = self.event_tx.clone();
-        tokio::spawn(async move {
-            loop {
-                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-                
-                let mut offline_sensors = Vec::new();
-                {
-                    if let Ok(sensors_map) = sensors_timeout.lock() {
-                        let now = SystemTime::now();
-                        for (mac, state) in sensors_map.iter() {
-                            let last_seen_epoch = UNIX_EPOCH + Duration::from_secs(state.last_seen);
-                            if let Ok(duration) = now.duration_since(last_seen_epoch) {
-                                let timeout = Duration::from_secs(3600 * 2); // Default 2 hours timeout
-                                if duration > timeout {
-                                    let s_type = state.sensor_type.parse::<SensorType>().unwrap_or(SensorType::Unknown(0));
-                                    offline_sensors.push((mac.clone(), s_type));
-                                }
-                            }
-                        }
-                    }
-                }
 
-                for (mac, sensor_type) in offline_sensors {
-                    warn!("Sensor {} timed out! Emitting offline event.", mac);
-                    let offline_evt = DongleEvent {
-                        mac: mac.clone(),
-                        timestamp: SystemTime::now(),
-                        sensor_type,
-                        event_type: 0x00,
-                        data: TelemetryData::Offline,
-                    };
-                    if event_tx_timeout.send(offline_evt).await.is_err() {
-                        break; // Receiver closed, exit loop
-                    }
-                    if let Ok(mut sensors_map) = sensors_timeout.lock() {
-                        sensors_map.remove(&mac);
-                    }
-                }
-            }
-        });
 
         self.exit_tx.take().unwrap()
     }
