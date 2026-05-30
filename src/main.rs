@@ -289,6 +289,15 @@ async fn run_daemon<T: wyzesense2mqtt_rs::transport::AsyncTransport + Clone + 's
                 mqtt_options.set_credentials(user, pass);
             }
 
+            // Set Last Will and Testament for bridge status
+            let status_topic = format!("{}/status", config.mqtt.self_topic_root);
+            mqtt_options.set_last_will(rumqttc::LastWill::new(
+                status_topic,
+                "offline",
+                rumqttc::QoS::AtLeastOnce,
+                true, // retain
+            ));
+
             let gateway = MqttGateway::new(
                 mqtt_options,
                 event_rx, // Consumes event receiver

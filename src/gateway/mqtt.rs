@@ -57,6 +57,13 @@ impl MqttGateway {
         let control_topic_reload = format!("{}/reload", topic_root);
 
         tokio::spawn(async move {
+            let status_topic = format!("{}/status", topic_root);
+            if let Err(e) = client.publish(&status_topic, QoS::AtLeastOnce, true, "online").await {
+                error!("Failed to publish main bridge status online: {}", e);
+            } else {
+                info!("Published main bridge status: online");
+            }
+
             if let Err(e) = client.subscribe(&control_topic_scan, QoS::AtLeastOnce).await {
                 error!("Failed to subscribe to scan topic: {}", e);
             }
@@ -133,6 +140,7 @@ impl MqttGateway {
                             info!("Publishing Home Assistant Discovery for MAC: {}", event.mac);
                             for (topic, payload) in payloads {
                                 let payload_str = serde_json::to_string(&payload).unwrap();
+                                debug!("Publishing discovery config to {}: {}", topic, payload_str);
                                 if let Err(e) = client.publish(&topic, QoS::AtLeastOnce, true, payload_str).await {
                                     error!("Failed to publish discovery to {}: {}", topic, e);
                                 }
@@ -193,11 +201,11 @@ mod tests {
         let payloads = sensor.get_discovery_payloads("wyzesense");
         assert_eq!(payloads.len(), 3);
         
-        let contact_topic = "homeassistant/binary_sensor/wyzesense_ABC12345_contact/config";
+        let contact_topic = "homeassistant/binary_sensor/wyzesense_ABC12345/state/config";
         let contact_payload = payloads.iter().find(|(t, _)| t == contact_topic).unwrap().1.clone();
         
         assert_eq!(contact_payload["device_class"], "door");
-        assert_eq!(contact_payload["unique_id"], "wyzesense_ABC12345_contact");
+        assert_eq!(contact_payload["unique_id"], "wyzesense_ABC12345_state");
         assert_eq!(contact_payload["state_topic"], "wyzesense/ABC12345");
     }
 
@@ -232,7 +240,7 @@ mod tests {
         let payloads = sensor.get_discovery_payloads("wyzesense");
         assert_eq!(payloads.len(), 4);
 
-        let leak_topic = "homeassistant/binary_sensor/wyzesense_ABC12345_leak/config";
+        let leak_topic = "homeassistant/binary_sensor/wyzesense_ABC12345/state/config";
         let leak_payload = payloads.iter().find(|(t, _)| t == leak_topic).unwrap().1.clone();
         assert_eq!(leak_payload["device_class"], "moisture");
 

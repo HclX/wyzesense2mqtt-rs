@@ -25,10 +25,11 @@ pub trait WyzeSensor: Send + Sync {
 fn build_device_metadata(mac: &str, friendly_name: &str, sensor_type: SensorType) -> Value {
     let device_id = format!("wyzesense_{}", mac);
     json!({
-        "identifiers": [device_id],
+        "identifiers": [device_id.clone(), mac.to_string()],
         "name": friendly_name,
         "model": sensor_type.model_str(),
-        "manufacturer": "Wyze"
+        "manufacturer": "Wyze",
+        "via_device": "wyzesense2mqtt"
     })
 }
 
@@ -150,7 +151,7 @@ impl WyzeSensor for ContactSensor {
         push_common_discovery_payloads(&self.mac, &self.friendly_name, self.sensor_type, topic_root, &mut payloads);
 
         payloads.push((
-            format!("homeassistant/binary_sensor/{}_contact/config", device_id),
+            format!("homeassistant/binary_sensor/{}/state/config", device_id),
             json!({
                 "name": format!("{} Contact", self.friendly_name),
                 "state_topic": state_topic,
@@ -158,7 +159,7 @@ impl WyzeSensor for ContactSensor {
                 "device_class": "door",
                 "payload_on": "open",
                 "payload_off": "closed",
-                "unique_id": format!("{}_contact", device_id),
+                "unique_id": format!("{}_state", device_id),
                 "device": device,
                 "availability_topic": availability_topic,
             })
@@ -280,7 +281,7 @@ impl WyzeSensor for MotionSensor {
         push_common_discovery_payloads(&self.mac, &self.friendly_name, self.sensor_type, topic_root, &mut payloads);
 
         payloads.push((
-            format!("homeassistant/binary_sensor/{}_motion/config", device_id),
+            format!("homeassistant/binary_sensor/{}/state/config", device_id),
             json!({
                 "name": format!("{} Motion", self.friendly_name),
                 "state_topic": state_topic,
@@ -288,7 +289,7 @@ impl WyzeSensor for MotionSensor {
                 "device_class": "motion",
                 "payload_on": "active",
                 "payload_off": "inactive",
-                "unique_id": format!("{}_motion", device_id),
+                "unique_id": format!("{}_state", device_id),
                 "device": device,
                 "availability_topic": availability_topic,
             })
@@ -416,7 +417,7 @@ impl WyzeSensor for LeakSensor {
         push_common_discovery_payloads(&self.mac, &self.friendly_name, self.sensor_type, topic_root, &mut payloads);
 
         payloads.push((
-            format!("homeassistant/binary_sensor/{}_leak/config", device_id),
+            format!("homeassistant/binary_sensor/{}/state/config", device_id),
             json!({
                 "name": format!("{} Leak", self.friendly_name),
                 "state_topic": state_topic,
@@ -424,7 +425,7 @@ impl WyzeSensor for LeakSensor {
                 "device_class": "moisture",
                 "payload_on": "wet",
                 "payload_off": "dry",
-                "unique_id": format!("{}_leak", device_id),
+                "unique_id": format!("{}_state", device_id),
                 "device": device,
                 "availability_topic": availability_topic,
             })
