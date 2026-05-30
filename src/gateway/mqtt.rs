@@ -204,9 +204,10 @@ mod tests {
         let contact_topic = "homeassistant/binary_sensor/wyzesense_ABC12345/state/config";
         let contact_payload = payloads.iter().find(|(t, _)| t == contact_topic).unwrap().1.clone();
         
-        assert_eq!(contact_payload["device_class"], "door");
+        assert_eq!(contact_payload["device_class"], "opening");
         assert_eq!(contact_payload["unique_id"], "wyzesense_ABC12345_state");
         assert_eq!(contact_payload["state_topic"], "wyzesense/ABC12345");
+        assert_eq!(contact_payload["json_attributes_topic"], "wyzesense/ABC12345");
     }
 
     #[test]

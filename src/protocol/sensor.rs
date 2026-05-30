@@ -161,15 +161,16 @@ impl WyzeSensor for ContactSensor {
             format!("homeassistant/binary_sensor/{}/state/config", device_id),
             json!({
                 "name": null,
-                "state_topic": state_topic,
+                "state_topic": state_topic.clone(),
                 "value_template": "{{ value_json.state }}",
-                "device_class": "door",
+                "device_class": "opening",
                 "payload_on": "open",
                 "payload_off": "closed",
                 "unique_id": format!("{}_state", device_id),
                 "device": device,
                 "availability": availability,
                 "availability_mode": "all",
+                "json_attributes_topic": state_topic,
             })
         ));
 
@@ -295,7 +296,7 @@ impl WyzeSensor for MotionSensor {
             format!("homeassistant/binary_sensor/{}/state/config", device_id),
             json!({
                 "name": null,
-                "state_topic": state_topic,
+                "state_topic": state_topic.clone(),
                 "value_template": "{{ value_json.state }}",
                 "device_class": "motion",
                 "payload_on": "active",
@@ -304,6 +305,7 @@ impl WyzeSensor for MotionSensor {
                 "device": device,
                 "availability": availability,
                 "availability_mode": "all",
+                "json_attributes_topic": state_topic,
             })
         ));
 
@@ -435,15 +437,16 @@ impl WyzeSensor for LeakSensor {
             format!("homeassistant/binary_sensor/{}/state/config", device_id),
             json!({
                 "name": null,
-                "state_topic": state_topic,
+                "state_topic": state_topic.clone(),
                 "value_template": "{{ value_json.state }}",
                 "device_class": "moisture",
                 "payload_on": "wet",
                 "payload_off": "dry",
                 "unique_id": format!("{}_state", device_id),
-                "device": device,
-                "availability": availability,
+                "device": device.clone(),
+                "availability": availability.clone(),
                 "availability_mode": "all",
+                "json_attributes_topic": state_topic.clone(),
             })
         ));
 
@@ -451,7 +454,7 @@ impl WyzeSensor for LeakSensor {
             format!("homeassistant/binary_sensor/{}_probe/config", device_id),
             json!({
                 "name": "Probe Connected",
-                "state_topic": state_topic,
+                "state_topic": state_topic.clone(),
                 "value_template": "{{ 'ON' if value_json.probe_connected else 'OFF' }}",
                 "device_class": "connectivity",
                 "unique_id": format!("{}_probe", device_id),
@@ -459,6 +462,7 @@ impl WyzeSensor for LeakSensor {
                 "availability": availability,
                 "availability_mode": "all",
                 "entity_category": "diagnostic",
+                "json_attributes_topic": state_topic,
             })
         ));
 
