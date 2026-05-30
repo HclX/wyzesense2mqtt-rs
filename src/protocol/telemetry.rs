@@ -68,6 +68,24 @@ impl SensorType {
     }
 }
 
+impl std::str::FromStr for SensorType {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "switch" | "contact" | "ContactV1" => Ok(SensorType::ContactV1),
+            "switchv2" | "contactv2" | "ContactV2" => Ok(SensorType::ContactV2),
+            "motion" | "MotionV1" => Ok(SensorType::MotionV1),
+            "motionv2" | "MotionV2" => Ok(SensorType::MotionV2),
+            "leak" | "LeakV2" => Ok(SensorType::LeakV2),
+            "climate" | "ClimateV2" => Ok(SensorType::ClimateV2),
+            "chime" | "Chime" => Ok(SensorType::Chime),
+            "unknown" => Ok(SensorType::Unknown(0)),
+            other => Err(format!("Unknown sensor type string: {}", other)),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum TelemetryData {
     Raw(Vec<u8>),

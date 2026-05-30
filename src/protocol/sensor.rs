@@ -760,16 +760,7 @@ impl SensorFactory {
         sensor_type_str: &str,
         friendly_name: String,
     ) -> Result<Box<dyn WyzeSensor>, String> {
-        let sensor_type = match sensor_type_str {
-            "switch" | "contact" => SensorType::ContactV1,
-            "switchv2" | "contactv2" => SensorType::ContactV2,
-            "motion" => SensorType::MotionV1,
-            "motionv2" => SensorType::MotionV2,
-            "leak" => SensorType::LeakV2,
-            "climate" => SensorType::ClimateV2,
-            "unknown" => SensorType::Unknown(0),
-            other => return Err(format!("Unknown sensor type string: {}", other)),
-        };
+        let sensor_type = sensor_type_str.parse::<SensorType>()?;
         Self::create(mac, sensor_type, friendly_name)
     }
 }

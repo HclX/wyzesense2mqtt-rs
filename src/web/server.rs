@@ -235,15 +235,7 @@ async fn verify_scanned_sensor<T: AsyncTransport + Clone + 'static>(
     Json(payload): Json<VerifyRequest>,
 ) -> impl IntoResponse {
     let mut engine = state.engine.lock().await;
-    let sensor_type = match payload.sensor_type.as_str() {
-        "switch" | "ContactV1" => SensorType::ContactV1,
-        "switchv2" | "ContactV2" => SensorType::ContactV2,
-        "motion" | "MotionV1" => SensorType::MotionV1,
-        "motionv2" | "MotionV2" => SensorType::MotionV2,
-        "leak" | "LeakV2" => SensorType::LeakV2,
-        "climate" | "ClimateV2" => SensorType::ClimateV2,
-        _ => SensorType::Unknown(0x00),
-    };
+    let sensor_type = payload.sensor_type.parse::<SensorType>().unwrap_or(SensorType::Unknown(0x00));
 
     match engine.verify_sensor(&payload.mac, sensor_type).await {
         Ok(_) => (

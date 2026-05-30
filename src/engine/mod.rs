@@ -235,16 +235,7 @@ impl<T: AsyncTransport + Clone + 'static> Engine<T> {
                             if let Ok(duration) = now.duration_since(last_seen_epoch) {
                                 let timeout = Duration::from_secs(3600 * 2); // Default 2 hours timeout
                                 if duration > timeout {
-                                    let s_type = match state.sensor_type.as_str() {
-                                        "ContactV1" => SensorType::ContactV1,
-                                        "MotionV1" => SensorType::MotionV1,
-                                        "ContactV2" => SensorType::ContactV2,
-                                        "MotionV2" => SensorType::MotionV2,
-                                        "LeakV2" => SensorType::LeakV2,
-                                        "ClimateV2" => SensorType::ClimateV2,
-                                        "Chime" => SensorType::Chime,
-                                        _ => SensorType::Unknown(0),
-                                    };
+                                    let s_type = state.sensor_type.parse::<SensorType>().unwrap_or(SensorType::Unknown(0));
                                     offline_sensors.push((mac.clone(), s_type));
                                 }
                             }
@@ -682,7 +673,7 @@ impl<T: AsyncTransport + Clone + 'static> Engine<T> {
         if let Ok(mut s_map) = self.sensors.lock() {
             s_map.insert(mac.to_string(), crate::config::state::SensorState {
                 mac: mac.to_string(),
-                sensor_type: format!("{:?}", sensor_type),
+                sensor_type: sensor_type.as_str().to_string(),
                 version: "1".to_string(),
                 last_seen: SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs(),
                 battery: 100,
