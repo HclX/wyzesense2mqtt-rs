@@ -587,14 +587,16 @@ impl WyzeSensor for ClimateSensor {
             format!("homeassistant/sensor/{}/temperature/config", device_id),
             json!({
                 "name": "Temperature",
-                "state_topic": state_topic,
+                "state_topic": state_topic.clone(),
                 "value_template": "{{ value_json.temperature }}",
                 "device_class": "temperature",
+                "state_class": "measurement",
                 "unit_of_measurement": "°C",
                 "unique_id": format!("{}_temperature", device_id),
-                "device": device,
-                "availability": availability,
+                "device": device.clone(),
+                "availability": availability.clone(),
                 "availability_mode": "all",
+                "json_attributes_topic": state_topic.clone(),
             })
         ));
 
@@ -605,11 +607,13 @@ impl WyzeSensor for ClimateSensor {
                 "state_topic": state_topic,
                 "value_template": "{{ value_json.humidity }}",
                 "device_class": "humidity",
+                "state_class": "measurement",
                 "unit_of_measurement": "%",
                 "unique_id": format!("{}_humidity", device_id),
                 "device": device,
                 "availability": availability,
                 "availability_mode": "all",
+                "json_attributes_topic": state_topic,
             })
         ));
 

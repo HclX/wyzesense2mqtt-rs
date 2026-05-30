@@ -222,12 +222,16 @@ mod tests {
         let temp_topic = "homeassistant/sensor/wyzesense_ABC12345/temperature/config";
         let temp_payload = payloads.iter().find(|(t, _)| t == temp_topic).unwrap().1.clone();
         assert_eq!(temp_payload["device_class"], "temperature");
+        assert_eq!(temp_payload["state_class"], "measurement");
         assert_eq!(temp_payload["unit_of_measurement"], "°C");
+        assert_eq!(temp_payload["json_attributes_topic"], "wyzesense/ABC12345");
 
         let hum_topic = "homeassistant/sensor/wyzesense_ABC12345/humidity/config";
         let hum_payload = payloads.iter().find(|(t, _)| t == hum_topic).unwrap().1.clone();
         assert_eq!(hum_payload["device_class"], "humidity");
+        assert_eq!(hum_payload["state_class"], "measurement");
         assert_eq!(hum_payload["unit_of_measurement"], "%");
+        assert_eq!(hum_payload["json_attributes_topic"], "wyzesense/ABC12345");
     }
 
     #[test]
