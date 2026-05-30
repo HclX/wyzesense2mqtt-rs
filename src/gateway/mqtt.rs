@@ -219,12 +219,12 @@ mod tests {
         let payloads = sensor.get_discovery_payloads("wyzesense");
         assert_eq!(payloads.len(), 4);
         
-        let temp_topic = "homeassistant/sensor/wyzesense_ABC12345_temperature/config";
+        let temp_topic = "homeassistant/sensor/wyzesense_ABC12345/temperature/config";
         let temp_payload = payloads.iter().find(|(t, _)| t == temp_topic).unwrap().1.clone();
         assert_eq!(temp_payload["device_class"], "temperature");
         assert_eq!(temp_payload["unit_of_measurement"], "°C");
 
-        let hum_topic = "homeassistant/sensor/wyzesense_ABC12345_humidity/config";
+        let hum_topic = "homeassistant/sensor/wyzesense_ABC12345/humidity/config";
         let hum_payload = payloads.iter().find(|(t, _)| t == hum_topic).unwrap().1.clone();
         assert_eq!(hum_payload["device_class"], "humidity");
         assert_eq!(hum_payload["unit_of_measurement"], "%");

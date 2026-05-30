@@ -100,7 +100,7 @@ async fn test_availability_monitor() {
         SensorMetadata {
             name: "Front Door".to_string(),
             r#type: "contact".to_string(),
-            timeout_sec: Some(2), // 2 seconds timeout for testing
+            timeout_sec: Some(5), // 5 seconds timeout for testing
         },
     );
     let sensors_config = SensorsConfig { sensors };
@@ -131,7 +131,7 @@ async fn test_availability_monitor() {
     let monitor = AvailabilityMonitor::new(
         sensors_config,
         state_arc.clone(),
-        Duration::from_secs(5),
+        Duration::from_secs(10),
         Duration::from_secs(1), // 1 second check interval
         offline_tx,
     );
@@ -147,11 +147,11 @@ async fn test_availability_monitor() {
     tokio::time::sleep(Duration::from_millis(1500)).await;
     assert!(offline_rx.try_recv().is_err());
 
-    // Now simulate time passing by updating last_seen to 5 seconds ago
+    // Now simulate time passing by updating last_seen to 8 seconds ago
     {
         let mut state = state_arc.write().await;
         if let Some(sensor) = state.sensors.get_mut("777A1234") {
-            sensor.last_seen = now - 5;
+            sensor.last_seen = now - 8;
         }
     }
 

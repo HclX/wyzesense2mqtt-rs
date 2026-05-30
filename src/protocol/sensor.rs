@@ -50,9 +50,8 @@ fn push_common_discovery_payloads(
     ]);
 
     payloads.push((
-        format!("homeassistant/sensor/{}_battery/config", device_id),
+        format!("homeassistant/sensor/{}/battery/config", device_id),
         json!({
-            "name": "Battery",
             "state_topic": state_topic,
             "value_template": "{{ value_json.battery }}",
             "device_class": "battery",
@@ -66,14 +65,13 @@ fn push_common_discovery_payloads(
     ));
 
     payloads.push((
-        format!("homeassistant/sensor/{}_rssi/config", device_id),
+        format!("homeassistant/sensor/{}/signal_strength/config", device_id),
         json!({
-            "name": "RSSI",
             "state_topic": state_topic,
             "value_template": "{{ value_json.signal_strength }}",
             "device_class": "signal_strength",
             "unit_of_measurement": "dBm",
-            "unique_id": format!("{}_rssi", device_id),
+            "unique_id": format!("{}_signal_strength", device_id),
             "device": device,
             "availability": availability,
             "availability_mode": "all",
@@ -586,7 +584,7 @@ impl WyzeSensor for ClimateSensor {
         push_common_discovery_payloads(&self.mac, &self.friendly_name, self.sensor_type, topic_root, &mut payloads);
 
         payloads.push((
-            format!("homeassistant/sensor/{}_temperature/config", device_id),
+            format!("homeassistant/sensor/{}/temperature/config", device_id),
             json!({
                 "name": "Temperature",
                 "state_topic": state_topic,
@@ -601,7 +599,7 @@ impl WyzeSensor for ClimateSensor {
         ));
 
         payloads.push((
-            format!("homeassistant/sensor/{}_humidity/config", device_id),
+            format!("homeassistant/sensor/{}/humidity/config", device_id),
             json!({
                 "name": "Humidity",
                 "state_topic": state_topic,
