@@ -44,33 +44,39 @@ fn push_common_discovery_payloads(
     let device_id = format!("wyzesense_{}", mac);
     let device = build_device_metadata(mac, friendly_name, sensor_type);
     let state_topic = format!("{}/{}", topic_root, mac);
-    let availability_topic = format!("{}/{}/status", topic_root, mac);
+    let availability = json!([
+        { "topic": format!("{}/status", topic_root) },
+        { "topic": format!("{}/{}/status", topic_root, mac) }
+    ]);
 
     payloads.push((
         format!("homeassistant/sensor/{}_battery/config", device_id),
         json!({
-            "name": format!("{} Battery", friendly_name),
+            "name": "Battery",
             "state_topic": state_topic,
             "value_template": "{{ value_json.battery }}",
             "device_class": "battery",
             "unit_of_measurement": "%",
             "unique_id": format!("{}_battery", device_id),
             "device": device,
-            "availability_topic": availability_topic,
+            "availability": availability,
+            "availability_mode": "all",
+            "entity_category": "diagnostic",
         })
     ));
 
     payloads.push((
         format!("homeassistant/sensor/{}_rssi/config", device_id),
         json!({
-            "name": format!("{} RSSI", friendly_name),
+            "name": "RSSI",
             "state_topic": state_topic,
             "value_template": "{{ value_json.signal_strength }}",
             "device_class": "signal_strength",
             "unit_of_measurement": "dBm",
             "unique_id": format!("{}_rssi", device_id),
             "device": device,
-            "availability_topic": availability_topic,
+            "availability": availability,
+            "availability_mode": "all",
             "entity_category": "diagnostic",
         })
     ));
@@ -146,14 +152,17 @@ impl WyzeSensor for ContactSensor {
         let device_id = format!("wyzesense_{}", self.mac);
         let device = build_device_metadata(&self.mac, &self.friendly_name, self.sensor_type);
         let state_topic = format!("{}/{}", topic_root, self.mac);
-        let availability_topic = format!("{}/{}/status", topic_root, self.mac);
+        let availability = json!([
+            { "topic": format!("{}/status", topic_root) },
+            { "topic": format!("{}/{}/status", topic_root, self.mac) }
+        ]);
 
         push_common_discovery_payloads(&self.mac, &self.friendly_name, self.sensor_type, topic_root, &mut payloads);
 
         payloads.push((
             format!("homeassistant/binary_sensor/{}/state/config", device_id),
             json!({
-                "name": format!("{} Contact", self.friendly_name),
+                "name": null,
                 "state_topic": state_topic,
                 "value_template": "{{ value_json.state }}",
                 "device_class": "door",
@@ -161,7 +170,8 @@ impl WyzeSensor for ContactSensor {
                 "payload_off": "closed",
                 "unique_id": format!("{}_state", device_id),
                 "device": device,
-                "availability_topic": availability_topic,
+                "availability": availability,
+                "availability_mode": "all",
             })
         ));
 
@@ -276,14 +286,17 @@ impl WyzeSensor for MotionSensor {
         let device_id = format!("wyzesense_{}", self.mac);
         let device = build_device_metadata(&self.mac, &self.friendly_name, self.sensor_type);
         let state_topic = format!("{}/{}", topic_root, self.mac);
-        let availability_topic = format!("{}/{}/status", topic_root, self.mac);
+        let availability = json!([
+            { "topic": format!("{}/status", topic_root) },
+            { "topic": format!("{}/{}/status", topic_root, self.mac) }
+        ]);
 
         push_common_discovery_payloads(&self.mac, &self.friendly_name, self.sensor_type, topic_root, &mut payloads);
 
         payloads.push((
             format!("homeassistant/binary_sensor/{}/state/config", device_id),
             json!({
-                "name": format!("{} Motion", self.friendly_name),
+                "name": null,
                 "state_topic": state_topic,
                 "value_template": "{{ value_json.state }}",
                 "device_class": "motion",
@@ -291,7 +304,8 @@ impl WyzeSensor for MotionSensor {
                 "payload_off": "inactive",
                 "unique_id": format!("{}_state", device_id),
                 "device": device,
-                "availability_topic": availability_topic,
+                "availability": availability,
+                "availability_mode": "all",
             })
         ));
 
@@ -412,14 +426,17 @@ impl WyzeSensor for LeakSensor {
         let device_id = format!("wyzesense_{}", self.mac);
         let device = build_device_metadata(&self.mac, &self.friendly_name, self.sensor_type);
         let state_topic = format!("{}/{}", topic_root, self.mac);
-        let availability_topic = format!("{}/{}/status", topic_root, self.mac);
+        let availability = json!([
+            { "topic": format!("{}/status", topic_root) },
+            { "topic": format!("{}/{}/status", topic_root, self.mac) }
+        ]);
 
         push_common_discovery_payloads(&self.mac, &self.friendly_name, self.sensor_type, topic_root, &mut payloads);
 
         payloads.push((
             format!("homeassistant/binary_sensor/{}/state/config", device_id),
             json!({
-                "name": format!("{} Leak", self.friendly_name),
+                "name": null,
                 "state_topic": state_topic,
                 "value_template": "{{ value_json.state }}",
                 "device_class": "moisture",
@@ -427,20 +444,22 @@ impl WyzeSensor for LeakSensor {
                 "payload_off": "dry",
                 "unique_id": format!("{}_state", device_id),
                 "device": device,
-                "availability_topic": availability_topic,
+                "availability": availability,
+                "availability_mode": "all",
             })
         ));
 
         payloads.push((
             format!("homeassistant/binary_sensor/{}_probe/config", device_id),
             json!({
-                "name": format!("{} Probe Connected", self.friendly_name),
+                "name": "Probe Connected",
                 "state_topic": state_topic,
                 "value_template": "{{ 'ON' if value_json.probe_connected else 'OFF' }}",
                 "device_class": "connectivity",
                 "unique_id": format!("{}_probe", device_id),
                 "device": device,
-                "availability_topic": availability_topic,
+                "availability": availability,
+                "availability_mode": "all",
                 "entity_category": "diagnostic",
             })
         ));
@@ -559,35 +578,40 @@ impl WyzeSensor for ClimateSensor {
         let device_id = format!("wyzesense_{}", self.mac);
         let device = build_device_metadata(&self.mac, &self.friendly_name, self.sensor_type);
         let state_topic = format!("{}/{}", topic_root, self.mac);
-        let availability_topic = format!("{}/{}/status", topic_root, self.mac);
+        let availability = json!([
+            { "topic": format!("{}/status", topic_root) },
+            { "topic": format!("{}/{}/status", topic_root, self.mac) }
+        ]);
 
         push_common_discovery_payloads(&self.mac, &self.friendly_name, self.sensor_type, topic_root, &mut payloads);
 
         payloads.push((
             format!("homeassistant/sensor/{}_temperature/config", device_id),
             json!({
-                "name": format!("{} Temperature", self.friendly_name),
+                "name": "Temperature",
                 "state_topic": state_topic,
                 "value_template": "{{ value_json.temperature }}",
                 "device_class": "temperature",
                 "unit_of_measurement": "°C",
                 "unique_id": format!("{}_temperature", device_id),
                 "device": device,
-                "availability_topic": availability_topic,
+                "availability": availability,
+                "availability_mode": "all",
             })
         ));
 
         payloads.push((
             format!("homeassistant/sensor/{}_humidity/config", device_id),
             json!({
-                "name": format!("{} Humidity", self.friendly_name),
+                "name": "Humidity",
                 "state_topic": state_topic,
                 "value_template": "{{ value_json.humidity }}",
                 "device_class": "humidity",
                 "unit_of_measurement": "%",
                 "unique_id": format!("{}_humidity", device_id),
                 "device": device,
-                "availability_topic": availability_topic,
+                "availability": availability,
+                "availability_mode": "all",
             })
         ));
 
