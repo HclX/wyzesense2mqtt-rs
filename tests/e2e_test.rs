@@ -160,7 +160,7 @@ async fn test_sensor_lifecycle_e2e() {
     assert_eq!(hb_event.mac, "SENSO001");
     
     sensor.update_from_event(&hb_event).unwrap();
-    assert_eq!(sensor.get_state_payload()["state"], "closed");
+    assert_eq!(sensor.get_state_payload()["state"], "open");
 
     // NOTE: Availability monitor / offline timeout is tested separately
     // in config_test.rs::test_availability_monitor which works correctly.

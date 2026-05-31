@@ -84,6 +84,52 @@ fn push_common_discovery_payloads(
     ));
 }
 
+// Helper function to update the common fields of any sensor event
+fn update_metadata(
+    is_online: &mut bool,
+    last_seen: &mut u64,
+    battery_pct: &mut u8,
+    rssi_dbm: &mut i8,
+    event: &DongleEvent,
+    sensor_type: SensorType,
+) {
+    *is_online = true;
+    *last_seen = event.timestamp
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    let (battery, rssi) = match &event.data {
+        TelemetryData::Heartbeat { battery, rssi } => (Some(*battery), Some(*rssi)),
+        TelemetryData::Alarm { battery, rssi, .. } => (Some(*battery), Some(*rssi)),
+        TelemetryData::Climate { battery, rssi, .. } => (Some(*battery), Some(*rssi)),
+        TelemetryData::Leak { battery, rssi, .. } => (Some(*battery), Some(*rssi)),
+        TelemetryData::Scanned => (Some(100), Some(0)),
+        TelemetryData::Offline => {
+            *is_online = false;
+            (None, None)
+        }
+        TelemetryData::Raw(remaining) => {
+            if remaining.len() >= 8 {
+                let battery = remaining[1];
+                let rssi = (remaining[7] as i8).saturating_neg();
+                (Some(battery), Some(rssi))
+            } else {
+                (None, None)
+            }
+        }
+    };
+
+    if let (Some(b), Some(r)) = (battery, rssi) {
+        let mut pct = b;
+        if sensor_type == SensorType::ContactV2 || sensor_type == SensorType::MotionV2 {
+            pct = b.saturating_mul(2);
+        }
+        *battery_pct = pct.min(100);
+        *rssi_dbm = r;
+    }
+}
+
 // ---------------------------------------------------------
 // 1. Contact Sensor
 // ---------------------------------------------------------
@@ -190,38 +236,32 @@ impl WyzeSensor for ContactSensor {
     }
 
     fn update_from_event(&mut self, event: &DongleEvent) -> Result<(), &'static str> {
-        self.is_online = true;
-        self.last_seen = event.timestamp
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
+        update_metadata(
+            &mut self.is_online,
+            &mut self.last_seen,
+            &mut self.battery_pct,
+            &mut self.rssi_dbm,
+            event,
+            self.sensor_type,
+        );
 
         match &event.data {
+            TelemetryData::Alarm { state, .. } => {
+                self.is_open = *state == 1;
+                Ok(())
+            }
             TelemetryData::Raw(remaining) => {
                 if remaining.len() < 8 {
                     return Err("Contact telemetry payload too short");
                 }
-                let battery = remaining[1];
                 let state_val = remaining[4];
-                let rssi = (remaining[7] as i8).saturating_neg();
-
-                let mut battery_pct = battery;
-                if self.sensor_type == SensorType::ContactV2 {
-                    battery_pct = battery.saturating_mul(2);
-                }
-                self.battery_pct = battery_pct.min(100);
-                self.rssi_dbm = rssi;
                 self.is_open = state_val == 1;
                 Ok(())
             }
-            TelemetryData::Scanned => {
-                self.battery_pct = 100;
-                self.rssi_dbm = 0;
-                Ok(())
-            }
-            TelemetryData::Offline => {
-                self.is_online = false;
-                Ok(())
+            TelemetryData::Heartbeat { .. } | TelemetryData::Scanned | TelemetryData::Offline => Ok(()),
+            other => {
+                warn!("ContactSensor (MAC={}) received unexpected telemetry event variant: {:?}", self.mac, other);
+                Err("Unexpected event type for contact sensor")
             }
         }
     }
@@ -333,38 +373,32 @@ impl WyzeSensor for MotionSensor {
     }
 
     fn update_from_event(&mut self, event: &DongleEvent) -> Result<(), &'static str> {
-        self.is_online = true;
-        self.last_seen = event.timestamp
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
+        update_metadata(
+            &mut self.is_online,
+            &mut self.last_seen,
+            &mut self.battery_pct,
+            &mut self.rssi_dbm,
+            event,
+            self.sensor_type,
+        );
 
         match &event.data {
+            TelemetryData::Alarm { state, .. } => {
+                self.is_active = *state == 1;
+                Ok(())
+            }
             TelemetryData::Raw(remaining) => {
                 if remaining.len() < 8 {
                     return Err("Motion telemetry payload too short");
                 }
-                let battery = remaining[1];
                 let state_val = remaining[4];
-                let rssi = (remaining[7] as i8).saturating_neg();
-
-                let mut battery_pct = battery;
-                if self.sensor_type == SensorType::MotionV2 {
-                    battery_pct = battery.saturating_mul(2);
-                }
-                self.battery_pct = battery_pct.min(100);
-                self.rssi_dbm = rssi;
                 self.is_active = state_val == 1;
                 Ok(())
             }
-            TelemetryData::Scanned => {
-                self.battery_pct = 100;
-                self.rssi_dbm = 0;
-                Ok(())
-            }
-            TelemetryData::Offline => {
-                self.is_online = false;
-                Ok(())
+            TelemetryData::Heartbeat { .. } | TelemetryData::Scanned | TelemetryData::Offline => Ok(()),
+            other => {
+                warn!("MotionSensor (MAC={}) received unexpected telemetry event variant: {:?}", self.mac, other);
+                Err("Unexpected event type for motion sensor")
             }
         }
     }
@@ -494,38 +528,44 @@ impl WyzeSensor for LeakSensor {
     }
 
     fn update_from_event(&mut self, event: &DongleEvent) -> Result<(), &'static str> {
-        self.is_online = true;
-        self.last_seen = event.timestamp
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
+        update_metadata(
+            &mut self.is_online,
+            &mut self.last_seen,
+            &mut self.battery_pct,
+            &mut self.rssi_dbm,
+            event,
+            self.sensor_type,
+        );
 
         match &event.data {
+            TelemetryData::Leak {
+                state,
+                probe_state,
+                probe_available,
+                ..
+            } => {
+                self.is_wet = *state == 1;
+                self.probe_connected = *probe_state == 1;
+                self.probe_available = *probe_available;
+                Ok(())
+            }
             TelemetryData::Raw(remaining) => {
                 if remaining.len() < 11 {
                     return Err("Leak telemetry payload too short");
                 }
-                let battery = remaining[2];
                 let state_val = remaining[5];
                 let probe_state_val = remaining[6];
                 let probe_available_val = remaining[7];
-                let rssi = (remaining[10] as i8).saturating_neg();
 
-                self.battery_pct = battery.min(100);
-                self.rssi_dbm = rssi;
                 self.is_wet = state_val == 1;
                 self.probe_connected = probe_state_val == 1;
                 self.probe_available = probe_available_val == 1;
                 Ok(())
             }
-            TelemetryData::Scanned => {
-                self.battery_pct = 100;
-                self.rssi_dbm = 0;
-                Ok(())
-            }
-            TelemetryData::Offline => {
-                self.is_online = false;
-                Ok(())
+            TelemetryData::Heartbeat { .. } | TelemetryData::Scanned | TelemetryData::Offline => Ok(()),
+            other => {
+                warn!("LeakSensor (MAC={}) received unexpected telemetry event variant: {:?}", self.mac, other);
+                Err("Unexpected event type for leak sensor")
             }
         }
     }
@@ -653,37 +693,41 @@ impl WyzeSensor for ClimateSensor {
     }
 
     fn update_from_event(&mut self, event: &DongleEvent) -> Result<(), &'static str> {
-        self.is_online = true;
-        self.last_seen = event.timestamp
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
+        update_metadata(
+            &mut self.is_online,
+            &mut self.last_seen,
+            &mut self.battery_pct,
+            &mut self.rssi_dbm,
+            event,
+            self.sensor_type,
+        );
 
         match &event.data {
+            TelemetryData::Climate {
+                temperature,
+                humidity,
+                ..
+            } => {
+                self.temperature = *temperature;
+                self.humidity = *humidity;
+                Ok(())
+            }
             TelemetryData::Raw(remaining) => {
                 if remaining.len() < 10 {
                     return Err("Climate telemetry payload too short");
                 }
-                let battery = remaining[1];
                 let temp_hi = remaining[4] as i8;
                 let temp_lo = remaining[5];
                 let humidity = remaining[6];
-                let rssi = (remaining[9] as i8).saturating_neg();
 
-                self.battery_pct = battery.min(100);
-                self.rssi_dbm = rssi;
                 self.temperature = (temp_hi as f32) + ((temp_lo as f32) / 100.0);
                 self.humidity = humidity;
                 Ok(())
             }
-            TelemetryData::Scanned => {
-                self.battery_pct = 100;
-                self.rssi_dbm = 0;
-                Ok(())
-            }
-            TelemetryData::Offline => {
-                self.is_online = false;
-                Ok(())
+            TelemetryData::Heartbeat { .. } | TelemetryData::Scanned | TelemetryData::Offline => Ok(()),
+            other => {
+                warn!("ClimateSensor (MAC={}) received unexpected telemetry event variant: {:?}", self.mac, other);
+                Err("Unexpected event type for climate sensor")
             }
         }
     }
@@ -757,32 +801,15 @@ impl WyzeSensor for UnknownSensor {
     }
 
     fn update_from_event(&mut self, event: &DongleEvent) -> Result<(), &'static str> {
-        self.is_online = true;
-        self.last_seen = event.timestamp
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-
-        match &event.data {
-            TelemetryData::Raw(remaining) => {
-                if remaining.len() >= 8 {
-                    let battery = remaining[1];
-                    let rssi = (remaining[7] as i8).saturating_neg();
-                    self.battery_pct = battery.min(100);
-                    self.rssi_dbm = rssi;
-                }
-                Ok(())
-            }
-            TelemetryData::Scanned => {
-                self.battery_pct = 100;
-                self.rssi_dbm = 0;
-                Ok(())
-            }
-            TelemetryData::Offline => {
-                self.is_online = false;
-                Ok(())
-            }
-        }
+        update_metadata(
+            &mut self.is_online,
+            &mut self.last_seen,
+            &mut self.battery_pct,
+            &mut self.rssi_dbm,
+            event,
+            self.sensor_type,
+        );
+        Ok(())
     }
 }
 

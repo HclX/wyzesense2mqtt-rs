@@ -88,6 +88,28 @@ impl std::str::FromStr for SensorType {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TelemetryData {
+    Heartbeat {
+        battery: u8,
+        rssi: i8,
+    },
+    Alarm {
+        battery: u8,
+        rssi: i8,
+        state: u8,
+    },
+    Climate {
+        battery: u8,
+        rssi: i8,
+        temperature: f32,
+        humidity: u8,
+    },
+    Leak {
+        battery: u8,
+        rssi: i8,
+        state: u8,
+        probe_state: u8,
+        probe_available: bool,
+    },
     Raw(Vec<u8>),
     Scanned,
     Offline,
@@ -145,14 +167,52 @@ impl DongleEvent {
             .map_err(|_| "Invalid MAC characters (non-UTF8)")?;
         let sensor_type = SensorType::from(sensor_type_val);
         let timestamp = SystemTime::UNIX_EPOCH + Duration::from_millis(timestamp_ms);
-        let remaining = payload[18..].to_vec();
+        let remaining = &payload[18..];
+
+        let data = match event_type {
+            Self::EVENT_TYPE_HEARTBEAT => {
+                if remaining.len() < 8 {
+                    return Err("Heartbeat payload too short");
+                }
+                let battery = remaining[1];
+                let rssi = (remaining[7] as i8).saturating_neg();
+                TelemetryData::Heartbeat { battery, rssi }
+            }
+            Self::EVENT_TYPE_ALARM => {
+                if remaining.len() < 8 {
+                    return Err("Alarm payload too short");
+                }
+                let battery = remaining[1];
+                let state = remaining[4];
+                let rssi = (remaining[7] as i8).saturating_neg();
+                TelemetryData::Alarm { battery, rssi, state }
+            }
+            Self::EVENT_TYPE_CLIMATE => {
+                if remaining.len() < 10 {
+                    return Err("Climate payload too short");
+                }
+                let battery = remaining[1];
+                let temp_hi = remaining[4] as i8;
+                let temp_lo = remaining[5];
+                let humidity = remaining[6];
+                let rssi = (remaining[9] as i8).saturating_neg();
+                let temperature = (temp_hi as f32) + ((temp_lo as f32) / 100.0);
+                TelemetryData::Climate {
+                    battery,
+                    rssi,
+                    temperature,
+                    humidity,
+                }
+            }
+            _ => TelemetryData::Raw(remaining.to_vec()),
+        };
 
         Ok(DongleEvent {
             mac,
             timestamp,
             sensor_type,
             event_type,
-            data: TelemetryData::Raw(remaining),
+            data,
         })
     }
 
@@ -170,14 +230,35 @@ impl DongleEvent {
             .map_err(|_| "Invalid MAC characters (non-UTF8)")?;
         let sensor_type = SensorType::from(sensor_type_val);
         let timestamp = SystemTime::now();
-        let remaining = payload[10..].to_vec();
+        let remaining = &payload[10..];
+
+        let data = match event_type {
+            Self::EVENT_TYPE_LEAK => {
+                if remaining.len() < 11 {
+                    return Err("Leak payload too short");
+                }
+                let battery = remaining[2];
+                let state = remaining[5];
+                let probe_state = remaining[6];
+                let probe_available = remaining[7] == 1;
+                let rssi = (remaining[10] as i8).saturating_neg();
+                TelemetryData::Leak {
+                    battery,
+                    rssi,
+                    state,
+                    probe_state,
+                    probe_available,
+                }
+            }
+            _ => TelemetryData::Raw(remaining.to_vec()),
+        };
 
         Ok(DongleEvent {
             mac,
             timestamp,
             sensor_type,
             event_type,
-            data: TelemetryData::Raw(remaining),
+            data,
         })
     }
 }
