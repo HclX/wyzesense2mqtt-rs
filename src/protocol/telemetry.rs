@@ -111,7 +111,7 @@ pub enum TelemetryData {
         probe_available: bool,
     },
     UnknownEvent(Vec<u8>),
-    Scanned,
+    Scanned { version: u8 },
     Offline,
 }
 
@@ -132,12 +132,13 @@ impl DongleEvent {
 
     /// Parses a scan event from the payload of a NOTIFY_SENSOR_SCAN (0x5320) packet.
     pub fn parse_scan(payload: &[u8]) -> Result<Self, &'static str> {
-        if payload.len() < 10 {
-            return Err("Scan payload too short");
+        if payload.len() < 11 {
+            return Err("Scan payload too short (need 11 bytes: event_type + mac[8] + type + version)");
         }
         let event_type = payload[0]; // 0xA3
         let mac_bytes = &payload[1..9];
         let sensor_type_val = payload[9];
+        let version = payload[10];
 
         let mac = String::from_utf8(mac_bytes.to_vec())
             .map_err(|_| "Invalid MAC characters (non-UTF8)")?;
@@ -148,7 +149,7 @@ impl DongleEvent {
             timestamp: SystemTime::now(),
             sensor_type,
             event_type,
-            data: TelemetryData::Scanned,
+            data: TelemetryData::Scanned { version },
         })
     }
 
@@ -260,5 +261,66 @@ impl DongleEvent {
             event_type,
             data,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_scan_extracts_version() {
+        // Payload: event_type=0xA3, MAC="ABCD1234", type=ContactV1(0x01), version=23
+        let payload = vec![
+            0xA3,                               // event_type
+            b'A', b'B', b'C', b'D', b'1', b'2', b'3', b'4', // MAC
+            0x01,                               // ContactV1
+            0x17,                               // version = 23
+        ];
+        let event = DongleEvent::parse_scan(&payload).unwrap();
+        assert_eq!(event.mac, "ABCD1234");
+        assert_eq!(event.sensor_type, SensorType::ContactV1);
+        assert_eq!(event.event_type, 0xA3);
+        assert_eq!(event.data, TelemetryData::Scanned { version: 23 });
+    }
+
+    #[test]
+    fn test_parse_scan_motion_v2_version() {
+        let payload = vec![
+            0xA3,
+            b'M', b'O', b'T', b'I', b'O', b'N', b'0', b'1',
+            0x0F,  // MotionV2
+            0x19,  // version = 25
+        ];
+        let event = DongleEvent::parse_scan(&payload).unwrap();
+        assert_eq!(event.mac, "MOTION01");
+        assert_eq!(event.sensor_type, SensorType::MotionV2);
+        assert_eq!(event.data, TelemetryData::Scanned { version: 25 });
+    }
+
+    #[test]
+    fn test_parse_scan_rejects_short_payload() {
+        // Only 10 bytes — missing the version byte
+        let payload = vec![
+            0xA3,
+            b'A', b'B', b'C', b'D', b'1', b'2', b'3', b'4',
+            0x01,
+        ];
+        let result = DongleEvent::parse_scan(&payload);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("too short"));
+    }
+
+    #[test]
+    fn test_parse_scan_version_zero() {
+        let payload = vec![
+            0xA3,
+            b'Z', b'E', b'R', b'O', b'V', b'E', b'R', b'S',
+            0x07,  // ClimateV2
+            0x00,  // version = 0
+        ];
+        let event = DongleEvent::parse_scan(&payload).unwrap();
+        assert_eq!(event.sensor_type, SensorType::ClimateV2);
+        assert_eq!(event.data, TelemetryData::Scanned { version: 0 });
     }
 }

@@ -64,13 +64,14 @@ async fn test_sensor_lifecycle_e2e() {
     engine.set_scan(true).await.unwrap();
 
     // Inject Scanned Event (spontaneous)
-    // MAC: "SENSO001" (83, 69, 78, 83, 79, 48, 48, 49), Type: ContactV1 (0x01)
+    // MAC: "SENSO001" (83, 69, 78, 83, 79, 48, 48, 49), Type: ContactV1 (0x01), Version: 23
     let scan_payload = vec![
-        0x55, 0xAA, 0x53, 0x0D, 0x20,
+        0x55, 0xAA, 0x53, 0x0E, 0x20,
         0xA3, // EVENT_TYPE
         83, 69, 78, 83, 79, 48, 48, 49, // "SENSO001"
         0x01, // ContactV1
-        0x04, 0x3C // Checksum (Corrected)
+        0x17, // Version: 23
+        0x04, 0x54 // Checksum
     ];
     info!("Injecting scanned event...");
     replay_transport.enqueue_read(&scan_payload);
@@ -80,7 +81,7 @@ async fn test_sensor_lifecycle_e2e() {
     let scan_event = event_rx.recv().await.unwrap();
     assert_eq!(scan_event.mac, "SENSO001");
     assert_eq!(scan_event.sensor_type, SensorType::ContactV1);
-    assert_eq!(scan_event.data, TelemetryData::Scanned);
+    assert_eq!(scan_event.data, TelemetryData::Scanned { version: 23 });
 
     // 4. Verify Sensor
     info!("Verifying sensor...");

@@ -1,5 +1,5 @@
 use crate::protocol::packet::{Packet, CommandType, PacketPayload, commands};
-use crate::protocol::telemetry::{DongleEvent, SensorType};
+use crate::protocol::telemetry::{DongleEvent, SensorType, TelemetryData};
 use crate::transport::AsyncTransport;
 
 use std::collections::HashMap;
@@ -21,7 +21,7 @@ pub struct Engine<T: AsyncTransport> {
     exit_tx: Option<oneshot::Sender<()>>,
     // Refactored local memory cache to use persistent SensorState
     pub sensors: Arc<Mutex<HashMap<String, crate::config::state::PersistedSensorState>>>,
-    auto_verify_tx: mpsc::Sender<(String, SensorType)>,
+    auto_verify_tx: mpsc::Sender<(String, SensorType, u8)>,
     auto_verify: Arc<AtomicBool>,
     sensor_list_tx: Arc<Mutex<Option<mpsc::Sender<String>>>>,
     is_scanning: Arc<AtomicBool>,
@@ -32,7 +32,7 @@ impl<T: AsyncTransport + Clone + 'static> Engine<T> {
     pub fn new(transport: T, event_tx: mpsc::Sender<DongleEvent>, state_path: Option<String>) -> Self {
         let pending_requests = Arc::new(Mutex::new(HashMap::new()));
         let sensors = Arc::new(Mutex::new(HashMap::new()));
-        let (auto_verify_tx, mut auto_verify_rx) = mpsc::channel::<(String, SensorType)>(32);
+        let (auto_verify_tx, mut auto_verify_rx) = mpsc::channel::<(String, SensorType, u8)>(32);
         let auto_verify = Arc::new(AtomicBool::new(false));
         let sensor_list_tx = Arc::new(Mutex::new(None));
         let is_scanning = Arc::new(AtomicBool::new(false));
@@ -68,11 +68,11 @@ impl<T: AsyncTransport + Clone + 'static> Engine<T> {
         };
 
         tokio::spawn(async move {
-            while let Some((mac, s_type)) = auto_verify_rx.recv().await {
+            while let Some((mac, s_type, version)) = auto_verify_rx.recv().await {
                 if !engine_clone.auto_verify.load(Ordering::SeqCst) {
                     continue;
                 }
-                info!("Auto-Pairing: Scanned sensor {} detected. Exchanging R1 token...", mac);
+                info!("Auto-Pairing: Scanned sensor {} detected (type={:?}, version={}). Exchanging R1 token...", mac, s_type, version);
 
                 // Step 1: Exchange crypto token (R1) with the sensor
                 match engine_clone.get_sensor_r1(&mac).await {
@@ -240,7 +240,7 @@ impl<T: AsyncTransport + Clone + 'static> Engine<T> {
         event_tx: &mpsc::Sender<DongleEvent>,
         transport: &mut T,
         _sensors: &Arc<Mutex<HashMap<String, crate::config::state::PersistedSensorState>>>,
-        auto_verify_tx: &mpsc::Sender<(String, SensorType)>,
+        auto_verify_tx: &mpsc::Sender<(String, SensorType, u8)>,
         sensor_list_tx: &Arc<Mutex<Option<mpsc::Sender<String>>>>,
         _state_path: &Option<String>,
     ) {
@@ -315,8 +315,9 @@ impl<T: AsyncTransport + Clone + 'static> Engine<T> {
                         Ok(evt) => {
                             let mac = evt.mac.clone();
                             let s_type = evt.sensor_type;
+                            let version = if let TelemetryData::Scanned { version } = &evt.data { *version } else { 0 };
                             let _ = event_tx.send(evt).await;
-                            let _ = auto_verify_tx.send((mac, s_type)).await;
+                            let _ = auto_verify_tx.send((mac, s_type, version)).await;
                         }
                         Err(e) => warn!("Failed to parse scan telemetry event: {}", e),
                     }

@@ -565,7 +565,7 @@ async fn run_hid_command<T: AsyncTransport + Clone + 'static>(
 
             let pair_future = async {
                 while let Some(evt) = event_rx.recv().await {
-                    if let TelemetryData::Scanned = evt.data {
+                    if let TelemetryData::Scanned { .. } = evt.data {
                         return Some(evt);
                     }
                 }

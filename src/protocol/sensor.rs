@@ -191,7 +191,7 @@ impl WyzeSensor {
             TelemetryData::Alarm { battery, rssi, .. } => (Some(*battery), Some(*rssi)),
             TelemetryData::Climate { battery, rssi, .. } => (Some(*battery), Some(*rssi)),
             TelemetryData::Leak { battery, rssi, .. } => (Some(*battery), Some(*rssi)),
-            TelemetryData::Scanned => (Some(100), Some(0)),
+            TelemetryData::Scanned { .. } => (Some(100), Some(0)),
             _ => (None, None),
         };
 
@@ -251,7 +251,7 @@ impl WyzeSensor {
             // Chime: accept all events gracefully, nothing to update
             (SensorState::Chime, _) => Ok(()),
             // Common events handled by all sensor types (including Unknown that couldn't be upgraded)
-            (_, TelemetryData::Heartbeat { .. } | TelemetryData::Scanned
+            (_, TelemetryData::Heartbeat { .. } | TelemetryData::Scanned { .. }
                | TelemetryData::Offline | TelemetryData::UnknownEvent(_)) => Ok(()),
             (state, other) => {
                 warn!("Sensor (MAC={}) with state {:?} received unexpected telemetry event: {:?}",
@@ -665,6 +665,7 @@ impl SensorManager {
         &mut self,
         mac: String,
         sensor_type: SensorType,
+        version: Option<u8>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let type_str = sensor_type.as_str();
         
@@ -700,6 +701,11 @@ impl SensorManager {
             name.clone(),
         );
 
+        // Set version from scan data if available
+        if let Some(v) = version {
+            sensor.sw_version = v.to_string();
+        }
+
         // Load custom timeout if it exists in user config
         if let Some(t) = custom_timeout {
             sensor.timeout_sec = t;
@@ -712,7 +718,7 @@ impl SensorManager {
             name,
             r#type: None, // Type is managed in state.yaml
             timeout_sec: custom_timeout,
-            sw_version: None,
+            sw_version: version.map(|v| v.to_string()),
         });
 
         self.sensors.insert(mac.clone(), sensor);
@@ -745,11 +751,11 @@ impl SensorManager {
     /// If the sensor is not yet in our registry, dynamically registers and persists it.
     pub fn dispatch_event(&mut self, event: &DongleEvent) -> bool {
         if !self.sensors.contains_key(&event.mac) {
-            if matches!(event.data, TelemetryData::Scanned) || matches!(event.data, TelemetryData::Offline) {
+            if matches!(event.data, TelemetryData::Scanned { .. }) || matches!(event.data, TelemetryData::Offline) {
                 return false;
             }
             info!("Auto-Discovering and registering newly paired sensor: {}", event.mac);
-            if let Err(e) = self.register_and_persist_sensor(event.mac.clone(), event.sensor_type) {
+            if let Err(e) = self.register_and_persist_sensor(event.mac.clone(), event.sensor_type, None) {
                 error!("Failed to auto-register discovered sensor {}: {}", event.mac, e);
                 return false;
             }
@@ -761,7 +767,7 @@ impl SensorManager {
 
             if is_unknown && !matches!(event.sensor_type, SensorType::Unknown(_)) {
                 info!("Upgrading auto-discovered sensor {} from Unknown to {:?}", event.mac, event.sensor_type);
-                if let Err(e) = self.register_and_persist_sensor(event.mac.clone(), event.sensor_type) {
+                if let Err(e) = self.register_and_persist_sensor(event.mac.clone(), event.sensor_type, None) {
                     error!("Failed to upgrade sensor type for {}: {}", event.mac, e);
                 }
             }
