@@ -11,3 +11,8 @@
 
 # Scratch / working files
 /scratch/
+
+# Capture test outputs
+capture_tests_output.txt
+capture_tests_outputs.txt
+

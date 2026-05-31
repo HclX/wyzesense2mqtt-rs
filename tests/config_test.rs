@@ -1,12 +1,10 @@
-use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tokio::sync::RwLock;
 use tokio::sync::mpsc;
 
-use wyzesense2mqtt_rs::config::sensors::{SensorsConfig, SensorMetadata};
+use wyzesense2mqtt_rs::config::sensors::SensorsConfig;
 use wyzesense2mqtt_rs::config::state::{SystemState, SensorState};
 use wyzesense2mqtt_rs::config::monitor::AvailabilityMonitor;
 use wyzesense2mqtt_rs::protocol::sensor::SensorManager;

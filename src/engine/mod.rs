@@ -1,12 +1,12 @@
 use crate::protocol::packet::{Packet, CommandType, PacketPayload, commands};
-use crate::protocol::telemetry::{DongleEvent, SensorType, TelemetryData};
+use crate::protocol::telemetry::{DongleEvent, SensorType};
 use crate::transport::AsyncTransport;
 
 use std::collections::HashMap;
 use std::io::{Result, Error, ErrorKind};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, Duration, UNIX_EPOCH};
+use std::time::SystemTime;
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, error, info, warn};
 

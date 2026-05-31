@@ -577,29 +577,39 @@ fn test_all_captures_in_directory_parseable() {
 
                             // If read from dongle, route events to the SensorManager
                             if rec.dir == "R" {
+                                let mut event_opt = None;
                                 match pkt.cmd() {
                                     commands::CMD_ALARM1 => {
                                         if let PacketPayload::Bytes(payload) = pkt.payload {
                                             if let Ok(evt) = DongleEvent::parse_alarm1(&payload) {
-                                                manager.dispatch_event(&evt);
+                                                event_opt = Some(evt);
                                             }
                                         }
                                     }
                                     commands::CMD_ALARM2 => {
                                         if let PacketPayload::Bytes(payload) = pkt.payload {
                                             if let Ok(evt) = DongleEvent::parse_alarm2(&payload) {
-                                                manager.dispatch_event(&evt);
+                                                event_opt = Some(evt);
                                             }
                                         }
                                     }
                                     commands::CMD_SENSOR_SCAN => {
                                         if let PacketPayload::Bytes(payload) = pkt.payload {
                                             if let Ok(evt) = DongleEvent::parse_scan(&payload) {
-                                                manager.dispatch_event(&evt);
+                                                event_opt = Some(evt);
                                             }
                                         }
                                     }
                                     _ => {}
+                                }
+
+                                if let Some(evt) = event_opt {
+                                    if manager.dispatch_event(&evt) {
+                                        if let Some(sensor) = manager.get_sensors().get(&evt.mac) {
+                                            let payload = sensor.get_state_payload();
+                                            println!("  Sensor MAC: {} | State: {}", evt.mac, serde_json::to_string(&payload).unwrap());
+                                        }
+                                    }
                                 }
                             }
                         }
