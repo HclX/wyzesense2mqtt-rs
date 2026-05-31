@@ -4,19 +4,28 @@ use std::path::Path;
 use std::fs::{self, File};
 use std::io::{Write, Read};
 
+use crate::protocol::sensor::SensorState;
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
-pub struct SensorState {
+pub struct PersistedSensorState {
     pub mac: String,
     pub sensor_type: String, // e.g. "motion", "contact", "chime"
     pub version: String,     // e.g. "1"
-    pub last_seen: u64,      // Epoch milliseconds
-    pub battery: u8,         // 0..100
+    pub last_seen: u64,      // Epoch seconds
+    #[serde(default = "default_battery")]
+    pub battery: Option<u8>, // 0..100, None for mains-powered devices (e.g., Chime)
     pub signal: i8,          // RSSI dBm
+    #[serde(default)]
+    pub state: SensorState,  // Type-specific state (persisted)
+}
+
+fn default_battery() -> Option<u8> {
+    Some(100)
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq)]
 pub struct SystemState {
-    pub sensors: HashMap<String, SensorState>,
+    pub sensors: HashMap<String, PersistedSensorState>,
 }
 
 impl SystemState {

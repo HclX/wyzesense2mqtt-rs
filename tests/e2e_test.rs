@@ -2,7 +2,7 @@ use wyzesense2mqtt_rs::engine::Engine;
 use wyzesense2mqtt_rs::transport::replay::ReplayTransport;
 use wyzesense2mqtt_rs::protocol::telemetry::{DongleEvent, SensorType, TelemetryData};
 use wyzesense2mqtt_rs::protocol::packet::commands;
-use wyzesense2mqtt_rs::protocol::sensor::SensorFactory;
+use wyzesense2mqtt_rs::protocol::sensor::WyzeSensor;
 
 use tokio::sync::mpsc;
 use tracing::info;
@@ -120,15 +120,15 @@ async fn test_sensor_lifecycle_e2e() {
     assert_eq!(alarm_event.mac, "SENSO001");
     assert_eq!(alarm_event.sensor_type, SensorType::ContactV1);
     
-    let mut sensor = SensorFactory::create(
+    let mut sensor = WyzeSensor::new(
         alarm_event.mac.clone(),
         alarm_event.sensor_type,
         "Contact Sensor".to_string(),
-    ).unwrap();
+    );
     sensor.update_from_event(&alarm_event).unwrap();
 
-    assert_eq!(sensor.battery_pct(), 90);
-    assert_eq!(sensor.rssi_dbm(), -60);
+    assert_eq!(sensor.battery_pct, Some(90));
+    assert_eq!(sensor.rssi_dbm, -60);
     assert_eq!(sensor.get_state_payload()["state"], "open");
 
     // Inject Heartbeat Event (spontaneous)

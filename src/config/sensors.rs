@@ -7,7 +7,10 @@ use std::io::{Write, Read};
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct SensorMetadata {
     pub name: String,
-    pub r#type: String, // e.g., "motion", "contact"
+    /// Deprecated: sensor type is now authoritative from state.yaml.
+    /// Kept as optional for backward compatibility and manual bootstrap hints.
+    #[serde(default)]
+    pub r#type: Option<String>,
     pub timeout_sec: Option<u64>,
 }
 

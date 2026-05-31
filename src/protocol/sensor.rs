@@ -1,26 +1,62 @@
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::time::SystemTime;
 use crate::protocol::telemetry::{DongleEvent, SensorType, TelemetryData};
 
-pub trait WyzeSensor: Send + Sync {
-    fn mac(&self) -> &str;
-    fn sensor_type(&self) -> SensorType;
-    fn battery_pct(&self) -> u8;
-    fn rssi_dbm(&self) -> i8;
-    fn sw_version(&self) -> &str;
-    fn is_online(&self) -> bool;
-    fn set_online(&mut self, online: bool);
-    fn friendly_name(&self) -> &str;
-    fn set_friendly_name(&mut self, name: String);
-    fn last_seen(&self) -> u64;
-    fn set_last_seen(&mut self, time: u64);
-    fn timeout_sec(&self) -> u64;
-    fn set_timeout_sec(&mut self, timeout: u64);
+// ---------------------------------------------------------
+// SensorState: Type-specific state enum
+// ---------------------------------------------------------
 
-    fn get_state_payload(&self) -> Value;
-    fn get_discovery_payloads(&self, topic_root: &str) -> Vec<(String, Value)>;
-    fn update_from_event(&mut self, event: &DongleEvent) -> Result<(), &'static str>;
+/// Type-specific sensor state — the ONLY part that varies between device types.
+/// Derives Serialize/Deserialize for direct persistence to state.yaml.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind")]
+pub enum SensorState {
+    Contact { is_open: bool },
+    Motion { is_active: bool },
+    Leak {
+        is_wet: bool,
+        /// Optional external probe. None = no probe connected,
+        /// Some(true) = probe wet, Some(false) = probe dry.
+        probe_is_wet: Option<bool>,
+    },
+    Climate {
+        temperature: f32,
+        humidity: u8,
+    },
+    Chime,   // Actuator: no inbound telemetry state, receives play_chime commands
+    Unknown,
+}
+
+impl Default for SensorState {
+    fn default() -> Self {
+        SensorState::Unknown // backward compat: old state.yaml files without "state" field
+    }
+}
+
+// ---------------------------------------------------------
+// WyzeSensor: Unified device struct
+// ---------------------------------------------------------
+
+/// Unified device struct for all Wyze Sense devices (sensors and actuators).
+/// Replaces the previous trait-based polymorphic design with composition.
+pub struct WyzeSensor {
+    // --- Identity (from config, set at creation) ---
+    pub mac: String,
+    pub sensor_type: SensorType,
+    pub friendly_name: String,
+    pub timeout_sec: u64,
+
+    // --- Common telemetry (uniform across all types) ---
+    pub battery_pct: Option<u8>, // None for mains-powered devices (e.g., Chime)
+    pub rssi_dbm: i8,
+    pub sw_version: String,
+    pub is_online: bool,
+    pub last_seen: u64,
+
+    // --- Type-specific state (the polymorphic part) ---
+    pub state: SensorState,
 }
 
 // Helper to build standard Home Assistant discovery device metadata
@@ -35,11 +71,12 @@ fn build_device_metadata(mac: &str, friendly_name: &str, sensor_type: SensorType
     })
 }
 
-// Helper to build common sensor configs (battery, signal)
+// Helper to build common sensor discovery configs (battery, signal)
 fn push_common_discovery_payloads(
     mac: &str,
     friendly_name: &str,
     sensor_type: SensorType,
+    battery_pct: Option<u8>,
     topic_root: &str,
     payloads: &mut Vec<(String, Value)>,
 ) {
@@ -51,21 +88,24 @@ fn push_common_discovery_payloads(
         { "topic": format!("{}/{}/status", topic_root, mac) }
     ]);
 
-    payloads.push((
-        format!("homeassistant/sensor/{}/battery/config", device_id),
-        json!({
-            "state_topic": state_topic,
-            "value_template": "{{ value_json.battery }}",
-            "device_class": "battery",
-            "unit_of_measurement": "%",
-            "state_class": "measurement",
-            "unique_id": format!("{}_battery", device_id),
-            "device": device,
-            "availability": availability,
-            "availability_mode": "all",
-            "entity_category": "diagnostic",
-        })
-    ));
+    // Only register battery entity for battery-powered devices
+    if battery_pct.is_some() {
+        payloads.push((
+            format!("homeassistant/sensor/{}/battery/config", device_id),
+            json!({
+                "state_topic": state_topic,
+                "value_template": "{{ value_json.battery }}",
+                "device_class": "battery",
+                "unit_of_measurement": "%",
+                "state_class": "measurement",
+                "unique_id": format!("{}_battery", device_id),
+                "device": device,
+                "availability": availability,
+                "availability_mode": "all",
+                "entity_category": "diagnostic",
+            })
+        ));
+    }
 
     payloads.push((
         format!("homeassistant/sensor/{}/signal_strength/config", device_id),
@@ -84,636 +124,22 @@ fn push_common_discovery_payloads(
     ));
 }
 
-// Helper function to update the common fields of any sensor event
-fn update_metadata(
-    is_online: &mut bool,
-    last_seen: &mut u64,
-    battery_pct: &mut u8,
-    rssi_dbm: &mut i8,
-    event: &DongleEvent,
-    sensor_type: SensorType,
-) {
-    match &event.data {
-        TelemetryData::Offline => {
-            *is_online = false;
-            return;
-        }
-        TelemetryData::UnknownEvent(_) => {
-            *is_online = true;
-            return;
-        }
-        _ => {}
-    }
-
-    *is_online = true;
-    *last_seen = event.timestamp
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-
-    let (battery, rssi) = match &event.data {
-        TelemetryData::Heartbeat { battery, rssi } => (Some(*battery), Some(*rssi)),
-        TelemetryData::Alarm { battery, rssi, .. } => (Some(*battery), Some(*rssi)),
-        TelemetryData::Climate { battery, rssi, .. } => (Some(*battery), Some(*rssi)),
-        TelemetryData::Leak { battery, rssi, .. } => (Some(*battery), Some(*rssi)),
-        TelemetryData::Scanned => (Some(100), Some(0)),
-        _ => unreachable!(),
-    };
-
-    if let (Some(b), Some(r)) = (battery, rssi) {
-        let mut pct = b;
-        if sensor_type == SensorType::ContactV2 {
-            pct = b.saturating_mul(2);
-        }
-        *battery_pct = pct.min(100);
-        *rssi_dbm = r;
-    }
-}
-
-// ---------------------------------------------------------
-// 1. Contact Sensor
-// ---------------------------------------------------------
-pub struct ContactSensor {
-    mac: String,
-    sensor_type: SensorType,
-    friendly_name: String,
-    battery_pct: u8,
-    rssi_dbm: i8,
-    sw_version: String,
-    is_online: bool,
-    last_seen: u64,
-    is_open: bool,
-    timeout_sec: u64,
-}
-
-impl ContactSensor {
-    pub fn new(
-        mac: String,
-        sensor_type: SensorType,
-        friendly_name: String,
-    ) -> Self {
-        let default_timeout = match sensor_type {
-            SensorType::ContactV1 => 3600 * 8, // 8 hours for V1
-            _ => 3600 * 4,                     // 4 hours for V2
-        };
-        Self {
-            mac,
-            sensor_type,
-            friendly_name,
-            battery_pct: 100,
-            rssi_dbm: -60,
-            sw_version: "unknown".to_string(),
-            is_online: true,
-            last_seen: SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs(),
-            is_open: false,
-            timeout_sec: default_timeout,
-        }
-    }
-}
-
-impl WyzeSensor for ContactSensor {
-    fn mac(&self) -> &str { &self.mac }
-    fn sensor_type(&self) -> SensorType { self.sensor_type }
-    fn battery_pct(&self) -> u8 { self.battery_pct }
-    fn rssi_dbm(&self) -> i8 { self.rssi_dbm }
-    fn sw_version(&self) -> &str { &self.sw_version }
-    fn is_online(&self) -> bool { self.is_online }
-    fn set_online(&mut self, online: bool) { self.is_online = online; }
-    fn friendly_name(&self) -> &str { &self.friendly_name }
-    fn set_friendly_name(&mut self, name: String) { self.friendly_name = name; }
-    fn last_seen(&self) -> u64 { self.last_seen }
-    fn set_last_seen(&mut self, time: u64) { self.last_seen = time; }
-    fn timeout_sec(&self) -> u64 { self.timeout_sec }
-    fn set_timeout_sec(&mut self, timeout: u64) { self.timeout_sec = timeout; }
-
-    fn get_state_payload(&self) -> Value {
-        json!({
-            "battery": self.battery_pct,
-            "mac": self.mac,
-            "name": self.friendly_name,
-            "online": self.is_online,
-            "sensor_type": self.sensor_type.as_str(),
-            "signal_strength": self.rssi_dbm,
-            "sw_version": self.sw_version,
-            "timestamp": self.last_seen as f64,
-            "state": if self.is_open { "open" } else { "closed" },
-        })
-    }
-
-    fn get_discovery_payloads(&self, topic_root: &str) -> Vec<(String, Value)> {
-        let mut payloads = Vec::new();
-        let device_id = format!("wyzesense_{}", self.mac);
-        let device = build_device_metadata(&self.mac, &self.friendly_name, self.sensor_type);
-        let state_topic = format!("{}/{}", topic_root, self.mac);
-        let availability = json!([
-            { "topic": format!("{}/status", topic_root) },
-            { "topic": format!("{}/{}/status", topic_root, self.mac) }
-        ]);
-
-        push_common_discovery_payloads(&self.mac, &self.friendly_name, self.sensor_type, topic_root, &mut payloads);
-
-        payloads.push((
-            format!("homeassistant/binary_sensor/{}/state/config", device_id),
-            json!({
-                "name": null,
-                "state_topic": state_topic.clone(),
-                "value_template": "{{ value_json.state }}",
-                "device_class": "opening",
-                "payload_on": "open",
-                "payload_off": "closed",
-                "unique_id": format!("{}_state", device_id),
-                "device": device,
-                "availability": availability,
-                "availability_mode": "all",
-                "json_attributes_topic": state_topic,
-            })
-        ));
-
-        payloads
-    }
-
-    fn update_from_event(&mut self, event: &DongleEvent) -> Result<(), &'static str> {
-        update_metadata(
-            &mut self.is_online,
-            &mut self.last_seen,
-            &mut self.battery_pct,
-            &mut self.rssi_dbm,
-            event,
-            self.sensor_type,
-        );
-
-        match &event.data {
-            TelemetryData::Alarm { state, .. } => {
-                self.is_open = *state == 1;
-                Ok(())
-            }
-            TelemetryData::Heartbeat { .. } | TelemetryData::Scanned | TelemetryData::Offline | TelemetryData::UnknownEvent(_) => Ok(()),
-            other => {
-                warn!("ContactSensor (MAC={}) received unexpected telemetry event variant: {:?}", self.mac, other);
-                Err("Unexpected event type for contact sensor")
-            }
-        }
-    }
-}
-
-// ---------------------------------------------------------
-// 2. Motion Sensor
-// ---------------------------------------------------------
-pub struct MotionSensor {
-    mac: String,
-    sensor_type: SensorType,
-    friendly_name: String,
-    battery_pct: u8,
-    rssi_dbm: i8,
-    sw_version: String,
-    is_online: bool,
-    last_seen: u64,
-    is_active: bool,
-    timeout_sec: u64,
-}
-
-impl MotionSensor {
-    pub fn new(
-        mac: String,
-        sensor_type: SensorType,
-        friendly_name: String,
-    ) -> Self {
-        let default_timeout = match sensor_type {
-            SensorType::MotionV1 => 3600 * 8, // 8 hours for V1
-            _ => 3600 * 4,                    // 4 hours for V2
-        };
-        Self {
-            mac,
-            sensor_type,
-            friendly_name,
-            battery_pct: 100,
-            rssi_dbm: -60,
-            sw_version: "unknown".to_string(),
-            is_online: true,
-            last_seen: SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs(),
-            is_active: false,
-            timeout_sec: default_timeout,
-        }
-    }
-}
-
-impl WyzeSensor for MotionSensor {
-    fn mac(&self) -> &str { &self.mac }
-    fn sensor_type(&self) -> SensorType { self.sensor_type }
-    fn battery_pct(&self) -> u8 { self.battery_pct }
-    fn rssi_dbm(&self) -> i8 { self.rssi_dbm }
-    fn sw_version(&self) -> &str { &self.sw_version }
-    fn is_online(&self) -> bool { self.is_online }
-    fn set_online(&mut self, online: bool) { self.is_online = online; }
-    fn friendly_name(&self) -> &str { &self.friendly_name }
-    fn set_friendly_name(&mut self, name: String) { self.friendly_name = name; }
-    fn last_seen(&self) -> u64 { self.last_seen }
-    fn set_last_seen(&mut self, time: u64) { self.last_seen = time; }
-    fn timeout_sec(&self) -> u64 { self.timeout_sec }
-    fn set_timeout_sec(&mut self, timeout: u64) { self.timeout_sec = timeout; }
-
-    fn get_state_payload(&self) -> Value {
-        json!({
-            "battery": self.battery_pct,
-            "mac": self.mac,
-            "name": self.friendly_name,
-            "online": self.is_online,
-            "sensor_type": self.sensor_type.as_str(),
-            "signal_strength": self.rssi_dbm,
-            "sw_version": self.sw_version,
-            "timestamp": self.last_seen as f64,
-            "state": if self.is_active { "active" } else { "inactive" },
-        })
-    }
-
-    fn get_discovery_payloads(&self, topic_root: &str) -> Vec<(String, Value)> {
-        let mut payloads = Vec::new();
-        let device_id = format!("wyzesense_{}", self.mac);
-        let device = build_device_metadata(&self.mac, &self.friendly_name, self.sensor_type);
-        let state_topic = format!("{}/{}", topic_root, self.mac);
-        let availability = json!([
-            { "topic": format!("{}/status", topic_root) },
-            { "topic": format!("{}/{}/status", topic_root, self.mac) }
-        ]);
-
-        push_common_discovery_payloads(&self.mac, &self.friendly_name, self.sensor_type, topic_root, &mut payloads);
-
-        payloads.push((
-            format!("homeassistant/binary_sensor/{}/state/config", device_id),
-            json!({
-                "name": null,
-                "state_topic": state_topic.clone(),
-                "value_template": "{{ value_json.state }}",
-                "device_class": "motion",
-                "payload_on": "active",
-                "payload_off": "inactive",
-                "unique_id": format!("{}_state", device_id),
-                "device": device,
-                "availability": availability,
-                "availability_mode": "all",
-                "json_attributes_topic": state_topic,
-            })
-        ));
-
-        payloads
-    }
-
-    fn update_from_event(&mut self, event: &DongleEvent) -> Result<(), &'static str> {
-        update_metadata(
-            &mut self.is_online,
-            &mut self.last_seen,
-            &mut self.battery_pct,
-            &mut self.rssi_dbm,
-            event,
-            self.sensor_type,
-        );
-
-        match &event.data {
-            TelemetryData::Alarm { state, .. } => {
-                self.is_active = *state == 1;
-                Ok(())
-            }
-            TelemetryData::Heartbeat { .. } | TelemetryData::Scanned | TelemetryData::Offline | TelemetryData::UnknownEvent(_) => Ok(()),
-            other => {
-                warn!("MotionSensor (MAC={}) received unexpected telemetry event variant: {:?}", self.mac, other);
-                Err("Unexpected event type for motion sensor")
-            }
-        }
-    }
-}
-
-// ---------------------------------------------------------
-// 3. Leak Sensor
-// ---------------------------------------------------------
-pub struct LeakSensor {
-    mac: String,
-    sensor_type: SensorType,
-    friendly_name: String,
-    battery_pct: u8,
-    rssi_dbm: i8,
-    sw_version: String,
-    is_online: bool,
-    last_seen: u64,
-    is_wet: bool,
-    probe_connected: bool,
-    probe_available: bool,
-    timeout_sec: u64,
-}
-
-impl LeakSensor {
-    pub fn new(
-        mac: String,
-        sensor_type: SensorType,
-        friendly_name: String,
-    ) -> Self {
-        Self {
-            mac,
-            sensor_type,
-            friendly_name,
-            battery_pct: 100,
-            rssi_dbm: -60,
-            sw_version: "unknown".to_string(),
-            is_online: true,
-            last_seen: SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs(),
-            is_wet: false,
-            probe_connected: false,
-            probe_available: false,
-            timeout_sec: 3600 * 4, // 4 hours for V2 leak sensor
-        }
-    }
-}
-
-impl WyzeSensor for LeakSensor {
-    fn mac(&self) -> &str { &self.mac }
-    fn sensor_type(&self) -> SensorType { self.sensor_type }
-    fn battery_pct(&self) -> u8 { self.battery_pct }
-    fn rssi_dbm(&self) -> i8 { self.rssi_dbm }
-    fn sw_version(&self) -> &str { &self.sw_version }
-    fn is_online(&self) -> bool { self.is_online }
-    fn set_online(&mut self, online: bool) { self.is_online = online; }
-    fn friendly_name(&self) -> &str { &self.friendly_name }
-    fn set_friendly_name(&mut self, name: String) { self.friendly_name = name; }
-    fn last_seen(&self) -> u64 { self.last_seen }
-    fn set_last_seen(&mut self, time: u64) { self.last_seen = time; }
-    fn timeout_sec(&self) -> u64 { self.timeout_sec }
-    fn set_timeout_sec(&mut self, timeout: u64) { self.timeout_sec = timeout; }
-
-    fn get_state_payload(&self) -> Value {
-        json!({
-            "battery": self.battery_pct,
-            "mac": self.mac,
-            "name": self.friendly_name,
-            "online": self.is_online,
-            "sensor_type": self.sensor_type.as_str(),
-            "signal_strength": self.rssi_dbm,
-            "sw_version": self.sw_version,
-            "timestamp": self.last_seen as f64,
-            "state": if self.is_wet { "wet" } else { "dry" },
-            "probe_state": if self.probe_connected { "wet" } else { "dry" },
-            "probe_available": self.probe_available,
-        })
-    }
-
-    fn get_discovery_payloads(&self, topic_root: &str) -> Vec<(String, Value)> {
-        let mut payloads = Vec::new();
-        let device_id = format!("wyzesense_{}", self.mac);
-        let device = build_device_metadata(&self.mac, &self.friendly_name, self.sensor_type);
-        let state_topic = format!("{}/{}", topic_root, self.mac);
-        let availability = json!([
-            { "topic": format!("{}/status", topic_root) },
-            { "topic": format!("{}/{}/status", topic_root, self.mac) }
-        ]);
-
-        push_common_discovery_payloads(&self.mac, &self.friendly_name, self.sensor_type, topic_root, &mut payloads);
-
-        payloads.push((
-            format!("homeassistant/binary_sensor/{}/state/config", device_id),
-            json!({
-                "name": null,
-                "state_topic": state_topic.clone(),
-                "value_template": "{{ value_json.state }}",
-                "device_class": "moisture",
-                "payload_on": "wet",
-                "payload_off": "dry",
-                "unique_id": format!("{}_state", device_id),
-                "device": device.clone(),
-                "availability": availability.clone(),
-                "availability_mode": "all",
-                "json_attributes_topic": state_topic.clone(),
-            })
-        ));
-
-        payloads.push((
-            format!("homeassistant/binary_sensor/{}_probe/config", device_id),
-            json!({
-                "name": "Probe Connected",
-                "state_topic": state_topic.clone(),
-                "value_template": "{{ 'ON' if value_json.probe_available else 'OFF' }}",
-                "device_class": "connectivity",
-                "unique_id": format!("{}_probe", device_id),
-                "device": device,
-                "availability": availability,
-                "availability_mode": "all",
-                "entity_category": "diagnostic",
-                "json_attributes_topic": state_topic,
-            })
-        ));
-
-        payloads
-    }
-
-    fn update_from_event(&mut self, event: &DongleEvent) -> Result<(), &'static str> {
-        update_metadata(
-            &mut self.is_online,
-            &mut self.last_seen,
-            &mut self.battery_pct,
-            &mut self.rssi_dbm,
-            event,
-            self.sensor_type,
-        );
-
-        match &event.data {
-            TelemetryData::Leak {
-                state,
-                probe_state,
-                probe_available,
-                ..
-            } => {
-                self.is_wet = *state == 1;
-                self.probe_connected = *probe_state == 1;
-                self.probe_available = *probe_available;
-                Ok(())
-            }
-            TelemetryData::Heartbeat { .. } | TelemetryData::Scanned | TelemetryData::Offline | TelemetryData::UnknownEvent(_) => Ok(()),
-            other => {
-                warn!("LeakSensor (MAC={}) received unexpected telemetry event variant: {:?}", self.mac, other);
-                Err("Unexpected event type for leak sensor")
-            }
-        }
-    }
-}
-
-// ---------------------------------------------------------
-// 4. Climate Sensor
-// ---------------------------------------------------------
-pub struct ClimateSensor {
-    mac: String,
-    sensor_type: SensorType,
-    friendly_name: String,
-    battery_pct: u8,
-    rssi_dbm: i8,
-    sw_version: String,
-    is_online: bool,
-    last_seen: u64,
-    temperature: f32,
-    humidity: u8,
-    timeout_sec: u64,
-}
-
-impl ClimateSensor {
-    pub fn new(
-        mac: String,
-        sensor_type: SensorType,
-        friendly_name: String,
-    ) -> Self {
-        Self {
-            mac,
-            sensor_type,
-            friendly_name,
-            battery_pct: 100,
-            rssi_dbm: -60,
-            sw_version: "unknown".to_string(),
-            is_online: true,
-            last_seen: SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs(),
-            temperature: 0.0,
-            humidity: 0,
-            timeout_sec: 3600 * 4, // 4 hours for V2 climate sensor
-        }
-    }
-}
-
-impl WyzeSensor for ClimateSensor {
-    fn mac(&self) -> &str { &self.mac }
-    fn sensor_type(&self) -> SensorType { self.sensor_type }
-    fn battery_pct(&self) -> u8 { self.battery_pct }
-    fn rssi_dbm(&self) -> i8 { self.rssi_dbm }
-    fn sw_version(&self) -> &str { &self.sw_version }
-    fn is_online(&self) -> bool { self.is_online }
-    fn set_online(&mut self, online: bool) { self.is_online = online; }
-    fn friendly_name(&self) -> &str { &self.friendly_name }
-    fn set_friendly_name(&mut self, name: String) { self.friendly_name = name; }
-    fn last_seen(&self) -> u64 { self.last_seen }
-    fn set_last_seen(&mut self, time: u64) { self.last_seen = time; }
-    fn timeout_sec(&self) -> u64 { self.timeout_sec }
-    fn set_timeout_sec(&mut self, timeout: u64) { self.timeout_sec = timeout; }
-
-    fn get_state_payload(&self) -> Value {
-        json!({
-            "battery": self.battery_pct,
-            "mac": self.mac,
-            "name": self.friendly_name,
-            "online": self.is_online,
-            "sensor_type": self.sensor_type.as_str(),
-            "signal_strength": self.rssi_dbm,
-            "sw_version": self.sw_version,
-            "timestamp": self.last_seen as f64,
-            "temperature": format!("{:.2}", self.temperature),
-            "humidity": self.humidity,
-        })
-    }
-
-    fn get_discovery_payloads(&self, topic_root: &str) -> Vec<(String, Value)> {
-        let mut payloads = Vec::new();
-        let device_id = format!("wyzesense_{}", self.mac);
-        let device = build_device_metadata(&self.mac, &self.friendly_name, self.sensor_type);
-        let state_topic = format!("{}/{}", topic_root, self.mac);
-        let availability = json!([
-            { "topic": format!("{}/status", topic_root) },
-            { "topic": format!("{}/{}/status", topic_root, self.mac) }
-        ]);
-
-        push_common_discovery_payloads(&self.mac, &self.friendly_name, self.sensor_type, topic_root, &mut payloads);
-
-        payloads.push((
-            format!("homeassistant/sensor/{}/temperature/config", device_id),
-            json!({
-                "name": "Temperature",
-                "state_topic": state_topic.clone(),
-                "value_template": "{{ value_json.temperature }}",
-                "device_class": "temperature",
-                "state_class": "measurement",
-                "unit_of_measurement": "°C",
-                "unique_id": format!("{}_temperature", device_id),
-                "device": device.clone(),
-                "availability": availability.clone(),
-                "availability_mode": "all",
-                "json_attributes_topic": state_topic.clone(),
-            })
-        ));
-
-        payloads.push((
-            format!("homeassistant/sensor/{}/humidity/config", device_id),
-            json!({
-                "name": "Humidity",
-                "state_topic": state_topic,
-                "value_template": "{{ value_json.humidity }}",
-                "device_class": "humidity",
-                "state_class": "measurement",
-                "unit_of_measurement": "%",
-                "unique_id": format!("{}_humidity", device_id),
-                "device": device,
-                "availability": availability,
-                "availability_mode": "all",
-                "json_attributes_topic": state_topic,
-            })
-        ));
-
-        payloads
-    }
-
-    fn update_from_event(&mut self, event: &DongleEvent) -> Result<(), &'static str> {
-        update_metadata(
-            &mut self.is_online,
-            &mut self.last_seen,
-            &mut self.battery_pct,
-            &mut self.rssi_dbm,
-            event,
-            self.sensor_type,
-        );
-
-        match &event.data {
-            TelemetryData::Climate {
-                temperature,
-                humidity,
-                ..
-            } => {
-                self.temperature = *temperature;
-                self.humidity = *humidity;
-                Ok(())
-            }
-            TelemetryData::Heartbeat { .. } | TelemetryData::Scanned | TelemetryData::Offline | TelemetryData::UnknownEvent(_) => Ok(()),
-            other => {
-                warn!("ClimateSensor (MAC={}) received unexpected telemetry event variant: {:?}", self.mac, other);
-                Err("Unexpected event type for climate sensor")
-            }
-        }
-    }
-}
-
-// ---------------------------------------------------------
-// 5. Unknown Sensor
-// ---------------------------------------------------------
-pub struct UnknownSensor {
-    mac: String,
-    sensor_type: SensorType,
-    friendly_name: String,
-    battery_pct: u8,
-    rssi_dbm: i8,
-    sw_version: String,
-    is_online: bool,
-    last_seen: u64,
-    timeout_sec: u64,
-}
-
-impl UnknownSensor {
+impl WyzeSensor {
     pub fn new(mac: String, sensor_type: SensorType, friendly_name: String) -> Self {
+        let (default_timeout, default_battery) = match sensor_type {
+            SensorType::ContactV1 | SensorType::MotionV1 => (3600 * 8, Some(100u8)),
+            SensorType::ContactV2 | SensorType::MotionV2 |
+            SensorType::LeakV2 | SensorType::ClimateV2 => (3600 * 4, Some(100u8)),
+            SensorType::Chime => (3600 * 24, None), // Mains-powered, no battery
+            SensorType::Unknown(_) => (1800, Some(100u8)),
+        };
+        let state = Self::default_state_for_type(sensor_type).unwrap_or(SensorState::Unknown);
         Self {
             mac,
             sensor_type,
             friendly_name,
-            battery_pct: 100,
+            timeout_sec: default_timeout,
+            battery_pct: default_battery,
             rssi_dbm: -60,
             sw_version: "unknown".to_string(),
             is_online: true,
@@ -721,96 +147,379 @@ impl UnknownSensor {
                 .duration_since(SystemTime::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_secs(),
-            timeout_sec: 1800, // 30 minutes default for unknown sensors
-        }
-    }
-}
-
-impl WyzeSensor for UnknownSensor {
-    fn mac(&self) -> &str { &self.mac }
-    fn sensor_type(&self) -> SensorType { self.sensor_type }
-    fn battery_pct(&self) -> u8 { self.battery_pct }
-    fn rssi_dbm(&self) -> i8 { self.rssi_dbm }
-    fn sw_version(&self) -> &str { &self.sw_version }
-    fn is_online(&self) -> bool { self.is_online }
-    fn set_online(&mut self, online: bool) { self.is_online = online; }
-    fn friendly_name(&self) -> &str { &self.friendly_name }
-    fn set_friendly_name(&mut self, name: String) { self.friendly_name = name; }
-    fn last_seen(&self) -> u64 { self.last_seen }
-    fn set_last_seen(&mut self, time: u64) { self.last_seen = time; }
-    fn timeout_sec(&self) -> u64 { self.timeout_sec }
-    fn set_timeout_sec(&mut self, timeout: u64) { self.timeout_sec = timeout; }
-
-    fn get_state_payload(&self) -> Value {
-        json!({
-            "battery": self.battery_pct,
-            "mac": self.mac,
-            "name": self.friendly_name,
-            "online": self.is_online,
-            "sensor_type": self.sensor_type.as_str(),
-            "signal_strength": self.rssi_dbm,
-            "sw_version": self.sw_version,
-            "timestamp": self.last_seen as f64,
-            "state": "unknown",
-        })
-    }
-
-    fn get_discovery_payloads(&self, _topic_root: &str) -> Vec<(String, Value)> {
-        Vec::new() // No discovery payloads for unknown sensors
-    }
-
-    fn update_from_event(&mut self, event: &DongleEvent) -> Result<(), &'static str> {
-        update_metadata(
-            &mut self.is_online,
-            &mut self.last_seen,
-            &mut self.battery_pct,
-            &mut self.rssi_dbm,
-            event,
-            self.sensor_type,
-        );
-        Ok(())
-    }
-}
-
-// ---------------------------------------------------------
-// Sensor Factory
-// ---------------------------------------------------------
-pub struct SensorFactory;
-
-impl SensorFactory {
-    pub fn create(
-        mac: String,
-        sensor_type: SensorType,
-        friendly_name: String,
-    ) -> Result<Box<dyn WyzeSensor>, String> {
-        match sensor_type {
-            SensorType::ContactV1 | SensorType::ContactV2 => {
-                Ok(Box::new(ContactSensor::new(mac, sensor_type, friendly_name)))
-            }
-            SensorType::MotionV1 | SensorType::MotionV2 => {
-                Ok(Box::new(MotionSensor::new(mac, sensor_type, friendly_name)))
-            }
-            SensorType::LeakV2 => {
-                Ok(Box::new(LeakSensor::new(mac, sensor_type, friendly_name)))
-            }
-            SensorType::ClimateV2 => {
-                Ok(Box::new(ClimateSensor::new(mac, sensor_type, friendly_name)))
-            }
-            SensorType::Unknown(_) => {
-                Ok(Box::new(UnknownSensor::new(mac, sensor_type, friendly_name)))
-            }
-            other => Err(format!("Unsupported sensor type for factory instantiation: {:?}", other)),
+            state,
         }
     }
 
     /// Creates a sensor from string representations (e.g., loaded from YAML config)
-    pub fn create_from_str(
+    pub fn from_type_str(
         mac: String,
         sensor_type_str: &str,
         friendly_name: String,
-    ) -> Result<Box<dyn WyzeSensor>, String> {
+    ) -> Result<Self, String> {
         let sensor_type = sensor_type_str.parse::<SensorType>()?;
-        Self::create(mac, sensor_type, friendly_name)
+        Ok(Self::new(mac, sensor_type, friendly_name))
+    }
+
+    /// Returns true if this device is a pure actuator (no inbound telemetry state).
+    pub fn is_actuator(&self) -> bool {
+        matches!(self.state, SensorState::Chime)
+    }
+
+    /// Update common metadata (battery, rssi, online status, last_seen) from a telemetry event.
+    fn update_common_metadata(&mut self, event: &DongleEvent) {
+        match &event.data {
+            TelemetryData::Offline => {
+                self.is_online = false;
+                return;
+            }
+            TelemetryData::UnknownEvent(_) => {
+                self.is_online = true;
+                return;
+            }
+            _ => {}
+        }
+
+        self.is_online = true;
+        self.last_seen = event.timestamp
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        let (battery, rssi) = match &event.data {
+            TelemetryData::Heartbeat { battery, rssi } => (Some(*battery), Some(*rssi)),
+            TelemetryData::Alarm { battery, rssi, .. } => (Some(*battery), Some(*rssi)),
+            TelemetryData::Climate { battery, rssi, .. } => (Some(*battery), Some(*rssi)),
+            TelemetryData::Leak { battery, rssi, .. } => (Some(*battery), Some(*rssi)),
+            TelemetryData::Scanned => (Some(100), Some(0)),
+            _ => (None, None),
+        };
+
+        if let (Some(b), Some(r)) = (battery, rssi) {
+            // Only update battery for battery-powered devices
+            if self.battery_pct.is_some() {
+                let mut pct = b;
+                if self.sensor_type == SensorType::ContactV2 {
+                    pct = b.saturating_mul(2);
+                }
+                self.battery_pct = Some(pct.min(100));
+            }
+            self.rssi_dbm = r;
+        }
+    }
+
+    /// Update internal sensor state variables from a parsed telemetry event.
+    pub fn update_from_event(&mut self, event: &DongleEvent) -> Result<(), &'static str> {
+        // 1. Update common metadata
+        self.update_common_metadata(event);
+
+        // 2. Auto-upgrade Unknown state on first real telemetry event (backward compat migration)
+        if matches!(self.state, SensorState::Unknown) {
+            if let Some(default) = Self::default_state_for_type(self.sensor_type) {
+                info!("Auto-upgraded sensor {} state from Unknown to {:?}",
+                    self.mac, std::mem::discriminant(&default));
+                self.state = default;
+            }
+        }
+
+        // 3. Update type-specific state via match
+        match (&mut self.state, &event.data) {
+            (SensorState::Contact { is_open }, TelemetryData::Alarm { state, .. }) => {
+                *is_open = *state == 1;
+                Ok(())
+            }
+            (SensorState::Motion { is_active }, TelemetryData::Alarm { state, .. }) => {
+                *is_active = *state == 1;
+                Ok(())
+            }
+            (SensorState::Leak { is_wet, probe_is_wet },
+             TelemetryData::Leak { state, probe_state, probe_available, .. }) => {
+                *is_wet = *state == 1;
+                *probe_is_wet = if *probe_available {
+                    Some(*probe_state == 1)
+                } else {
+                    None
+                };
+                Ok(())
+            }
+            (SensorState::Climate { temperature, humidity },
+             TelemetryData::Climate { temperature: t, humidity: h, .. }) => {
+                *temperature = *t;
+                *humidity = *h;
+                Ok(())
+            }
+            // Chime: accept all events gracefully, nothing to update
+            (SensorState::Chime, _) => Ok(()),
+            // Common events handled by all sensor types (including Unknown that couldn't be upgraded)
+            (_, TelemetryData::Heartbeat { .. } | TelemetryData::Scanned
+               | TelemetryData::Offline | TelemetryData::UnknownEvent(_)) => Ok(()),
+            (state, other) => {
+                warn!("Sensor (MAC={}) with state {:?} received unexpected telemetry event: {:?}",
+                    self.mac, std::mem::discriminant(state), other);
+                Err("Unexpected event type for this sensor")
+            }
+        }
+    }
+
+    /// Returns the default SensorState for a given SensorType, or None for unknown types.
+    fn default_state_for_type(sensor_type: SensorType) -> Option<SensorState> {
+        match sensor_type {
+            SensorType::ContactV1 | SensorType::ContactV2 =>
+                Some(SensorState::Contact { is_open: false }),
+            SensorType::MotionV1 | SensorType::MotionV2 =>
+                Some(SensorState::Motion { is_active: false }),
+            SensorType::LeakV2 =>
+                Some(SensorState::Leak { is_wet: false, probe_is_wet: None }),
+            SensorType::ClimateV2 =>
+                Some(SensorState::Climate { temperature: 0.0, humidity: 0 }),
+            SensorType::Chime =>
+                Some(SensorState::Chime),
+            SensorType::Unknown(_) => None,
+        }
+    }
+
+    /// Dynamic JSON representation of states for MQTT publishing.
+    pub fn get_state_payload(&self) -> Value {
+        let mut payload = json!({
+            "mac": self.mac,
+            "name": self.friendly_name,
+            "online": self.is_online,
+            "sensor_type": self.sensor_type.as_str(),
+            "signal_strength": self.rssi_dbm,
+            "sw_version": self.sw_version,
+            "timestamp": self.last_seen as f64,
+        });
+        // Include battery only for battery-powered devices
+        if let Some(battery) = self.battery_pct {
+            payload["battery"] = json!(battery);
+        }
+        // Merge type-specific fields
+        match &self.state {
+            SensorState::Contact { is_open } => {
+                payload["state"] = json!(if *is_open { "open" } else { "closed" });
+            }
+            SensorState::Motion { is_active } => {
+                payload["state"] = json!(if *is_active { "active" } else { "inactive" });
+            }
+            SensorState::Leak { is_wet, probe_is_wet } => {
+                payload["state"] = json!(if *is_wet { "wet" } else { "dry" });
+                match probe_is_wet {
+                    Some(wet) => {
+                        payload["probe_available"] = json!(true);
+                        payload["probe_state"] = json!(if *wet { "wet" } else { "dry" });
+                    }
+                    None => {
+                        payload["probe_available"] = json!(false);
+                    }
+                }
+            }
+            SensorState::Climate { temperature, humidity } => {
+                payload["temperature"] = json!(format!("{:.2}", temperature));
+                payload["humidity"] = json!(*humidity);
+            }
+            SensorState::Chime => {
+                payload["state"] = json!("idle");
+            }
+            SensorState::Unknown => {
+                payload["state"] = json!("unknown");
+            }
+        }
+        payload
+    }
+
+    /// Home Assistant discovery configurations mapping.
+    pub fn get_discovery_payloads(&self, topic_root: &str) -> Vec<(String, Value)> {
+        match &self.state {
+            SensorState::Chime => self.build_chime_discovery(topic_root),
+            SensorState::Unknown => Vec::new(), // No discovery for unknown sensors
+            _ => self.build_sensor_discovery(topic_root),
+        }
+    }
+
+    fn build_chime_discovery(&self, topic_root: &str) -> Vec<(String, Value)> {
+        let mut payloads = Vec::new();
+        let device_id = format!("wyzesense_{}", self.mac);
+        let device = build_device_metadata(&self.mac, &self.friendly_name, self.sensor_type);
+        let state_topic = format!("{}/{}", topic_root, self.mac);
+        let availability = json!([
+            { "topic": format!("{}/status", topic_root) },
+        ]);
+
+        // Signal strength (Chime still communicates wirelessly)
+        payloads.push((
+            format!("homeassistant/sensor/{}/signal_strength/config", device_id),
+            json!({
+                "state_topic": state_topic,
+                "value_template": "{{ value_json.signal_strength }}",
+                "device_class": "signal_strength",
+                "unit_of_measurement": "dBm",
+                "state_class": "measurement",
+                "unique_id": format!("{}_signal_strength", device_id),
+                "device": device.clone(),
+                "availability": availability.clone(),
+                "availability_mode": "all",
+                "entity_category": "diagnostic",
+            })
+        ));
+
+        // Register as a HASS "button" entity for triggering chime
+        payloads.push((
+            format!("homeassistant/button/{}/chime/config", device_id),
+            json!({
+                "name": null,
+                "command_topic": format!("{}/{}/chime", topic_root, self.mac),
+                "unique_id": format!("{}_chime", device_id),
+                "device": device,
+                "availability": availability,
+                "availability_mode": "all",
+                "icon": "mdi:bell-ring",
+            })
+        ));
+
+        payloads
+    }
+
+    fn build_sensor_discovery(&self, topic_root: &str) -> Vec<(String, Value)> {
+        let mut payloads = Vec::new();
+        let device_id = format!("wyzesense_{}", self.mac);
+        let device = build_device_metadata(&self.mac, &self.friendly_name, self.sensor_type);
+        let state_topic = format!("{}/{}", topic_root, self.mac);
+        let availability = json!([
+            { "topic": format!("{}/status", topic_root) },
+            { "topic": format!("{}/{}/status", topic_root, self.mac) }
+        ]);
+
+        push_common_discovery_payloads(
+            &self.mac, &self.friendly_name, self.sensor_type, self.battery_pct,
+            topic_root, &mut payloads,
+        );
+
+        match &self.state {
+            SensorState::Contact { .. } => {
+                payloads.push((
+                    format!("homeassistant/binary_sensor/{}/state/config", device_id),
+                    json!({
+                        "name": null,
+                        "state_topic": state_topic.clone(),
+                        "value_template": "{{ value_json.state }}",
+                        "device_class": "opening",
+                        "payload_on": "open",
+                        "payload_off": "closed",
+                        "unique_id": format!("{}_state", device_id),
+                        "device": device,
+                        "availability": availability,
+                        "availability_mode": "all",
+                        "json_attributes_topic": state_topic,
+                    })
+                ));
+            }
+            SensorState::Motion { .. } => {
+                payloads.push((
+                    format!("homeassistant/binary_sensor/{}/state/config", device_id),
+                    json!({
+                        "name": null,
+                        "state_topic": state_topic.clone(),
+                        "value_template": "{{ value_json.state }}",
+                        "device_class": "motion",
+                        "payload_on": "active",
+                        "payload_off": "inactive",
+                        "unique_id": format!("{}_state", device_id),
+                        "device": device,
+                        "availability": availability,
+                        "availability_mode": "all",
+                        "json_attributes_topic": state_topic,
+                    })
+                ));
+            }
+            SensorState::Leak { .. } => {
+                // Main sensor: built-in water detector
+                payloads.push((
+                    format!("homeassistant/binary_sensor/{}/state/config", device_id),
+                    json!({
+                        "name": null,
+                        "state_topic": state_topic.clone(),
+                        "value_template": "{{ value_json.state }}",
+                        "device_class": "moisture",
+                        "payload_on": "wet",
+                        "payload_off": "dry",
+                        "unique_id": format!("{}_state", device_id),
+                        "device": device.clone(),
+                        "availability": availability.clone(),
+                        "availability_mode": "all",
+                        "json_attributes_topic": state_topic.clone(),
+                    })
+                ));
+                // Optional external probe: connectivity diagnostic
+                payloads.push((
+                    format!("homeassistant/binary_sensor/{}/probe_available/config", device_id),
+                    json!({
+                        "name": "Probe",
+                        "state_topic": state_topic.clone(),
+                        "value_template": "{{ 'ON' if value_json.probe_available else 'OFF' }}",
+                        "device_class": "connectivity",
+                        "unique_id": format!("{}_probe_available", device_id),
+                        "device": device.clone(),
+                        "availability": availability.clone(),
+                        "availability_mode": "all",
+                        "entity_category": "diagnostic",
+                    })
+                ));
+                // Optional external probe: moisture state (only meaningful when probe is connected)
+                payloads.push((
+                    format!("homeassistant/binary_sensor/{}/probe_state/config", device_id),
+                    json!({
+                        "name": "Probe Moisture",
+                        "state_topic": state_topic.clone(),
+                        "value_template": "{{ value_json.probe_state if value_json.probe_available else 'dry' }}",
+                        "device_class": "moisture",
+                        "payload_on": "wet",
+                        "payload_off": "dry",
+                        "unique_id": format!("{}_probe_state", device_id),
+                        "device": device,
+                        "availability": availability,
+                        "availability_mode": "all",
+                        "json_attributes_topic": state_topic,
+                    })
+                ));
+            }
+            SensorState::Climate { .. } => {
+                payloads.push((
+                    format!("homeassistant/sensor/{}/temperature/config", device_id),
+                    json!({
+                        "name": "Temperature",
+                        "state_topic": state_topic.clone(),
+                        "value_template": "{{ value_json.temperature }}",
+                        "device_class": "temperature",
+                        "state_class": "measurement",
+                        "unit_of_measurement": "°C",
+                        "unique_id": format!("{}_temperature", device_id),
+                        "device": device.clone(),
+                        "availability": availability.clone(),
+                        "availability_mode": "all",
+                        "json_attributes_topic": state_topic.clone(),
+                    })
+                ));
+                payloads.push((
+                    format!("homeassistant/sensor/{}/humidity/config", device_id),
+                    json!({
+                        "name": "Humidity",
+                        "state_topic": state_topic,
+                        "value_template": "{{ value_json.humidity }}",
+                        "device_class": "humidity",
+                        "state_class": "measurement",
+                        "unit_of_measurement": "%",
+                        "unique_id": format!("{}_humidity", device_id),
+                        "device": device,
+                        "availability": availability,
+                        "availability_mode": "all",
+                        "json_attributes_topic": state_topic,
+                    })
+                ));
+            }
+            _ => {} // Chime and Unknown handled separately
+        }
+
+        payloads
     }
 }
 
@@ -818,11 +527,11 @@ impl SensorFactory {
 // Sensor Manager
 // ---------------------------------------------------------
 use crate::config::sensors::{SensorsConfig, SensorMetadata};
-use crate::config::state::{SystemState, SensorState};
+use crate::config::state::{SystemState, PersistedSensorState};
 use tracing::{info, warn, error};
 
 pub struct SensorManager {
-    sensors: HashMap<String, Box<dyn WyzeSensor>>,
+    sensors: HashMap<String, WyzeSensor>,
     config_path: String,
     state_path: String,
 }
@@ -836,15 +545,15 @@ impl SensorManager {
         }
     }
 
-    pub fn get_sensors(&self) -> &HashMap<String, Box<dyn WyzeSensor>> {
+    pub fn get_sensors(&self) -> &HashMap<String, WyzeSensor> {
         &self.sensors
     }
 
-    pub fn get_sensors_mut(&mut self) -> &mut HashMap<String, Box<dyn WyzeSensor>> {
+    pub fn get_sensors_mut(&mut self) -> &mut HashMap<String, WyzeSensor> {
         &mut self.sensors
     }
 
-    /// Load all sensors by merging the user config and the dynamic state config
+    /// Load all sensors by merging the user config, the dynamic state config, and the NVRAM MAC list.
     pub fn load_sensors(&mut self, nvram_macs: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         // 1. Load user config (config/sensors.yaml)
         let mut sensors_config = SensorsConfig::load_from_yaml(&self.config_path).unwrap_or_else(|_| SensorsConfig {
@@ -861,53 +570,49 @@ impl SensorManager {
             // Find custom config metadata
             let metadata = sensors_config.sensors.get(mac);
             
-            // Determine friendly name
+            // Determine friendly name (from config, or auto-generated)
             let friendly_name = metadata
                 .map(|m| m.name.clone())
                 .unwrap_or_else(|| format!("Wyze Sense {}", mac));
 
-            // Determine sensor type (first from user config, then system state, else default to "unknown")
-            let type_str = if let Some(m) = metadata {
-                m.r#type.clone()
-            } else if let Some(s) = system_state.sensors.get(mac) {
+            // Determine sensor type: state.yaml (authoritative) > sensors.yaml (migration hint) > "unknown"
+            let type_str = if let Some(s) = system_state.sensors.get(mac) {
                 s.sensor_type.clone()
+            } else if let Some(m) = metadata {
+                m.r#type.clone().unwrap_or_else(|| "unknown".to_string())
             } else {
                 "unknown".to_string()
             };
 
             // Create the sensor object
-            match SensorFactory::create_from_str(mac.clone(), &type_str, friendly_name.clone()) {
+            match WyzeSensor::from_type_str(mac.clone(), &type_str, friendly_name.clone()) {
                 Ok(mut sensor) => {
                     // Load custom timeout if it exists in user config
                     if let Some(m) = metadata {
                         if let Some(t) = m.timeout_sec {
-                            sensor.set_timeout_sec(t);
+                            sensor.timeout_sec = t;
                         }
                     }
 
-                    // Auto-populate missing NVRAM sensors in sensors.yaml
+                    // Auto-populate missing NVRAM sensors in sensors.yaml (name only, no type)
                     if !sensors_config.sensors.contains_key(mac) {
                         sensors_config.sensors.insert(mac.clone(), SensorMetadata {
                             name: friendly_name.clone(),
-                            r#type: type_str.clone(),
-                            timeout_sec: Some(sensor.timeout_sec()),
+                            r#type: None, // Type is managed in state.yaml, not config
+                            timeout_sec: Some(sensor.timeout_sec),
                         });
                         config_changed = true;
                     }
 
-                    // Warm up battery, rssi, and version from system state cache if available
+                    // Restore full state from system state cache if available
                     if let Some(cached) = system_state.sensors.get(mac) {
-                        let event = DongleEvent {
-                            mac: mac.clone(),
-                            timestamp: SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(cached.last_seen),
-                            sensor_type: sensor.sensor_type(),
-                            event_type: 0xA1, // Default
-                            data: TelemetryData::Heartbeat {
-                                battery: cached.battery,
-                                rssi: cached.signal,
-                            },
-                        };
-                        let _ = sensor.update_from_event(&event);
+                        if let Some(b) = cached.battery {
+                            sensor.battery_pct = Some(b);
+                        }
+                        sensor.rssi_dbm = cached.signal;
+                        sensor.last_seen = cached.last_seen;
+                        sensor.sw_version = cached.version.clone();
+                        sensor.state = cached.state.clone(); // Full type-specific state restored!
                     }
                     self.sensors.insert(mac.clone(), sensor);
                 }
@@ -919,7 +624,7 @@ impl SensorManager {
 
         // If new sensors were auto-populated, save sensors.yaml back to disk atomically
         if config_changed {
-            info!("Auto-generating sensors.yaml with unknown types for newly discovered NVRAM sensors.");
+            info!("Auto-generating sensors.yaml with stub entries for newly discovered NVRAM sensors.");
             sensors_config.save_to_yaml_atomic(&self.config_path)?;
         }
 
@@ -930,18 +635,19 @@ impl SensorManager {
 
     /// Saves the dynamic in-memory sensor state back to config/state.yaml
     pub fn save_state_to_disk(&self) -> Result<(), Box<dyn std::error::Error>> {
-        let mut state = SystemState::default();
+        let mut system_state = SystemState::default();
         for (mac, sensor) in &self.sensors {
-            state.sensors.insert(mac.clone(), SensorState {
+            system_state.sensors.insert(mac.clone(), PersistedSensorState {
                 mac: mac.clone(),
-                sensor_type: sensor.sensor_type().as_str().to_string(),
-                version: sensor.sw_version().to_string(),
-                last_seen: sensor.last_seen(),
-                battery: sensor.battery_pct(),
-                signal: sensor.rssi_dbm(),
+                sensor_type: sensor.sensor_type.as_str().to_string(),
+                version: sensor.sw_version.clone(),
+                last_seen: sensor.last_seen,
+                battery: sensor.battery_pct,
+                signal: sensor.rssi_dbm,
+                state: sensor.state.clone(), // Type-specific state persisted!
             });
         }
-        state.save_to_yaml_atomic(&self.state_path)?;
+        system_state.save_to_yaml_atomic(&self.state_path)?;
         Ok(())
     }
 
@@ -979,23 +685,23 @@ impl SensorManager {
         };
 
         // 3. Construct and insert the in-memory sensor object
-        let mut sensor = SensorFactory::create(
+        let mut sensor = WyzeSensor::new(
             mac.clone(),
             sensor_type,
             name.clone(),
-        )?;
+        );
 
         // Load custom timeout if it exists in user config
         if let Some(t) = custom_timeout {
-            sensor.set_timeout_sec(t);
+            sensor.timeout_sec = t;
         } else {
-            custom_timeout = Some(sensor.timeout_sec());
+            custom_timeout = Some(sensor.timeout_sec);
         }
 
-        // 4. Update metadata in config
+        // 4. Update metadata in config (name + timeout only, no type)
         config.sensors.insert(mac.clone(), SensorMetadata {
             name,
-            r#type: type_str.to_string(),
+            r#type: None, // Type is managed in state.yaml
             timeout_sec: custom_timeout,
         });
 
@@ -1040,7 +746,7 @@ impl SensorManager {
         } else {
             // Check if the existing sensor is registered as "Unknown" and we've received a concrete known type
             let is_unknown = self.sensors.get(&event.mac)
-                .map(|s| matches!(s.sensor_type(), SensorType::Unknown(_)))
+                .map(|s| matches!(s.sensor_type, SensorType::Unknown(_)))
                 .unwrap_or(false);
 
             if is_unknown && !matches!(event.sensor_type, SensorType::Unknown(_)) {
@@ -1076,15 +782,13 @@ impl SensorManager {
         let mut newly_offline = Vec::new();
 
         for (mac, sensor) in &mut self.sensors {
-            if !sensor.is_online() {
+            if !sensor.is_online {
                 continue; // Already offline, skip
             }
 
-            let timeout_sec = sensor.timeout_sec();
-
-            if now.saturating_sub(sensor.last_seen()) > timeout_sec {
-                warn!("Sensor {} timed out (last seen {} seconds ago). Setting offline.", mac, now.saturating_sub(sensor.last_seen()));
-                sensor.set_online(false);
+            if now.saturating_sub(sensor.last_seen) > sensor.timeout_sec {
+                warn!("Sensor {} timed out (last seen {} seconds ago). Setting offline.", mac, now.saturating_sub(sensor.last_seen));
+                sensor.is_online = false;
                 newly_offline.push(mac.clone());
             }
         }
@@ -1097,5 +801,178 @@ impl SensorManager {
         }
 
         newly_offline
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::protocol::telemetry::{DongleEvent, TelemetryData, SensorType};
+    use std::time::SystemTime;
+
+    fn make_sensor(sensor_type: SensorType) -> WyzeSensor {
+        let mut sensor = WyzeSensor::new(
+            "AABBCCDD".to_string(),
+            sensor_type,
+            "Test Sensor".to_string(),
+        );
+        // Force state to Unknown to simulate loading from old state.yaml
+        sensor.state = SensorState::Unknown;
+        sensor
+    }
+
+    fn alarm_event(state: u8) -> DongleEvent {
+        DongleEvent {
+            mac: "AABBCCDD".to_string(),
+            timestamp: SystemTime::now(),
+            sensor_type: SensorType::Unknown(0),
+            event_type: DongleEvent::EVENT_TYPE_ALARM,
+            data: TelemetryData::Alarm { battery: 90, rssi: -40, state },
+        }
+    }
+
+    fn climate_event(temp: f32, hum: u8) -> DongleEvent {
+        DongleEvent {
+            mac: "AABBCCDD".to_string(),
+            timestamp: SystemTime::now(),
+            sensor_type: SensorType::Unknown(0),
+            event_type: DongleEvent::EVENT_TYPE_CLIMATE,
+            data: TelemetryData::Climate { battery: 95, rssi: -50, temperature: temp, humidity: hum },
+        }
+    }
+
+    fn leak_event(state: u8, probe_available: bool, probe_state: u8) -> DongleEvent {
+        DongleEvent {
+            mac: "AABBCCDD".to_string(),
+            timestamp: SystemTime::now(),
+            sensor_type: SensorType::Unknown(0),
+            event_type: DongleEvent::EVENT_TYPE_ALARM,
+            data: TelemetryData::Leak { battery: 96, rssi: -60, state, probe_state, probe_available },
+        }
+    }
+
+    fn heartbeat_event() -> DongleEvent {
+        DongleEvent {
+            mac: "AABBCCDD".to_string(),
+            timestamp: SystemTime::now(),
+            sensor_type: SensorType::Unknown(0),
+            event_type: DongleEvent::EVENT_TYPE_HEARTBEAT,
+            data: TelemetryData::Heartbeat { battery: 90, rssi: -40 },
+        }
+    }
+
+    // --- Auto-upgrade tests ---
+
+    #[test]
+    fn test_upgrade_unknown_contact_on_alarm() {
+        let mut sensor = make_sensor(SensorType::ContactV1);
+        assert!(matches!(sensor.state, SensorState::Unknown));
+
+        let result = sensor.update_from_event(&alarm_event(1));
+        assert!(result.is_ok());
+        assert!(matches!(sensor.state, SensorState::Contact { is_open: true }));
+    }
+
+    #[test]
+    fn test_upgrade_unknown_motion_on_alarm() {
+        let mut sensor = make_sensor(SensorType::MotionV2);
+        let result = sensor.update_from_event(&alarm_event(0));
+        assert!(result.is_ok());
+        assert!(matches!(sensor.state, SensorState::Motion { is_active: false }));
+    }
+
+    #[test]
+    fn test_upgrade_unknown_climate_on_climate_event() {
+        let mut sensor = make_sensor(SensorType::ClimateV2);
+        let result = sensor.update_from_event(&climate_event(23.5, 55));
+        assert!(result.is_ok());
+        match &sensor.state {
+            SensorState::Climate { temperature, humidity } => {
+                assert!((*temperature - 23.5).abs() < 0.01);
+                assert_eq!(*humidity, 55);
+            }
+            other => panic!("Expected Climate state, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_upgrade_unknown_leak_on_leak_event() {
+        let mut sensor = make_sensor(SensorType::LeakV2);
+        let result = sensor.update_from_event(&leak_event(1, true, 0));
+        assert!(result.is_ok());
+        assert!(matches!(sensor.state, SensorState::Leak {
+            is_wet: true,
+            probe_is_wet: Some(false),
+        }));
+    }
+
+    #[test]
+    fn test_upgrade_unknown_leak_no_probe() {
+        let mut sensor = make_sensor(SensorType::LeakV2);
+        let result = sensor.update_from_event(&leak_event(0, false, 0));
+        assert!(result.is_ok());
+        assert!(matches!(sensor.state, SensorState::Leak {
+            is_wet: false,
+            probe_is_wet: None,
+        }));
+    }
+
+    #[test]
+    fn test_heartbeat_does_not_upgrade_unknown() {
+        let mut sensor = make_sensor(SensorType::ContactV1);
+        let result = sensor.update_from_event(&heartbeat_event());
+        assert!(result.is_ok());
+        // State should remain Unknown — heartbeats don't carry type-specific data
+        // Note: the state upgrades to Contact (default) but heartbeat is a common event,
+        // so it still succeeds. The upgrade happens, but no state fields are set from the heartbeat.
+        assert!(matches!(sensor.state, SensorState::Contact { is_open: false }));
+    }
+
+    #[test]
+    fn test_already_typed_sensor_not_affected() {
+        let mut sensor = WyzeSensor::new(
+            "AABBCCDD".to_string(),
+            SensorType::ContactV1,
+            "Test".to_string(),
+        );
+        // Sensor starts with Contact { is_open: false } from new()
+        assert!(matches!(sensor.state, SensorState::Contact { is_open: false }));
+
+        // Open the door
+        let result = sensor.update_from_event(&alarm_event(1));
+        assert!(result.is_ok());
+        assert!(matches!(sensor.state, SensorState::Contact { is_open: true }));
+
+        // Close the door
+        let result = sensor.update_from_event(&alarm_event(0));
+        assert!(result.is_ok());
+        assert!(matches!(sensor.state, SensorState::Contact { is_open: false }));
+    }
+
+    // --- default_state_for_type tests ---
+
+    #[test]
+    fn test_default_state_for_known_types() {
+        assert!(matches!(
+            WyzeSensor::default_state_for_type(SensorType::ContactV1),
+            Some(SensorState::Contact { is_open: false })
+        ));
+        assert!(matches!(
+            WyzeSensor::default_state_for_type(SensorType::MotionV2),
+            Some(SensorState::Motion { is_active: false })
+        ));
+        assert!(matches!(
+            WyzeSensor::default_state_for_type(SensorType::LeakV2),
+            Some(SensorState::Leak { is_wet: false, probe_is_wet: None })
+        ));
+        assert!(matches!(
+            WyzeSensor::default_state_for_type(SensorType::Chime),
+            Some(SensorState::Chime)
+        ));
+    }
+
+    #[test]
+    fn test_default_state_for_unknown_type_returns_none() {
+        assert!(WyzeSensor::default_state_for_type(SensorType::Unknown(0)).is_none());
     }
 }

@@ -294,7 +294,7 @@ async fn run_daemon<T: wyzesense2mqtt_rs::transport::AsyncTransport + Clone + 's
             let s_type = {
                 let manager = sensor_manager_timeout.lock().unwrap();
                 manager.get_sensors().get(&mac)
-                    .map(|s| s.sensor_type())
+                    .map(|s| s.sensor_type)
                     .unwrap_or(SensorType::Unknown(0))
             };
             let offline_evt = DongleEvent {

@@ -49,11 +49,17 @@ Due to Linux kernel restrictions, only a single process can open the USB HID dev
 
 ---
 
-## 2. Object-Oriented & Polymorphic Crate Design
+## 2. Sensor Device Model: Composition with Enum-Based State
 
-Modeling diverse physical sensors (e.g., a Contact sensor has boolean state, while a Climate sensor reports temperature and humidity) requires a flexible polymorphic design. We implement this using Rust's **Trait-based Polymorphic System** rather than subclassing.
+Wyze Sense devices include diverse sensors (Contact, Motion, Leak, Climate) and actuators (Chime). Rather than trait-based polymorphism with separate structs per type, the system uses a **unified struct + tagged enum** design. This cleanly separates the uniform parts (identity, common telemetry) from the polymorphic part (type-specific state).
 
-### 2.1 Class Diagram
+### 2.1 Design Principles
+
+*   **Config is uniform, state is polymorphic.** All devices share the same identity fields (MAC, name, timeout) and common telemetry (rssi, online status). Only the type-specific state varies.
+*   **Closed type set → enum, not trait.** The set of device types is known at compile time, making an enum more idiomatic and performant than `Box<dyn Trait>` dispatch.
+*   **Sensors and actuators coexist.** The Chime is an actuator (receives commands, doesn't report telemetry state) but shares enough infrastructure (MAC, pairing lifecycle, NVRAM slot) to live in the same unified struct. `SensorState::Chime` simply has no data fields.
+
+### 2.2 Class Diagram
 
 ```mermaid
 classDiagram
@@ -62,114 +68,157 @@ classDiagram
         -transport: AsyncTransport
         +initialize_handshake()
         +set_scan(enable: bool)
+        +play_chime(mac: &str)
         +write_raw(bytes: &[u8])
         +read_packet() Packet
     }
 
     class SensorManager {
         <<struct>>
-        -sensors: HashMap<String, Box<dyn WyzeSensor>>
+        -sensors: HashMap~String, WyzeSensor~
         -config_path: String
         -state_path: String
         +load_sensors(mac_list: &[String])
-        +register_and_persist_sensor(mac: String, sensor_type: SensorType)
-        +delete_and_persist_sensor(mac: String)
-        +dispatch_telemetry(mac: String, event: &DongleEvent)
+        +register_and_persist_sensor(mac, sensor_type)
+        +delete_and_persist_sensor(mac)
+        +dispatch_event(event: &DongleEvent)
+        +check_timeouts() Vec~String~
+        +save_state_to_disk()
     }
 
     class WyzeSensor {
-        <<trait>>
-        +mac() &str
-        +sensor_type() SensorType
-        +battery_pct() u8
-        +rssi_dbm() i8
-        +sw_version() &str
-        +is_online() bool
-        +get_state_payload() serde_json::Value
-        +get_discovery_payloads(topic_root: &str) Vec
-        +update_from_event(event: &DongleEvent) Result
+        <<struct>>
+        +mac: String
+        +sensor_type: SensorType
+        +friendly_name: String
+        +timeout_sec: u64
+        +battery_pct: Option~u8~
+        +rssi_dbm: i8
+        +sw_version: String
+        +is_online: bool
+        +last_seen: u64
+        +state: SensorState
+        +new(mac, sensor_type, friendly_name) Self
+        +update_from_event(event) Result
+        +get_state_payload() Value
+        +get_discovery_payloads(topic_root) Vec
+        +is_actuator() bool
     }
 
-    class ContactSensor {
-        <<struct>>
-        -mac: String
-        -battery: u8
-        -rssi: i8
-        -sw_version: String
-        -is_open: bool
-    }
-
-    class MotionSensor {
-        <<struct>>
-        -mac: String
-        -battery: u8
-        -rssi: i8
-        -sw_version: String
-        -is_active: bool
-    }
-
-    class LeakSensor {
-        <<struct>>
-        -mac: String
-        -battery: u8
-        -rssi: i8
-        -sw_version: String
-        -is_wet: bool
-        -probe_connected: bool
-        -probe_available: bool
-    }
-
-    class ClimateSensor {
-        <<struct>>
-        -mac: String
-        -battery: u8
-        -rssi: i8
-        -sw_version: String
-        -temperature: f32
-        -humidity: u8
+    class SensorState {
+        <<enum>>
+        Contact~is_open: bool~
+        Motion~is_active: bool~
+        Leak~is_wet, probe_is_wet: Option~
+        Climate~temperature: f32, humidity: u8~
+        Chime
+        Unknown
     }
 
     SensorManager *-- WyzeSensor : manages many
-    WyzeSensor <|.. ContactSensor : implements
-    WyzeSensor <|.. MotionSensor : implements
-    WyzeSensor <|.. LeakSensor : implements
-    WyzeSensor <|.. ClimateSensor : implements
+    WyzeSensor *-- SensorState : contains
 ```
 
-### 2.2 The `WyzeSensor` Trait
-The `WyzeSensor` trait defines a common interface for metadata acquisition, telemetry parsing, state mapping, and Home Assistant Auto-Discovery registration:
+### 2.3 The `SensorState` Enum
+
+The `SensorState` enum is the **only part that varies** between device types. It derives `Serialize`/`Deserialize` for direct persistence to `state.yaml`, using a tagged representation:
 
 ```rust
-pub trait WyzeSensor: Send + Sync {
-    fn mac(&self) -> &str;
-    fn sensor_type(&self) -> SensorType;
-    fn battery_pct(&self) -> u8;
-    fn rssi_dbm(&self) -> i8;
-    fn sw_version(&self) -> &str;
-    fn is_online(&self) -> bool;
-    
-    // Dynamic JSON representation of states for MQTT publishing
-    fn get_state_payload(&self) -> serde_json::Value;
-
-    // Home Assistant discovery configurations mapping
-    fn get_discovery_payloads(&self, topic_root: &str) -> Vec<(String, serde_json::Value)>;
-
-    // Update internal sensor state variables from standard parsed events
-    fn update_from_event(&mut self, event: &DongleEvent) -> Result<(), &'static str>;
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind")]
+pub enum SensorState {
+    Contact { is_open: bool },
+    Motion { is_active: bool },
+    Leak {
+        is_wet: bool,
+        probe_is_wet: Option<bool>,  // None = no probe, Some(true) = wet, Some(false) = dry
+    },
+    Climate {
+        temperature: f32,
+        humidity: u8,
+    },
+    Chime,      // Actuator: no inbound telemetry, receives play_chime commands
+    Unknown,
 }
 ```
 
-### 2.3 How we Solve Diverse Attribute Representation
-*   **Compile-Time Safety**: Inside concrete structs (`ContactSensor`, `ClimateSensor`), properties are strongly-typed (e.g. `is_open: bool` or `temperature: f32`).
-*   **Standardized Serialization**: By exposing `get_state_payload() -> serde_json::Value`, the `SensorManager` and MQTT adapters fetch a dynamic JSON dictionary representation. They can serialize and publish updates without needing to understand individual sensor fields.
-*   **Discovery Decoupling**: Concrete structs generate their own MQTT Auto-Discovery templates. A `ClimateSensor` registers two entities (`temperature` and `humidity`), while a `LeakSensor` registers `moisture` and `probe` binary sensors. The coordinator publishes whatever vector the sensor generates.
+### 2.4 How We Solve Diverse Attribute Representation
+
+*   **Compile-Time Safety**: Type-specific state lives in the `SensorState` enum variants with strongly-typed fields (e.g. `is_open: bool`, `temperature: f32`). Invalid states are unrepresentable.
+*   **Standardized Serialization**: `get_state_payload() → serde_json::Value` produces a dynamic JSON dictionary by merging common fields with a `match` on `self.state`. The MQTT gateway publishes whatever the sensor produces without knowing its internals.
+*   **Discovery Decoupling**: `get_discovery_payloads()` matches on `self.state` to generate type-appropriate HASS entities. A `Climate` sensor registers `temperature` and `humidity` entities. A `Chime` registers a `button` entity. The coordinator publishes whatever vector the sensor generates.
+*   **Actuator Support**: The Chime device fits naturally as `SensorState::Chime` — `update_from_event()` is a no-op, `get_state_payload()` returns `"idle"`, and `get_discovery_payloads()` registers a HASS button entity. `battery_pct` is `None` since Chime is mains-powered.
 
 ---
 
-## 3. State Management & Recovery
-1.  **Bootstrap and NVRAM Sync**:
-    *   At startup, the `Engine` retrieves the physical paired MAC address list stored in the USB dongle's NVRAM.
-    *   `SensorManager` cross-references this list with local file configurations (`config/sensors.yaml`), populating the dynamic polymorphic cache using `SensorFactory::create`.
-2.  **Atomic State Saving**:
-    *   The system state (`config/state.yaml`) tracks live status metrics (e.g., last seen time, battery, rssi).
-    *   All disk serialization writes are executed **atomically** (writing to a `.tmp` file and swapping it via `rename` syscalls) to guarantee no corruption occurs during power outages.
+## 3. Configuration & State Management
+
+### 3.1 Config vs. State Separation
+
+The system maintains two YAML files with clearly separated responsibilities:
+
+| File | Purpose | Editable by | Authority |
+|---|---|---|---|
+| `config/sensors.yaml` | Human preferences | Human + code (append-only for new entries) | Name, timeout |
+| `config/state.yaml` | Runtime state cache | Code only | Sensor type, battery, rssi, type-specific state |
+
+**`sensors.yaml`** — User preferences (name overrides, custom timeouts):
+```yaml
+sensors:
+  77C68193:
+    name: "Kitchen Climate"
+    timeout_sec: 1800
+  77A8C793:
+    name: "Living Room Motion"
+```
+
+**`state.yaml`** — Code-managed runtime state with full type-specific persistence:
+```yaml
+sensors:
+  77C68193:
+    mac: 77C68193
+    sensor_type: climate
+    version: unknown
+    last_seen: 1780121193
+    battery: 95
+    signal: -43
+    state:
+      kind: Climate
+      temperature: 22.50
+      humidity: 45
+  77C99999:
+    mac: 77C99999
+    sensor_type: chime
+    version: unknown
+    last_seen: 1780121000
+    battery: null
+    signal: -50
+    state:
+      kind: Chime
+```
+
+### 3.2 Type Authority & Load Priority
+
+Sensor type is determined by the hardware protocol, not human choice. The load priority is:
+
+```
+sensor_type:    state.yaml (authoritative) > sensors.yaml (migration hint) > "unknown"
+friendly_name:  sensors.yaml > auto-generated default
+timeout_sec:    sensors.yaml > type-based default
+```
+
+### 3.3 Bootstrap and NVRAM Sync
+
+1.  At startup, the `Engine` retrieves the physical paired MAC address list stored in the USB dongle's NVRAM.
+2.  `SensorManager` cross-references this list with `state.yaml` (for type and cached state) and `sensors.yaml` (for name/timeout preferences), constructing `WyzeSensor` instances directly via `WyzeSensor::new()`.
+3.  Full type-specific state is restored from `state.yaml` — no synthetic event generation needed.
+
+### 3.4 Atomic State Saving
+
+All disk serialization writes are executed **atomically** (writing to a `.tmp` file and swapping it via `rename` syscalls) to guarantee no corruption occurs during power outages.
+
+### 3.5 Backward Compatibility
+
+*   Old `state.yaml` files without a `state` field deserialize with `SensorState::Unknown` as default (via `#[serde(default)]`).
+*   Old `sensors.yaml` files with a `type` field still parse correctly — the field is `Option<String>` and used only as a migration hint when `state.yaml` has no entry for that MAC.
+*   Old `state.yaml` files with `battery: 100` (integer) correctly deserialize into `Some(100)` via a `#[serde(default)]` fallback.

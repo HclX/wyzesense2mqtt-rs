@@ -5,7 +5,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
 
 use wyzesense2mqtt_rs::config::sensors::SensorsConfig;
-use wyzesense2mqtt_rs::config::state::{SystemState, SensorState};
+use wyzesense2mqtt_rs::config::state::{SystemState, PersistedSensorState};
 use wyzesense2mqtt_rs::config::monitor::AvailabilityMonitor;
 use wyzesense2mqtt_rs::protocol::sensor::SensorManager;
 
@@ -38,12 +38,12 @@ sensors:
     
     let front_door = config.sensors.get("777A1234").unwrap();
     assert_eq!(front_door.name, "Front Door");
-    assert_eq!(front_door.r#type, "contact");
+    assert_eq!(front_door.r#type, Some("contact".to_string()));
     assert_eq!(front_door.timeout_sec, Some(30));
 
     let motion = config.sensors.get("777B5678").unwrap();
     assert_eq!(motion.name, "Living Room Motion");
-    assert_eq!(motion.r#type, "motion");
+    assert_eq!(motion.r#type, Some("motion".to_string()));
     assert_eq!(motion.timeout_sec, None);
 
     fs::remove_file(temp_path).unwrap();
@@ -64,13 +64,14 @@ fn test_system_state_persistence() {
     let mut state = SystemState::default();
     state.sensors.insert(
         "777A1234".to_string(),
-        SensorState {
+        PersistedSensorState {
             mac: "777A1234".to_string(),
             sensor_type: "contact".to_string(),
             version: "1".to_string(),
             last_seen: 1620000000,
-            battery: 90,
+            battery: Some(90),
             signal: -60,
+            state: wyzesense2mqtt_rs::protocol::sensor::SensorState::Unknown,
         },
     );
 
@@ -162,7 +163,7 @@ sensors:
     {
         let mut manager = sensor_manager.lock().unwrap();
         if let Some(sensor) = manager.get_sensors_mut().get_mut("777A1234") {
-            sensor.set_last_seen(now - 5);
+            sensor.last_seen = now - 5;
         }
     }
 

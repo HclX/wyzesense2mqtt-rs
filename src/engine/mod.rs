@@ -20,7 +20,7 @@ pub struct Engine<T: AsyncTransport> {
     dongle_version: Option<String>,
     exit_tx: Option<oneshot::Sender<()>>,
     // Refactored local memory cache to use persistent SensorState
-    pub sensors: Arc<Mutex<HashMap<String, crate::config::state::SensorState>>>,
+    pub sensors: Arc<Mutex<HashMap<String, crate::config::state::PersistedSensorState>>>,
     auto_verify_tx: mpsc::Sender<(String, SensorType)>,
     auto_verify: Arc<AtomicBool>,
     sensor_list_tx: Arc<Mutex<Option<mpsc::Sender<String>>>>,
@@ -112,7 +112,7 @@ impl<T: AsyncTransport + Clone + 'static> Engine<T> {
     }
 
     /// Exposes the thread-safe local memory list of rich persistent sensor states.
-    pub fn get_rich_sensors(&self) -> Vec<crate::config::state::SensorState> {
+    pub fn get_rich_sensors(&self) -> Vec<crate::config::state::PersistedSensorState> {
         let guard = self.sensors.lock().unwrap();
         guard.values().cloned().collect()
     }
@@ -120,13 +120,14 @@ impl<T: AsyncTransport + Clone + 'static> Engine<T> {
     /// Manually registers a sensor locally in the RAM cache (used for boot warming).
     pub fn register_sensor_locally(&self, mac: &str, s_type: &str, version: &str) {
         let mut guard = self.sensors.lock().unwrap();
-        guard.insert(mac.to_string(), crate::config::state::SensorState {
+        guard.insert(mac.to_string(), crate::config::state::PersistedSensorState {
             mac: mac.to_string(),
             sensor_type: s_type.to_string(),
             version: version.to_string(),
             last_seen: SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs(),
-            battery: 100,
+            battery: Some(100),
             signal: -60,
+            state: crate::protocol::sensor::SensorState::Unknown,
         });
     }
 
@@ -239,7 +240,7 @@ impl<T: AsyncTransport + Clone + 'static> Engine<T> {
         pending: &PendingRequests,
         event_tx: &mpsc::Sender<DongleEvent>,
         transport: &mut T,
-        _sensors: &Arc<Mutex<HashMap<String, crate::config::state::SensorState>>>,
+        _sensors: &Arc<Mutex<HashMap<String, crate::config::state::PersistedSensorState>>>,
         auto_verify_tx: &mpsc::Sender<(String, SensorType)>,
         sensor_list_tx: &Arc<Mutex<Option<mpsc::Sender<String>>>>,
         _state_path: &Option<String>,
@@ -630,13 +631,14 @@ impl<T: AsyncTransport + Clone + 'static> Engine<T> {
     /// Registers a sensor with a specific timeout. Useful for pre-registering or testing.
     pub fn register_sensor(&self, mac: &str, sensor_type: SensorType, _timeout: std::time::Duration) {
         if let Ok(mut s_map) = self.sensors.lock() {
-            s_map.insert(mac.to_string(), crate::config::state::SensorState {
+            s_map.insert(mac.to_string(), crate::config::state::PersistedSensorState {
                 mac: mac.to_string(),
                 sensor_type: sensor_type.as_str().to_string(),
                 version: "1".to_string(),
                 last_seen: SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs(),
-                battery: 100,
+                battery: Some(100),
                 signal: -60,
+                state: crate::protocol::sensor::SensorState::Unknown,
             });
         }
     }

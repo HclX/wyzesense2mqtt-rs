@@ -9,7 +9,7 @@
 
 use wyzesense2mqtt_rs::protocol::packet::{Packet, commands, PacketPayload};
 use wyzesense2mqtt_rs::protocol::telemetry::{DongleEvent, SensorType};
-use wyzesense2mqtt_rs::protocol::sensor::{SensorFactory, SensorManager};
+use wyzesense2mqtt_rs::protocol::sensor::{WyzeSensor, SensorManager};
 use serde::Deserialize;
 use std::path::Path;
 
@@ -189,15 +189,15 @@ fn test_real_capture_climate_event_21_46c() {
     assert_eq!(event.mac, "77C68193");
     assert_eq!(event.sensor_type, SensorType::ClimateV2);
     
-    let mut sensor = SensorFactory::create(
+    let mut sensor = WyzeSensor::new(
         event.mac.clone(),
         event.sensor_type,
         "Climate Sensor".to_string(),
-    ).unwrap();
+    );
     sensor.update_from_event(&event).unwrap();
 
-    assert_eq!(sensor.battery_pct(), 95);
-    assert_eq!(sensor.rssi_dbm(), -38);
+    assert_eq!(sensor.battery_pct, Some(95));
+    assert_eq!(sensor.rssi_dbm, -38);
     let state = sensor.get_state_payload();
     assert_eq!(state["temperature"], "21.46");
     assert_eq!(state["humidity"], 48);
@@ -227,15 +227,15 @@ fn test_real_capture_climate_event_25_60c() {
     assert_eq!(event.mac, "77C68193");
     assert_eq!(event.sensor_type, SensorType::ClimateV2);
     
-    let mut sensor = SensorFactory::create(
+    let mut sensor = WyzeSensor::new(
         event.mac.clone(),
         event.sensor_type,
         "Climate Sensor".to_string(),
-    ).unwrap();
+    );
     sensor.update_from_event(&event).unwrap();
 
-    assert_eq!(sensor.battery_pct(), 92);
-    assert_eq!(sensor.rssi_dbm(), -47);
+    assert_eq!(sensor.battery_pct, Some(92));
+    assert_eq!(sensor.rssi_dbm, -47);
     let state = sensor.get_state_payload();
     assert_eq!(state["temperature"], "25.60");
     assert_eq!(state["humidity"], 45);
@@ -265,15 +265,15 @@ fn test_real_capture_climate_event_24_06c() {
     assert_eq!(event.mac, "77C68193");
     assert_eq!(event.sensor_type, SensorType::ClimateV2);
     
-    let mut sensor = SensorFactory::create(
+    let mut sensor = WyzeSensor::new(
         event.mac.clone(),
         event.sensor_type,
         "Climate Sensor".to_string(),
-    ).unwrap();
+    );
     sensor.update_from_event(&event).unwrap();
 
-    assert_eq!(sensor.battery_pct(), 95);
-    assert_eq!(sensor.rssi_dbm(), -45);
+    assert_eq!(sensor.battery_pct, Some(95));
+    assert_eq!(sensor.rssi_dbm, -45);
     let state = sensor.get_state_payload();
     assert_eq!(state["temperature"], "24.06");
     assert_eq!(state["humidity"], 48);
@@ -303,15 +303,15 @@ fn test_real_capture_climate_event_25_09c() {
     assert_eq!(event.mac, "77C68193");
     assert_eq!(event.sensor_type, SensorType::ClimateV2);
     
-    let mut sensor = SensorFactory::create(
+    let mut sensor = WyzeSensor::new(
         event.mac.clone(),
         event.sensor_type,
         "Climate Sensor".to_string(),
-    ).unwrap();
+    );
     sensor.update_from_event(&event).unwrap();
 
-    assert_eq!(sensor.battery_pct(), 95);
-    assert_eq!(sensor.rssi_dbm(), -45);
+    assert_eq!(sensor.battery_pct, Some(95));
+    assert_eq!(sensor.rssi_dbm, -45);
     let state = sensor.get_state_payload();
     assert_eq!(state["temperature"], "25.09");
     assert_eq!(state["humidity"], 46);
@@ -345,15 +345,15 @@ fn test_real_capture_full_climate_packet_with_checksum() {
     assert_eq!(event.mac, "77C68193");
     assert_eq!(event.sensor_type, SensorType::ClimateV2);
     
-    let mut sensor = SensorFactory::create(
+    let mut sensor = WyzeSensor::new(
         event.mac.clone(),
         event.sensor_type,
         "Climate Sensor".to_string(),
-    ).unwrap();
+    );
     sensor.update_from_event(&event).unwrap();
 
-    assert_eq!(sensor.battery_pct(), 92);
-    assert_eq!(sensor.rssi_dbm(), -47);
+    assert_eq!(sensor.battery_pct, Some(92));
+    assert_eq!(sensor.rssi_dbm, -47);
     let state = sensor.get_state_payload();
     assert_eq!(state["temperature"], "25.60");
     assert_eq!(state["humidity"], 45);
@@ -381,15 +381,15 @@ fn test_real_capture_full_climate_packet_21_46() {
     assert_eq!(event.mac, "77C68193");
     assert_eq!(event.sensor_type, SensorType::ClimateV2);
     
-    let mut sensor = SensorFactory::create(
+    let mut sensor = WyzeSensor::new(
         event.mac.clone(),
         event.sensor_type,
         "Climate Sensor".to_string(),
-    ).unwrap();
+    );
     sensor.update_from_event(&event).unwrap();
 
-    assert_eq!(sensor.battery_pct(), 95);
-    assert_eq!(sensor.rssi_dbm(), -38);
+    assert_eq!(sensor.battery_pct, Some(95));
+    assert_eq!(sensor.rssi_dbm, -38);
     let state = sensor.get_state_payload();
     assert_eq!(state["temperature"], "21.46");
     assert_eq!(state["humidity"], 48);

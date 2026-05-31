@@ -34,7 +34,7 @@ pub struct DongleStateResponse {
 
 #[derive(Serialize, Deserialize)]
 pub struct SensorsListResponse {
-    pub sensors: Vec<crate::config::state::SensorState>,
+    pub sensors: Vec<crate::config::state::PersistedSensorState>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -136,22 +136,24 @@ async fn list_sensors<T: AsyncTransport + Clone + 'static>(
             let manager = state.sensor_manager.lock().unwrap();
             for mac in mac_list {
                 if let Some(sensor) = manager.get_sensors().get(&mac) {
-                    sensors.push(crate::config::state::SensorState {
-                        mac: mac.clone(),
-                        sensor_type: sensor.sensor_type().as_str().to_string(),
-                        version: sensor.sw_version().to_string(),
-                        last_seen: sensor.last_seen(),
-                        battery: sensor.battery_pct(),
-                        signal: sensor.rssi_dbm(),
+                    sensors.push(crate::config::state::PersistedSensorState {
+                        mac: sensor.mac.clone(),
+                        sensor_type: sensor.sensor_type.as_str().to_string(),
+                        version: sensor.sw_version.clone(),
+                        last_seen: sensor.last_seen,
+                        battery: sensor.battery_pct,
+                        signal: sensor.rssi_dbm,
+                        state: sensor.state.clone(),
                     });
                 } else {
-                    sensors.push(crate::config::state::SensorState {
+                    sensors.push(crate::config::state::PersistedSensorState {
                         mac: mac.clone(),
                         sensor_type: "unknown".to_string(),
                         version: "unknown".to_string(),
                         last_seen: 0,
-                        battery: 100,
+                        battery: Some(100),
                         signal: -60,
+                        state: crate::protocol::sensor::SensorState::Unknown,
                     });
                 }
             }
@@ -166,14 +168,15 @@ async fn list_cached_sensors<T: AsyncTransport + Clone + 'static>(
     State(state): State<Arc<WebState<T>>>,
 ) -> impl IntoResponse {
     let manager = state.sensor_manager.lock().unwrap();
-    let mut sensors: Vec<crate::config::state::SensorState> = manager.get_sensors().values().map(|sensor| {
-        crate::config::state::SensorState {
-            mac: sensor.mac().to_string(),
-            sensor_type: sensor.sensor_type().as_str().to_string(),
-            version: sensor.sw_version().to_string(),
-            last_seen: sensor.last_seen(),
-            battery: sensor.battery_pct(),
-            signal: sensor.rssi_dbm(),
+    let mut sensors: Vec<crate::config::state::PersistedSensorState> = manager.get_sensors().values().map(|sensor| {
+        crate::config::state::PersistedSensorState {
+            mac: sensor.mac.clone(),
+            sensor_type: sensor.sensor_type.as_str().to_string(),
+            version: sensor.sw_version.clone(),
+            last_seen: sensor.last_seen,
+            battery: sensor.battery_pct,
+            signal: sensor.rssi_dbm,
+            state: sensor.state.clone(),
         }
     }).collect();
     sensors.sort_by_key(|s| s.mac.clone());
@@ -473,13 +476,18 @@ const HTML_CONTENT: &str = r##"
                 }
                 data.sensors.forEach(sensor => {
                     // Formulate Battery Badge
-                    let batteryColor = "text-emerald-400 bg-emerald-950/30 border-emerald-900/30";
-                    if (sensor.battery < 40) {
-                        batteryColor = "text-rose-400 bg-rose-950/30 border-rose-900/30";
-                    } else if (sensor.battery < 80) {
-                        batteryColor = "text-amber-400 bg-amber-950/30 border-amber-900/30";
+                    let batteryBadge;
+                    if (sensor.battery === null || sensor.battery === undefined) {
+                        batteryBadge = `<span class="px-2.5 py-1 rounded-full text-xs font-semibold border text-slate-400 bg-slate-950/30 border-slate-900/30">N/A</span>`;
+                    } else {
+                        let batteryColor = "text-emerald-400 bg-emerald-950/30 border-emerald-900/30";
+                        if (sensor.battery < 40) {
+                            batteryColor = "text-rose-400 bg-rose-950/30 border-rose-900/30";
+                        } else if (sensor.battery < 80) {
+                            batteryColor = "text-amber-400 bg-amber-950/30 border-amber-900/30";
+                        }
+                        batteryBadge = `<span class="px-2.5 py-1 rounded-full text-xs font-semibold border ${batteryColor}">${sensor.battery}%</span>`;
                     }
-                    const batteryBadge = `<span class="px-2.5 py-1 rounded-full text-xs font-semibold border ${batteryColor}">${sensor.battery}%</span>`;
 
                     // Formulate Signal Badge (RSSI)
                     let signalColor = "text-slate-400";

@@ -121,7 +121,7 @@ impl MqttGateway {
                     let mut manager = sensor_manager_worker.lock().unwrap();
                     if manager.dispatch_event(&event) {
                         if let Some(sensor) = manager.get_sensors().get(&event.mac) {
-                            is_online = sensor.is_online();
+                            is_online = sensor.is_online;
                         }
                     }
                 }
@@ -188,12 +188,12 @@ impl MqttGateway {
 mod tests {
     use super::*;
     use crate::protocol::telemetry::{SensorType, TelemetryData};
-    use crate::protocol::sensor::{ContactSensor, ClimateSensor, LeakSensor, WyzeSensor};
+    use crate::protocol::sensor::WyzeSensor;
     use std::time::SystemTime;
 
     #[test]
     fn test_contact_discovery() {
-        let sensor = ContactSensor::new(
+        let sensor = WyzeSensor::new(
             "ABC12345".to_string(),
             SensorType::ContactV1,
             "Wyze Sense ABC12345".to_string(),
@@ -212,7 +212,7 @@ mod tests {
 
     #[test]
     fn test_climate_discovery() {
-        let sensor = ClimateSensor::new(
+        let sensor = WyzeSensor::new(
             "ABC12345".to_string(),
             SensorType::ClimateV2,
             "Wyze Sense ABC12345".to_string()
@@ -237,26 +237,30 @@ mod tests {
 
     #[test]
     fn test_leak_discovery() {
-        let sensor = LeakSensor::new(
+        let sensor = WyzeSensor::new(
             "ABC12345".to_string(),
             SensorType::LeakV2,
             "Wyze Sense ABC12345".to_string(),
         );
         let payloads = sensor.get_discovery_payloads("wyzesense");
-        assert_eq!(payloads.len(), 4);
+        assert_eq!(payloads.len(), 5); // battery + signal + main moisture + probe available + probe moisture
 
         let leak_topic = "homeassistant/binary_sensor/wyzesense_ABC12345/state/config";
         let leak_payload = payloads.iter().find(|(t, _)| t == leak_topic).unwrap().1.clone();
         assert_eq!(leak_payload["device_class"], "moisture");
 
-        let probe_topic = "homeassistant/binary_sensor/wyzesense_ABC12345_probe/config";
-        let probe_payload = payloads.iter().find(|(t, _)| t == probe_topic).unwrap().1.clone();
-        assert_eq!(probe_payload["device_class"], "connectivity");
+        let probe_avail_topic = "homeassistant/binary_sensor/wyzesense_ABC12345/probe_available/config";
+        let probe_avail_payload = payloads.iter().find(|(t, _)| t == probe_avail_topic).unwrap().1.clone();
+        assert_eq!(probe_avail_payload["device_class"], "connectivity");
+
+        let probe_state_topic = "homeassistant/binary_sensor/wyzesense_ABC12345/probe_state/config";
+        let probe_state_payload = payloads.iter().find(|(t, _)| t == probe_state_topic).unwrap().1.clone();
+        assert_eq!(probe_state_payload["device_class"], "moisture");
     }
 
     #[test]
     fn test_contact_state_payload() {
-        let mut sensor = ContactSensor::new(
+        let mut sensor = WyzeSensor::new(
             "ABC12345".to_string(),
             SensorType::ContactV1,
             "Wyze Sense ABC12345".to_string(),
@@ -281,7 +285,7 @@ mod tests {
 
     #[test]
     fn test_leak_state_payload() {
-        let mut sensor = LeakSensor::new(
+        let mut sensor = WyzeSensor::new(
             "ABC12345".to_string(),
             SensorType::LeakV2,
             "Wyze Sense ABC12345".to_string(),
