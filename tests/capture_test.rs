@@ -662,8 +662,7 @@ fn test_all_captures_in_directory_parseable() {
             } else {
                 for (mac, sensor) in sensors {
                     let payload = sensor.get_state_payload();
-                    println!("  Sensor MAC: {}", mac);
-                    println!("    State: {}", serde_json::to_string_pretty(&payload).unwrap());
+                    println!("  Sensor MAC: {} | State: {}", mac, serde_json::to_string(&payload).unwrap());
                 }
             }
             println!("=======================================================================\n");

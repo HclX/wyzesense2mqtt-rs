@@ -266,14 +266,11 @@ mod tests {
             timestamp: SystemTime::now(),
             sensor_type: SensorType::ContactV1,
             event_type: 0xA1,
-            data: TelemetryData::Raw(vec![
-                0x01, 
-                0x5A, // battery: 90
-                0x00, 0x00, 
-                0x01, // state: 1 (open)
-                0x00, 0x05, 
-                0x3C, // RSSI: 60 -> -60
-            ]),
+            data: TelemetryData::Alarm {
+                battery: 90,
+                rssi: -60,
+                state: 1,
+            },
         };
         sensor.update_from_event(&event).unwrap();
         let payload = sensor.get_state_payload();
@@ -294,16 +291,13 @@ mod tests {
             timestamp: SystemTime::now(),
             sensor_type: SensorType::LeakV2,
             event_type: 0xEA,
-            data: TelemetryData::Raw(vec![
-                0x01, 0x02,
-                0x55, // battery: 85
-                0x00, 0x00,
-                0x01, // state: 1 (wet)
-                0x01, // probe wet
-                0x01, // probe available
-                0x00, 0x14,
-                0x37, // RSSI: 55 -> -55
-            ]),
+            data: TelemetryData::Leak {
+                battery: 85,
+                rssi: -55,
+                state: 1,
+                probe_state: 1,
+                probe_available: true,
+            },
         };
         sensor.update_from_event(&event).unwrap();
         let payload = sensor.get_state_payload();

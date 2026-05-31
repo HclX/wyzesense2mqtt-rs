@@ -110,7 +110,7 @@ pub enum TelemetryData {
         probe_state: u8,
         probe_available: bool,
     },
-    Raw(Vec<u8>),
+    UnknownEvent(Vec<u8>),
     Scanned,
     Offline,
 }
@@ -204,7 +204,7 @@ impl DongleEvent {
                     humidity,
                 }
             }
-            _ => TelemetryData::Raw(remaining.to_vec()),
+            _ => TelemetryData::UnknownEvent(remaining.to_vec()),
         };
 
         Ok(DongleEvent {
@@ -250,7 +250,7 @@ impl DongleEvent {
                     probe_available,
                 }
             }
-            _ => TelemetryData::Raw(remaining.to_vec()),
+            _ => TelemetryData::UnknownEvent(remaining.to_vec()),
         };
 
         Ok(DongleEvent {
