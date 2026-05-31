@@ -139,7 +139,6 @@ async fn list_sensors<T: AsyncTransport + Clone + 'static>(
                     sensors.push(crate::config::state::PersistedSensorState {
                         mac: sensor.mac.clone(),
                         sensor_type: sensor.sensor_type.as_str().to_string(),
-                        version: sensor.sw_version.clone(),
                         last_seen: sensor.last_seen,
                         battery: sensor.battery_pct,
                         signal: sensor.rssi_dbm,
@@ -149,7 +148,6 @@ async fn list_sensors<T: AsyncTransport + Clone + 'static>(
                     sensors.push(crate::config::state::PersistedSensorState {
                         mac: mac.clone(),
                         sensor_type: "unknown".to_string(),
-                        version: "unknown".to_string(),
                         last_seen: 0,
                         battery: Some(100),
                         signal: -60,
@@ -172,7 +170,6 @@ async fn list_cached_sensors<T: AsyncTransport + Clone + 'static>(
         crate::config::state::PersistedSensorState {
             mac: sensor.mac.clone(),
             sensor_type: sensor.sensor_type.as_str().to_string(),
-            version: sensor.sw_version.clone(),
             last_seen: sensor.last_seen,
             battery: sensor.battery_pct,
             signal: sensor.rssi_dbm,

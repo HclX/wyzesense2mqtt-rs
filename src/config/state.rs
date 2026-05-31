@@ -10,7 +10,6 @@ use crate::protocol::sensor::SensorState;
 pub struct PersistedSensorState {
     pub mac: String,
     pub sensor_type: String, // e.g. "motion", "contact", "chime"
-    pub version: String,     // e.g. "1"
     pub last_seen: u64,      // Epoch seconds
     #[serde(default = "default_battery")]
     pub battery: Option<u8>, // 0..100, None for mains-powered devices (e.g., Chime)

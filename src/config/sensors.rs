@@ -12,6 +12,8 @@ pub struct SensorMetadata {
     #[serde(default)]
     pub r#type: Option<String>,
     pub timeout_sec: Option<u64>,
+    #[serde(default)]
+    pub sw_version: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]

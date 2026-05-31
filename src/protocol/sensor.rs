@@ -310,6 +310,7 @@ impl WyzeSensor {
                     }
                     None => {
                         payload["probe_available"] = json!(false);
+                        payload["probe_state"] = json!("dry");
                     }
                 }
             }
@@ -464,19 +465,21 @@ impl WyzeSensor {
                         "entity_category": "diagnostic",
                     })
                 ));
-                // Optional external probe: moisture state (only meaningful when probe is connected)
+                // Optional external probe: moisture state (unavailable when probe is disconnected)
                 payloads.push((
                     format!("homeassistant/binary_sensor/{}/probe_state/config", device_id),
                     json!({
                         "name": "Probe Moisture",
                         "state_topic": state_topic.clone(),
-                        "value_template": "{{ value_json.probe_state if value_json.probe_available else 'dry' }}",
+                        "value_template": "{{ value_json.probe_state }}",
+                        "availability_template": "{{ 'online' if value_json.probe_available else 'offline' }}",
                         "device_class": "moisture",
                         "payload_on": "wet",
                         "payload_off": "dry",
+                        "payload_available": "online",
+                        "payload_not_available": "offline",
                         "unique_id": format!("{}_probe_state", device_id),
                         "device": device,
-                        "availability": availability,
                         "availability_mode": "all",
                         "json_attributes_topic": state_topic,
                     })
@@ -600,8 +603,16 @@ impl SensorManager {
                             name: friendly_name.clone(),
                             r#type: None, // Type is managed in state.yaml, not config
                             timeout_sec: Some(sensor.timeout_sec),
+                            sw_version: None,
                         });
                         config_changed = true;
+                    }
+
+                    // Load sw_version from config metadata if available
+                    if let Some(m) = sensors_config.sensors.get(mac) {
+                        if let Some(ref v) = m.sw_version {
+                            sensor.sw_version = v.clone();
+                        }
                     }
 
                     // Restore full state from system state cache if available
@@ -611,7 +622,6 @@ impl SensorManager {
                         }
                         sensor.rssi_dbm = cached.signal;
                         sensor.last_seen = cached.last_seen;
-                        sensor.sw_version = cached.version.clone();
                         sensor.state = cached.state.clone(); // Full type-specific state restored!
                     }
                     self.sensors.insert(mac.clone(), sensor);
@@ -640,7 +650,6 @@ impl SensorManager {
             system_state.sensors.insert(mac.clone(), PersistedSensorState {
                 mac: mac.clone(),
                 sensor_type: sensor.sensor_type.as_str().to_string(),
-                version: sensor.sw_version.clone(),
                 last_seen: sensor.last_seen,
                 battery: sensor.battery_pct,
                 signal: sensor.rssi_dbm,
@@ -703,6 +712,7 @@ impl SensorManager {
             name,
             r#type: None, // Type is managed in state.yaml
             timeout_sec: custom_timeout,
+            sw_version: None,
         });
 
         self.sensors.insert(mac.clone(), sensor);

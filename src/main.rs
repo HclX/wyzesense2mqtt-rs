@@ -125,16 +125,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         };
 
         let log_dir = log_path.parent().unwrap_or(std::path::Path::new("."));
-        let log_prefix = log_path.file_name()
+        let log_prefix = log_path.file_stem()
             .and_then(|f| f.to_str())
-            .unwrap_or("wyzesense2mqtt-rs.log");
+            .unwrap_or("wyzesense2mqtt-rs");
+        let log_suffix = log_path.extension()
+            .and_then(|f| f.to_str())
+            .unwrap_or("log");
 
         // Create log directory if needed
         if let Err(e) = std::fs::create_dir_all(log_dir) {
             eprintln!("WARNING: Failed to create log directory {:?}: {}", log_dir, e);
         }
 
-        let file_appender = tracing_appender::rolling::daily(log_dir, log_prefix);
+        let file_appender = tracing_appender::rolling::RollingFileAppender::builder()
+            .rotation(tracing_appender::rolling::Rotation::DAILY)
+            .filename_prefix(log_prefix)
+            .filename_suffix(log_suffix)
+            .build(log_dir)
+            .expect("Failed to create log file appender");
         let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
 
         let subscriber = fmt::Subscriber::builder()
@@ -144,11 +152,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             .finish();
         let _ = tracing::subscriber::set_global_default(subscriber);
 
-        info!("File logging enabled: dir={:?}, prefix={}, rotation=daily, max_files={}",
-            log_dir, log_prefix, config.logging.max_log_files);
+        info!("File logging enabled: dir={:?}, prefix={}, suffix={}, rotation=daily, max_files={}",
+            log_dir, log_prefix, log_suffix, config.logging.max_log_files);
 
         // Clean up old rotated log files
-        cleanup_old_logs(log_dir, log_prefix, config.logging.max_log_files);
+        cleanup_old_logs(log_dir, log_prefix, log_suffix, config.logging.max_log_files);
 
         Box::new(guard)
     } else {
@@ -625,9 +633,9 @@ async fn run_hid_command<T: AsyncTransport + Clone + 'static>(
     Ok(())
 }
 /// Remove old rotated log files beyond the configured max.
-/// tracing-appender names files as `{prefix}.YYYY-MM-DD`, so sorting by name
-/// gives chronological order.
-fn cleanup_old_logs(log_dir: &std::path::Path, prefix: &str, max_files: usize) {
+/// tracing-appender names files as `{prefix}.YYYY-MM-DD.{suffix}`, so sorting
+/// by name gives chronological order.
+fn cleanup_old_logs(log_dir: &std::path::Path, prefix: &str, suffix: &str, max_files: usize) {
     let entries = match std::fs::read_dir(log_dir) {
         Ok(e) => e,
         Err(_) => return,
@@ -639,7 +647,7 @@ fn cleanup_old_logs(log_dir: &std::path::Path, prefix: &str, max_files: usize) {
         .filter(|p| {
             p.file_name()
                 .and_then(|f| f.to_str())
-                .map(|f| f.starts_with(prefix) && f != prefix)
+                .map(|f| f.starts_with(prefix) && f.ends_with(suffix) && f != format!("{}.{}", prefix, suffix).as_str())
                 .unwrap_or(false)
         })
         .collect();

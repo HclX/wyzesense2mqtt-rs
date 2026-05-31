@@ -67,7 +67,6 @@ fn test_system_state_persistence() {
         PersistedSensorState {
             mac: "777A1234".to_string(),
             sensor_type: "contact".to_string(),
-            version: "1".to_string(),
             last_seen: 1620000000,
             battery: Some(90),
             signal: -60,
@@ -122,7 +121,6 @@ sensors:
   "777A1234":
     mac: "777A1234"
     sensor_type: "switch"
-    version: "1"
     last_seen: {}
     battery: 100
     signal: -55

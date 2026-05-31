@@ -118,12 +118,11 @@ impl<T: AsyncTransport + Clone + 'static> Engine<T> {
     }
 
     /// Manually registers a sensor locally in the RAM cache (used for boot warming).
-    pub fn register_sensor_locally(&self, mac: &str, s_type: &str, version: &str) {
+    pub fn register_sensor_locally(&self, mac: &str, s_type: &str) {
         let mut guard = self.sensors.lock().unwrap();
         guard.insert(mac.to_string(), crate::config::state::PersistedSensorState {
             mac: mac.to_string(),
             sensor_type: s_type.to_string(),
-            version: version.to_string(),
             last_seen: SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs(),
             battery: Some(100),
             signal: -60,
@@ -634,7 +633,6 @@ impl<T: AsyncTransport + Clone + 'static> Engine<T> {
             s_map.insert(mac.to_string(), crate::config::state::PersistedSensorState {
                 mac: mac.to_string(),
                 sensor_type: sensor_type.as_str().to_string(),
-                version: "1".to_string(),
                 last_seen: SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs(),
                 battery: Some(100),
                 signal: -60,

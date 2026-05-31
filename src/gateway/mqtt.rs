@@ -256,6 +256,11 @@ mod tests {
         let probe_state_topic = "homeassistant/binary_sensor/wyzesense_ABC12345/probe_state/config";
         let probe_state_payload = payloads.iter().find(|(t, _)| t == probe_state_topic).unwrap().1.clone();
         assert_eq!(probe_state_payload["device_class"], "moisture");
+        // Probe moisture entity uses availability_template to go unavailable when probe disconnected
+        assert_eq!(probe_state_payload["availability_template"],
+            "{{ 'online' if value_json.probe_available else 'offline' }}");
+        assert_eq!(probe_state_payload["payload_available"], "online");
+        assert_eq!(probe_state_payload["payload_not_available"], "offline");
     }
 
     #[test]
@@ -308,5 +313,33 @@ mod tests {
         assert_eq!(payload["state"], "wet");
         assert_eq!(payload["probe_state"], "wet");
         assert_eq!(payload["probe_available"], true);
+    }
+
+    #[test]
+    fn test_leak_state_payload_no_probe() {
+        let mut sensor = WyzeSensor::new(
+            "ABC12345".to_string(),
+            SensorType::LeakV2,
+            "Wyze Sense ABC12345".to_string(),
+        );
+        let event = DongleEvent {
+            mac: "ABC12345".to_string(),
+            timestamp: SystemTime::now(),
+            sensor_type: SensorType::LeakV2,
+            event_type: 0xEA,
+            data: TelemetryData::Leak {
+                battery: 85,
+                rssi: -55,
+                state: 0,
+                probe_state: 0,
+                probe_available: false,
+            },
+        };
+        sensor.update_from_event(&event).unwrap();
+        let payload = sensor.get_state_payload();
+        assert_eq!(payload["state"], "dry");
+        assert_eq!(payload["probe_available"], false);
+        // probe_state should always be present (defaults to "dry" when probe disconnected)
+        assert_eq!(payload["probe_state"], "dry");
     }
 }
