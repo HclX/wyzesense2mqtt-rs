@@ -5,6 +5,7 @@
 
 # Capture files (recorded by --capture flag)
 *.jsonl
+!tests/captures/*.jsonl
 
 # Runtime config/state
 /config/
