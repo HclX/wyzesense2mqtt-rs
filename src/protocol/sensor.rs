@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::time::SystemTime;
+use crate::protocol::battery::{BatteryChemistry, raw_to_capacity};
 use crate::protocol::telemetry::{DongleEvent, SensorType, TelemetryData};
 
 // ---------------------------------------------------------
@@ -198,11 +199,11 @@ impl WyzeSensor {
         if let (Some(b), Some(r)) = (battery, rssi) {
             // Only update battery for battery-powered devices
             if self.battery_pct.is_some() {
-                let mut pct = b;
-                if self.sensor_type == SensorType::ContactV2 {
-                    pct = b.saturating_mul(2);
-                }
-                self.battery_pct = Some(pct.min(100));
+                let pct = match BatteryChemistry::for_sensor(self.sensor_type) {
+                    Some(chemistry) => raw_to_capacity(b, chemistry),
+                    None => b.min(100), // Unknown chemistry: pass through raw
+                };
+                self.battery_pct = Some(pct);
             }
             self.rssi_dbm = r;
         }

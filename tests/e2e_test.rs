@@ -128,7 +128,8 @@ async fn test_sensor_lifecycle_e2e() {
     );
     sensor.update_from_event(&alarm_event).unwrap();
 
-    assert_eq!(sensor.battery_pct, Some(90));
+    // raw 0x5A=90 on 3V coin cell curve → 20% capacity (not the misleading 90%)
+    assert_eq!(sensor.battery_pct, Some(20));
     assert_eq!(sensor.rssi_dbm, -60);
     assert_eq!(sensor.get_state_payload()["state"], "open");
 

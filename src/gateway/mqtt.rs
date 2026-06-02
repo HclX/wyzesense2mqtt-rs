@@ -284,7 +284,8 @@ mod tests {
         sensor.update_from_event(&event).unwrap();
         let payload = sensor.get_state_payload();
         assert_eq!(payload["state"], "open");
-        assert_eq!(payload["battery"], 90);
+        // raw battery=90 on a 3V coin cell curve → ~20% capacity (not the misleading 90%)
+        assert_eq!(payload["battery"], 20);
         assert_eq!(payload["signal_strength"], -60);
     }
 
