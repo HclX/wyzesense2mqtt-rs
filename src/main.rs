@@ -323,7 +323,7 @@ async fn run_daemon<T: wyzesense2mqtt_rs::transport::AsyncTransport + Clone + 's
     if config.mqtt.enabled {
         if let Some(ref host) = config.mqtt.host {
             info!("MQTT Gateway is enabled. Connecting to broker at {}:{}...", host, config.mqtt.port);
-            let mut mqtt_options = rumqttc::MqttOptions::new(
+            let mut mqtt_options = rumqttc::v5::MqttOptions::new(
                 "wyzesensers_daemon",
                 host,
                 config.mqtt.port
@@ -332,14 +332,28 @@ async fn run_daemon<T: wyzesense2mqtt_rs::transport::AsyncTransport + Clone + 's
                 mqtt_options.set_credentials(user, pass);
             }
 
-            // Set Last Will and Testament for bridge status
+            // Set Last Will and Testament for bridge status with a 10 minute Will Delay
             let status_topic = format!("{}/status", config.mqtt.self_topic_root);
-            mqtt_options.set_last_will(rumqttc::LastWill::new(
+            
+            let last_will_props = rumqttc::v5::mqttbytes::v5::LastWillProperties {
+                delay_interval: Some(600), // 10 minutes delay!
+                payload_format_indicator: None,
+                message_expiry_interval: None,
+                content_type: None,
+                response_topic: None,
+                correlation_data: None,
+                user_properties: Vec::new(),
+            };
+            
+            let last_will = rumqttc::v5::mqttbytes::v5::LastWill::new(
                 status_topic,
                 "offline",
-                rumqttc::QoS::AtLeastOnce,
+                rumqttc::v5::mqttbytes::QoS::AtLeastOnce,
                 true, // retain
-            ));
+                Some(last_will_props)
+            );
+            
+            mqtt_options.set_last_will(last_will);
 
             let gateway = MqttGateway::new(
                 mqtt_options,

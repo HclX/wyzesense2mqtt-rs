@@ -1,4 +1,5 @@
-use rumqttc::{AsyncClient, MqttOptions, QoS, Event, Packet as MqttPacket};
+use rumqttc::v5::{AsyncClient, MqttOptions, Event};
+use rumqttc::v5::mqttbytes::{QoS, v5::Packet as MqttPacket};
 use tokio::sync::mpsc;
 use crate::protocol::telemetry::{DongleEvent, TelemetryData};
 use crate::protocol::sensor::SensorManager;
@@ -15,7 +16,7 @@ pub enum GatewayCommand {
 
 pub struct MqttGateway {
     client: AsyncClient,
-    event_loop: rumqttc::EventLoop,
+    event_loop: rumqttc::v5::EventLoop,
     event_rx: mpsc::Receiver<DongleEvent>,
     cmd_tx: mpsc::Sender<GatewayCommand>,
     topic_root: String,
@@ -31,7 +32,10 @@ impl MqttGateway {
         topic_root: String,
         sensor_manager: Arc<Mutex<SensorManager>>,
     ) -> Self {
-        mqtt_options.set_clean_session(true);
+        mqtt_options.set_clean_start(false);
+        let mut connect_props = rumqttc::v5::mqttbytes::v5::ConnectProperties::default();
+        connect_props.session_expiry_interval = Some(900); // Keep session for 15m (longer than 10m Will Delay)
+        mqtt_options.set_connect_properties(connect_props);
 
         let (client, event_loop) = AsyncClient::new(mqtt_options, 10);
 
@@ -79,7 +83,7 @@ impl MqttGateway {
                 match event_loop.poll().await {
                     Ok(notification) => {
                         if let Event::Incoming(MqttPacket::Publish(publish)) = notification {
-                            let topic = publish.topic;
+                            let topic = String::from_utf8_lossy(&publish.topic).to_string();
                             let payload = String::from_utf8_lossy(&publish.payload).trim().to_string();
                             debug!("Received MQTT message on {}: {}", topic, payload);
 
