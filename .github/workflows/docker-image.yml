@@ -37,12 +37,17 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
-            type=ref,event=branch
+            # Tag pushes to main as 'dev'
+            type=raw,value=dev,enable=${{ github.ref == 'refs/heads/main' }}
+            # Tag PRs with pr-number
             type=ref,event=pr
+            # Official Version tags (v1.2.3 -> 1.2.3, 1.2)
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
+            # Provide git SHA tag for all builds for exact tracing
             type=sha,format=short
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            # Only mark actual git tags (releases) as 'latest'
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
 
       - name: Build and Push Docker Image
         uses: docker/build-push-action@v5
