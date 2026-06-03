@@ -9,24 +9,34 @@
 # =============================================================================
 
 # --- Stage 1: Build ---
-FROM rust:alpine AS builder
+FROM --platform=$BUILDPLATFORM rust:alpine AS builder
+
+# Install cross-compilation tools
+RUN apk add --no-cache clang lld
+COPY --from=tonistiigi/xx / /
+
+# Define the target architecture (e.g., linux/arm64)
+ARG TARGETPLATFORM
+
+# Install target-specific C libraries
+RUN xx-apk add --no-cache musl-dev gcc
 
 WORKDIR /build
 
-# Install build dependencies
-RUN apk add --no-cache pkgconfig musl-dev
-
-# Cache dependency build by copying manifests first
+# Cache dependency build
 COPY Cargo.toml Cargo.lock ./
 RUN mkdir src && \
-    echo 'fn main() { println!("placeholder"); }' > src/main.rs && \
+    echo 'fn main() {}' > src/main.rs && \
     echo 'pub fn lib() {}' > src/lib.rs && \
-    cargo build --release 2>/dev/null || true && \
+    xx-cargo build --release 2>/dev/null || true && \
     rm -rf src
 
 # Copy actual source and build
 COPY src/ src/
-RUN touch src/main.rs src/lib.rs && cargo build --release --bin wyzesense2mqtt-rs
+RUN touch src/main.rs src/lib.rs && \
+    xx-cargo build --release --bin wyzesense2mqtt-rs && \
+    cp target/$(xx-cargo --print-target-triple)/release/wyzesense2mqtt-rs /build/wyzesense2mqtt-rs
+
 
 # --- Stage 2: Runtime ---
 FROM alpine:3.19
