@@ -9,7 +9,7 @@
 # =============================================================================
 
 # --- Stage 1: Build ---
-FROM rust:1.91-alpine AS builder
+FROM rust:alpine AS builder
 
 WORKDIR /build
 
