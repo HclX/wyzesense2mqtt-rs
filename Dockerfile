@@ -9,12 +9,12 @@
 # =============================================================================
 
 # --- Stage 1: Build ---
-FROM rust:1.91-slim-bookworm AS builder
+FROM rust:1.91-alpine AS builder
 
 WORKDIR /build
 
 # Install build dependencies
-RUN apt-get update && apt-get install -y pkg-config && rm -rf /var/lib/apt/lists/*
+RUN apk add --no-cache pkgconfig musl-dev
 
 # Cache dependency build by copying manifests first
 COPY Cargo.toml Cargo.lock ./
@@ -26,19 +26,20 @@ RUN mkdir src && \
 
 # Copy actual source and build
 COPY src/ src/
-RUN cargo build --release --bin wyzesense2mqtt-rs
+RUN touch src/main.rs src/lib.rs && cargo build --release --bin wyzesense2mqtt-rs
 
 # --- Stage 2: Runtime ---
-FROM debian:bookworm-slim
+FROM alpine:3.19
 
 # Install runtime dependencies:
-#   curl  - for health check
-#   gosu  - for clean privilege drop (PUID/PGID support)
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends ca-certificates curl gosu && \
-    rm -rf /var/lib/apt/lists/* && \
+#   curl    - for health check
+#   su-exec - for clean privilege drop (PUID/PGID support)
+#   shadow  - for user/group modification tools (usermod, etc)
+#   bash    - for the entrypoint script
+RUN apk add --no-cache ca-certificates curl su-exec shadow bash && \
     # Create default user (will be remapped by entrypoint via PUID/PGID)
     groupadd -g 1000 wyzesense && \
+    groupadd plugdev && \
     useradd -u 1000 -g wyzesense -G plugdev -d /app -s /sbin/nologin wyzesense && \
     mkdir -p /app/config /app/logs /app/state && \
     chown -R wyzesense:wyzesense /app

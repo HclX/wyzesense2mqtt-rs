@@ -12,7 +12,7 @@ PGID=${PGID:-1000}
 # Only remap if running as root (normal Docker case)
 if [ "$(id -u)" = "0" ]; then
     # Create/modify group
-    if getent group wyzesense > /dev/null 2>&1; then
+    if grep -q "^wyzesense:" /etc/group; then
         groupmod -o -g "$PGID" wyzesense
     else
         groupadd -o -g "$PGID" wyzesense
@@ -31,7 +31,7 @@ if [ "$(id -u)" = "0" ]; then
     echo "Starting wyzesense2mqtt-rs as UID=$PUID, GID=$PGID"
 
     # Drop privileges and exec the binary
-    exec gosu wyzesense /app/wyzesense2mqtt-rs "$@"
+    exec su-exec wyzesense /app/wyzesense2mqtt-rs "$@"
 else
     # Already running as non-root (e.g. Kubernetes with securityContext)
     exec /app/wyzesense2mqtt-rs "$@"
