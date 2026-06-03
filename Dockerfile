@@ -57,7 +57,7 @@ RUN apk add --no-cache ca-certificates curl su-exec shadow bash && \
 WORKDIR /app
 
 # Copy binary from builder
-COPY --from=builder /build/target/release/wyzesense2mqtt-rs /app/wyzesense2mqtt-rs
+COPY --from=builder /build/wyzesense2mqtt-rs /app/wyzesense2mqtt-rs
 
 # Copy entrypoint and config template
 COPY release/entrypoint.sh /app/entrypoint.sh
