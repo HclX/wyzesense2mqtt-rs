@@ -239,7 +239,7 @@ async fn run_daemon<T: wyzesense2mqtt_rs::transport::AsyncTransport + Clone + 's
     let (gateway_cmd_tx, mut gateway_cmd_rx) = mpsc::channel::<GatewayCommand>(32);
 
     // Instantiate the core engine
-    let state_path = "config/state.yaml";
+    let state_path = "state/state.yaml";
     let config_path = "config/sensors.yaml";
     let mut engine = Engine::new(transport, event_tx.clone(), Some(state_path.to_string()));
 
