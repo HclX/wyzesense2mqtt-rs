@@ -150,6 +150,10 @@ impl MqttGateway {
                                 }
                             }
                             published.insert(event.mac.clone());
+                            
+                            // Sleep briefly to give Home Assistant time to process the discovery 
+                            // payload and instantiate the entity before we blast the initial state.
+                            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
                         }
                     }
                 }
