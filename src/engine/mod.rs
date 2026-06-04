@@ -210,8 +210,8 @@ impl<T: AsyncTransport + Clone + 'static> Engine<T> {
                                 }
                             }
                             Err(e) => {
-                                error!("Error reading from transport: {}", e);
-                                break;
+                                error!("Error reading from transport: {}. Exiting process...", e);
+                                std::process::exit(1);
                             }
                         }
                     }
