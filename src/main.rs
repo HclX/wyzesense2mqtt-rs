@@ -267,6 +267,18 @@ async fn run_daemon<T: wyzesense2mqtt_rs::transport::AsyncTransport + Clone + 's
                         error!("Failed to load/bootstrap sensors: {}", e);
                     } else {
                         info!("Sensors memory cache successfully warmed up!");
+                        
+                        // Inject dummy events for each cached sensor to trigger initial MQTT discovery & state sync
+                        for sensor in manager.get_sensors().values() {
+                            let dummy = DongleEvent {
+                                mac: sensor.mac.clone(),
+                                timestamp: std::time::SystemTime::now(),
+                                sensor_type: sensor.sensor_type,
+                                event_type: 0xFF,
+                                data: TelemetryData::UnknownEvent(Vec::new()),
+                            };
+                            let _ = event_tx.try_send(dummy);
+                        }
                     }
                 }
                 Err(e) => {
