@@ -168,6 +168,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         Box::new(())  // No guard needed for stdout
     };
 
+    info!("===============================================================");
+    info!("        wyzesense2mqtt-rs v{} Starting up... ", env!("CARGO_PKG_VERSION"));
+    info!("===============================================================");
     info!("Configuration loaded successfully. Log Level set to: {}", config.logging.level);
 
     // 5. Run Auto-Discovery for USB Dongle path if set to "auto"
