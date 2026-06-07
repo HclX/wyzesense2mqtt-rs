@@ -521,7 +521,7 @@ impl<T: AsyncTransport + Clone + 'static> Engine<T> {
         // Write updates to disk atomically
         if let Some(ref path) = self.state_path {
             let s_map = self.sensors.lock().unwrap().clone();
-            let system_state = crate::config::state::SystemState { sensors: s_map };
+            let system_state = crate::config::state::SystemState { sensors: s_map.into_iter().collect() };
             let _ = system_state.save_to_yaml_atomic(path);
         }
         

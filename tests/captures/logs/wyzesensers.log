@@ -1,0 +1,377 @@
+warning: crate `WyzeSenseRS` should have a snake case name
+  |
+  = help: convert the identifier to snake case: `wyze_sense_rs`
+  = note: `#[warn(non_snake_case)]` (part of `#[warn(nonstandard_style)]`) on by default
+
+warning: `WyzeSenseRS` (lib) generated 1 warning
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running `target/debug/WyzeSenseRS --log-level trace`
+[2m2026-05-29T03:12:57.649411Z[0m [32m INFO[0m [2mWyzeSenseRS[0m[2m:[0m Configuration loaded successfully. Log Level set to: trace
+[2m2026-05-29T03:12:57.649457Z[0m [32m INFO[0m [2mWyzeSenseRS[0m[2m:[0m USB Dongle path set to 'auto'. Scanning Linux sysfs class...
+[2m2026-05-29T03:12:57.651358Z[0m [32m INFO[0m [2mWyzeSenseRS[0m[2m:[0m Auto-Discovery: Found Wyze Sense Bridge on /dev/hidraw0
+[2m2026-05-29T03:12:57.651393Z[0m [32m INFO[0m [2mWyzeSenseRS[0m[2m:[0m Initializing WyzeSenseRS Daemon mode...
+[2m2026-05-29T03:12:57.651729Z[0m [32m INFO[0m [2mWyzeSenseRS[0m[2m:[0m   USB Device: /dev/hidraw0
+[2m2026-05-29T03:12:57.652131Z[0m [32m INFO[0m [2mWyzeSenseRS[0m[2m:[0m   Web Console: http://localhost:8080
+[2m2026-05-29T03:12:57.726807Z[0m [32m INFO[0m [2mWyzeSenseRS::engine[0m[2m:[0m Starting dongle initialization handshake...
+[2m2026-05-29T03:12:57.728115Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m ===> Sending command packet: Packet: Cmd=4327, Payload=[<None>]
+[2m2026-05-29T03:12:57.730470Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (7 bytes): [AA,55,43,03,27,01,6C]
+[2m2026-05-29T03:12:57.732684Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE READ raw=63 bytes:[08,55,AA,43,04,28,01,01,6F,55,AA,53,1F,19,00,00,01,9E,71,AC,45,80,E8,37,37,43,36,38,31,39,33,07,1B,5F,00,03,1B,5E,27,11,52,2A,08,60,55,AA,53,03,32,01,87,55,AA,53,1F,19,00,00,01,9E,71,AE,A3] proto=8 bytes:[55,AA,43,04,28,01,01,6F]
+[2m2026-05-29T03:12:57.733163Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=4328, Payload=[01]
+[2m2026-05-29T03:12:57.735715Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m Handshake 1/5: Inquiry verified
+[2m2026-05-29T03:12:57.837746Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m ===> Sending command packet: Packet: Cmd=4302, Payload=[30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30]
+[2m2026-05-29T03:12:57.837862Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (23 bytes): [AA,55,43,13,02,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,04,57]
+[2m2026-05-29T03:12:57.843314Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE READ raw=63 bytes:[17,55,AA,43,13,03,55,FF,EB,67,D8,C5,F8,70,B9,43,B0,21,CC,02,3E,EC,0A,C8,37,43,36,38,31,39,33,07,1B,5F,00,03,1B,5E,27,11,52,2A,08,60,55,AA,53,03,32,01,87,55,AA,53,1F,19,00,00,01,9E,71,AE,A3] proto=23 bytes:[55,AA,43,13,03,55,FF,EB,67,D8,C5,F8,70,B9,43,B0,21,CC,02,3E,EC,0A,C8]
+[2m2026-05-29T03:12:57.843442Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=4303, Payload=[55,ff,eb,67,d8,c5,f8,70,b9,43,b0,21,cc,02,3e,ec]
+[2m2026-05-29T03:12:57.843579Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m Handshake 2/5: ENR Token retrieved: Packet: Cmd=4303, Payload=[55,ff,eb,67,d8,c5,f8,70,b9,43,b0,21,cc,02,3e,ec]
+[2m2026-05-29T03:12:57.944637Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m ===> Sending command packet: Packet: Cmd=4304, Payload=[<None>]
+[2m2026-05-29T03:12:57.944956Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (7 bytes): [AA,55,43,03,04,01,49]
+[2m2026-05-29T03:12:57.946829Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE READ raw=63 bytes:[0F,55,AA,43,0B,05,37,37,41,38,35,41,33,36,03,18,B0,21,CC,02,3E,EC,0A,C8,37,43,36,38,31,39,33,07,1B,5F,00,03,1B,5E,27,11,52,2A,08,60,55,AA,53,03,32,01,87,55,AA,53,1F,19,00,00,01,9E,71,AE,A3] proto=15 bytes:[55,AA,43,0B,05,37,37,41,38,35,41,33,36,03,18]
+[2m2026-05-29T03:12:57.946895Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=4305, Payload=[37,37,41,38,35,41,33,36]
+[2m2026-05-29T03:12:57.947048Z[0m [32m INFO[0m [2mWyzeSenseRS::engine[0m[2m:[0m Dongle MAC address: 77A85A36
+[2m2026-05-29T03:12:57.947086Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m Handshake 3/5: MAC Address retrieved
+[2m2026-05-29T03:12:58.048298Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m ===> Sending command packet: Packet: Cmd=5316, Payload=[<None>]
+[2m2026-05-29T03:12:58.048577Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (7 bytes): [AA,55,53,03,16,01,6B]
+[2m2026-05-29T03:12:58.063425Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE READ raw=63 bytes:[28,55,AA,53,16,FF,02,67,55,AA,53,1D,17,30,2E,30,2E,30,2E,34,37,20,56,31,2E,38,20,47,61,74,65,77,61,79,20,47,57,33,55,08,50,2A,08,60,55,AA,53,03,32,01,87,55,AA,53,1F,19,00,00,01,9E,71,AE,A3] proto=40 bytes:[55,AA,53,16,FF,02,67,55,AA,53,1D,17,30,2E,30,2E,30,2E,34,37,20,56,31,2E,38,20,47,61,74,65,77,61,79,20,47,57,33,55,08,50]
+[2m2026-05-29T03:12:58.063526Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=53FF, Payload=ACK(5316)
+[2m2026-05-29T03:12:58.063552Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=5317, Payload=[30,2e,30,2e,30,2e,34,37,20,56,31,2e,38,20,47,61,74,65,77,61,79,20,47,57,33,55]
+[2m2026-05-29T03:12:58.063612Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m Sending ACK packet for async command 5317
+[2m2026-05-29T03:12:58.063635Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (7 bytes): [AA,55,53,17,FF,02,68]
+[2m2026-05-29T03:12:58.063753Z[0m [32m INFO[0m [2mWyzeSenseRS::engine[0m[2m:[0m Dongle version: 0.0.0.47 V1.8 Gateway GW3U
+[2m2026-05-29T03:12:58.063825Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m Handshake 4/5: Version string retrieved
+[2m2026-05-29T03:12:58.165811Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m ===> Sending command packet: Packet: Cmd=5314, Payload=[ff]
+[2m2026-05-29T03:12:58.165940Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (8 bytes): [AA,55,53,04,14,FF,02,69]
+[2m2026-05-29T03:12:58.178262Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE READ raw=63 bytes:[0E,55,AA,53,14,FF,02,65,55,AA,53,03,15,01,6A,30,2E,30,2E,34,37,20,56,31,2E,38,20,47,61,74,65,77,61,79,20,47,57,33,55,08,50,2A,08,60,55,AA,53,03,32,01,87,55,AA,53,1F,19,00,00,01,9E,71,AE,A3] proto=14 bytes:[55,AA,53,14,FF,02,65,55,AA,53,03,15,01,6A]
+[2m2026-05-29T03:12:58.178334Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=53FF, Payload=ACK(5314)
+[2m2026-05-29T03:12:58.178354Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=5315, Payload=[<None>]
+[2m2026-05-29T03:12:58.178384Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m Sending ACK packet for async command 5315
+[2m2026-05-29T03:12:58.178399Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (7 bytes): [AA,55,53,15,FF,02,66]
+[2m2026-05-29T03:12:58.178506Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m Handshake 5/5: Authentication completed
+[2m2026-05-29T03:12:58.178542Z[0m [32m INFO[0m [2mWyzeSenseRS::engine[0m[2m:[0m Dongle handshake completed successfully! Dongle is unlocked.
+[2m2026-05-29T03:12:58.178555Z[0m [32m INFO[0m [2mWyzeSenseRS[0m[2m:[0m Dongle successfully unlocked and authenticated!
+[2m2026-05-29T03:12:58.182369Z[0m [32m INFO[0m [2mWyzeSenseRS[0m[2m:[0m Warming up paired sensors memory cache from NVRAM...
+[2m2026-05-29T03:12:58.182397Z[0m [32m INFO[0m [2mWyzeSenseRS::engine[0m[2m:[0m Retrieving sensor list...
+[2m2026-05-29T03:12:58.182405Z[0m [32m INFO[0m [2mWyzeSenseRS::engine[0m[2m:[0m Retrieving sensor count...
+[2m2026-05-29T03:12:58.182412Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m ===> Sending command packet: Packet: Cmd=532E, Payload=[<None>]
+[2m2026-05-29T03:12:58.182434Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (7 bytes): [AA,55,53,03,2E,01,83]
+[2m2026-05-29T03:12:58.192751Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE READ raw=63 bytes:[16,55,AA,53,03,32,01,87,55,AA,53,2E,FF,02,7F,55,AA,53,04,2F,02,01,87,31,2E,38,20,47,61,74,65,77,61,79,20,47,57,33,55,08,50,2A,08,60,55,AA,53,03,32,01,87,55,AA,53,1F,19,00,00,01,9E,71,AE,A3] proto=22 bytes:[55,AA,53,03,32,01,87,55,AA,53,2E,FF,02,7F,55,AA,53,04,2F,02,01,87]
+[2m2026-05-29T03:12:58.192813Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=5332, Payload=[<None>]
+[2m2026-05-29T03:12:58.192857Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m Sending ACK packet for async command 5332
+[2m2026-05-29T03:12:58.192870Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (7 bytes): [AA,55,53,32,FF,02,83]
+[2m2026-05-29T03:12:58.194254Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m Received time sync request (0x5332). Replying with timestamp.
+[2m2026-05-29T03:12:58.194822Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (15 bytes): [AA,55,53,0B,33,00,00,01,9E,71,B8,83,52,04,2D]
+[2m2026-05-29T03:12:58.195724Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=53FF, Payload=ACK(532E)
+[2m2026-05-29T03:12:58.195757Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=532F, Payload=[02]
+[2m2026-05-29T03:12:58.195789Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m Sending ACK packet for async command 532F
+[2m2026-05-29T03:12:58.195801Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (7 bytes): [AA,55,53,2F,FF,02,80]
+[2m2026-05-29T03:12:58.196444Z[0m [32m INFO[0m [2mWyzeSenseRS::engine[0m[2m:[0m 2 sensors reported by dongle
+[2m2026-05-29T03:12:58.196484Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m ===> Sending command packet: Packet: Cmd=5330, Payload=[02]
+[2m2026-05-29T03:12:58.196503Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (8 bytes): [AA,55,53,04,30,02,01,88]
+[2m2026-05-29T03:12:58.205925Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE READ raw=63 bytes:[0E,55,AA,53,33,FF,02,84,55,AA,53,30,FF,02,81,55,AA,53,04,2F,02,01,87,31,2E,38,20,47,61,74,65,77,61,79,20,47,57,33,55,08,50,2A,08,60,55,AA,53,03,32,01,87,55,AA,53,1F,19,00,00,01,9E,71,AE,A3] proto=14 bytes:[55,AA,53,33,FF,02,84,55,AA,53,30,FF,02,81]
+[2m2026-05-29T03:12:58.206027Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=53FF, Payload=ACK(5333)
+[2m2026-05-29T03:12:58.206044Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=53FF, Payload=ACK(5330)
+[2m2026-05-29T03:12:58.219984Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE READ raw=63 bytes:[0F,55,AA,53,0B,31,37,37,41,38,43,37,39,33,03,5B,AA,53,04,2F,02,01,87,31,2E,38,20,47,61,74,65,77,61,79,20,47,57,33,55,08,50,2A,08,60,55,AA,53,03,32,01,87,55,AA,53,1F,19,00,00,01,9E,71,AE,A3] proto=15 bytes:[55,AA,53,0B,31,37,37,41,38,43,37,39,33,03,5B]
+[2m2026-05-29T03:12:58.220049Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=5331, Payload=[37,37,41,38,43,37,39,33]
+[2m2026-05-29T03:12:58.220069Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m Sending ACK packet for async command 5331
+[2m2026-05-29T03:12:58.220078Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (7 bytes): [AA,55,53,31,FF,02,82]
+[2m2026-05-29T03:12:58.221038Z[0m [32m INFO[0m [2mWyzeSenseRS::engine[0m[2m:[0m Sensor 1/2: MAC=77A8C793
+[2m2026-05-29T03:12:58.328423Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE READ raw=63 bytes:[0F,55,AA,53,0B,31,37,37,43,36,38,31,39,33,03,4A,AA,53,04,2F,02,01,87,31,2E,38,20,47,61,74,65,77,61,79,20,47,57,33,55,08,50,2A,08,60,55,AA,53,03,32,01,87,55,AA,53,1F,19,00,00,01,9E,71,AE,A3] proto=15 bytes:[55,AA,53,0B,31,37,37,43,36,38,31,39,33,03,4A]
+[2m2026-05-29T03:12:58.328498Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=5331, Payload=[37,37,43,36,38,31,39,33]
+[2m2026-05-29T03:12:58.328525Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m Sending ACK packet for async command 5331
+[2m2026-05-29T03:12:58.328534Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (7 bytes): [AA,55,53,31,FF,02,82]
+[2m2026-05-29T03:12:58.334823Z[0m [32m INFO[0m [2mWyzeSenseRS::engine[0m[2m:[0m Sensor 2/2: MAC=77C68193
+[2m2026-05-29T03:12:58.334867Z[0m [32m INFO[0m [2mWyzeSenseRS::engine[0m[2m:[0m Successfully retrieved 2 paired sensors
+[2m2026-05-29T03:12:58.334901Z[0m [32m INFO[0m [2mWyzeSenseRS[0m[2m:[0m Sensors memory cache successfully warmed up!
+[2m2026-05-29T03:12:58.340432Z[0m [32m INFO[0m [2mWyzeSenseRS[0m[2m:[0m MQTT Gateway is disabled. Serving Web Control Panel only.
+[2m2026-05-29T03:12:58.348793Z[0m [32m INFO[0m [2mWyzeSenseRS::web::server[0m[2m:[0m Web interface successfully started. Listening on http://0.0.0.0:8080
+[2m2026-05-29T03:12:58.433156Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE READ raw=63 bytes:[07,55,AA,53,03,32,01,87,43,36,38,31,39,33,03,4A,AA,53,04,2F,02,01,87,31,2E,38,20,47,61,74,65,77,61,79,20,47,57,33,55,08,50,2A,08,60,55,AA,53,03,32,01,87,55,AA,53,1F,19,00,00,01,9E,71,AE,A3] proto=7 bytes:[55,AA,53,03,32,01,87]
+[2m2026-05-29T03:12:58.433260Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=5332, Payload=[<None>]
+[2m2026-05-29T03:12:58.433287Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m Sending ACK packet for async command 5332
+[2m2026-05-29T03:12:58.433304Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (7 bytes): [AA,55,53,32,FF,02,83]
+[2m2026-05-29T03:12:58.435843Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m Received time sync request (0x5332). Replying with timestamp.
+[2m2026-05-29T03:12:58.435919Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (15 bytes): [AA,55,53,0B,33,00,00,01,9E,71,B8,84,43,04,1F]
+[2m2026-05-29T03:12:58.449089Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE READ raw=63 bytes:[07,55,AA,53,33,FF,02,84,43,36,38,31,39,33,03,4A,AA,53,04,2F,02,01,87,31,2E,38,20,47,61,74,65,77,61,79,20,47,57,33,55,08,50,2A,08,60,55,AA,53,03,32,01,87,55,AA,53,1F,19,00,00,01,9E,71,AE,A3] proto=7 bytes:[55,AA,53,33,FF,02,84]
+[2m2026-05-29T03:12:58.449178Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=53FF, Payload=ACK(5333)
+[2m2026-05-29T03:12:59.495246Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE READ raw=63 bytes:[1D,55,AA,53,19,37,A2,37,37,41,38,43,37,39,33,02,00,00,01,9E,71,B2,C0,C7,A2,00,00,02,08,00,65,77,61,79,20,47,57,33,55,08,50,2A,08,60,55,AA,53,03,32,01,87,55,AA,53,1F,19,00,00,01,9E,71,AE,A3] proto=29 bytes:[55,AA,53,19,37,A2,37,37,41,38,43,37,39,33,02,00,00,01,9E,71,B2,C0,C7,A2,00,00,02,08,00]
+[2m2026-05-29T03:12:59.495344Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=5337, Payload=[a2,37,37,41,38,43,37,39,33,02,00,00,01,9e,71,b2,c0,c7,a2,00,00,02]
+[2m2026-05-29T03:12:59.495378Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m Sending ACK packet for async command 5337
+[2m2026-05-29T03:12:59.495391Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (7 bytes): [AA,55,53,37,FF,02,88]
+[2m2026-05-29T03:13:00.557485Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE READ raw=63 bytes:[1D,55,AA,53,19,37,A2,37,37,41,38,43,37,39,33,02,00,00,01,9E,71,B5,CF,B3,A2,01,00,03,08,00,65,77,61,79,20,47,57,33,55,08,50,2A,08,60,55,AA,53,03,32,01,87,55,AA,53,1F,19,00,00,01,9E,71,AE,A3] proto=29 bytes:[55,AA,53,19,37,A2,37,37,41,38,43,37,39,33,02,00,00,01,9E,71,B5,CF,B3,A2,01,00,03,08,00]
+[2m2026-05-29T03:13:00.557608Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=5337, Payload=[a2,37,37,41,38,43,37,39,33,02,00,00,01,9e,71,b5,cf,b3,a2,01,00,03]
+[2m2026-05-29T03:13:00.557653Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m Sending ACK packet for async command 5337
+[2m2026-05-29T03:13:00.557671Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (7 bytes): [AA,55,53,37,FF,02,88]
+[2m2026-05-29T03:13:41.835807Z[0m [32m INFO[0m [2mWyzeSenseRS::engine[0m[2m:[0m Retrieving sensor list...
+[2m2026-05-29T03:13:41.835883Z[0m [32m INFO[0m [2mWyzeSenseRS::engine[0m[2m:[0m Retrieving sensor count...
+[2m2026-05-29T03:13:41.835902Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m ===> Sending command packet: Packet: Cmd=532E, Payload=[<None>]
+[2m2026-05-29T03:13:41.835937Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (7 bytes): [AA,55,53,03,2E,01,83]
+[2m2026-05-29T03:13:41.849265Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE READ raw=63 bytes:[0F,55,AA,53,2E,FF,02,7F,55,AA,53,04,2F,02,01,87,00,00,01,9E,71,B5,CF,B3,A2,01,00,03,08,00,65,77,61,79,20,47,57,33,55,08,50,2A,08,60,55,AA,53,03,32,01,87,55,AA,53,1F,19,00,00,01,9E,71,AE,A3] proto=15 bytes:[55,AA,53,2E,FF,02,7F,55,AA,53,04,2F,02,01,87]
+[2m2026-05-29T03:13:41.849332Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=53FF, Payload=ACK(532E)
+[2m2026-05-29T03:13:41.849350Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=532F, Payload=[02]
+[2m2026-05-29T03:13:41.849369Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m Sending ACK packet for async command 532F
+[2m2026-05-29T03:13:41.849378Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (7 bytes): [AA,55,53,2F,FF,02,80]
+[2m2026-05-29T03:13:41.849449Z[0m [32m INFO[0m [2mWyzeSenseRS::engine[0m[2m:[0m 2 sensors reported by dongle
+[2m2026-05-29T03:13:41.849478Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m ===> Sending command packet: Packet: Cmd=5330, Payload=[02]
+[2m2026-05-29T03:13:41.849494Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (8 bytes): [AA,55,53,04,30,02,01,88]
+[2m2026-05-29T03:13:41.862396Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE READ raw=63 bytes:[07,55,AA,53,30,FF,02,81,55,AA,53,04,2F,02,01,87,00,00,01,9E,71,B5,CF,B3,A2,01,00,03,08,00,65,77,61,79,20,47,57,33,55,08,50,2A,08,60,55,AA,53,03,32,01,87,55,AA,53,1F,19,00,00,01,9E,71,AE,A3] proto=7 bytes:[55,AA,53,30,FF,02,81]
+[2m2026-05-29T03:13:41.862464Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=53FF, Payload=ACK(5330)
+[2m2026-05-29T03:13:41.874260Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE READ raw=63 bytes:[0F,55,AA,53,0B,31,37,37,41,38,43,37,39,33,03,5B,00,00,01,9E,71,B5,CF,B3,A2,01,00,03,08,00,65,77,61,79,20,47,57,33,55,08,50,2A,08,60,55,AA,53,03,32,01,87,55,AA,53,1F,19,00,00,01,9E,71,AE,A3] proto=15 bytes:[55,AA,53,0B,31,37,37,41,38,43,37,39,33,03,5B]
+[2m2026-05-29T03:13:41.874315Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=5331, Payload=[37,37,41,38,43,37,39,33]
+[2m2026-05-29T03:13:41.874336Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m Sending ACK packet for async command 5331
+[2m2026-05-29T03:13:41.874345Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (7 bytes): [AA,55,53,31,FF,02,82]
+[2m2026-05-29T03:13:41.876867Z[0m [32m INFO[0m [2mWyzeSenseRS::engine[0m[2m:[0m Sensor 1/2: MAC=77A8C793
+[2m2026-05-29T03:13:41.981048Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE READ raw=63 bytes:[0F,55,AA,53,0B,31,37,37,43,36,38,31,39,33,03,4A,00,00,01,9E,71,B5,CF,B3,A2,01,00,03,08,00,65,77,61,79,20,47,57,33,55,08,50,2A,08,60,55,AA,53,03,32,01,87,55,AA,53,1F,19,00,00,01,9E,71,AE,A3] proto=15 bytes:[55,AA,53,0B,31,37,37,43,36,38,31,39,33,03,4A]
+[2m2026-05-29T03:13:41.981132Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=5331, Payload=[37,37,43,36,38,31,39,33]
+[2m2026-05-29T03:13:41.981155Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m Sending ACK packet for async command 5331
+[2m2026-05-29T03:13:41.981165Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (7 bytes): [AA,55,53,31,FF,02,82]
+[2m2026-05-29T03:13:41.982290Z[0m [32m INFO[0m [2mWyzeSenseRS::engine[0m[2m:[0m Sensor 2/2: MAC=77C68193
+[2m2026-05-29T03:13:41.982337Z[0m [32m INFO[0m [2mWyzeSenseRS::engine[0m[2m:[0m Successfully retrieved 2 paired sensors
+[2m2026-05-29T03:13:42.087521Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE READ raw=63 bytes:[07,55,AA,53,03,32,01,87,43,36,38,31,39,33,03,4A,00,00,01,9E,71,B5,CF,B3,A2,01,00,03,08,00,65,77,61,79,20,47,57,33,55,08,50,2A,08,60,55,AA,53,03,32,01,87,55,AA,53,1F,19,00,00,01,9E,71,AE,A3] proto=7 bytes:[55,AA,53,03,32,01,87]
+[2m2026-05-29T03:13:42.087617Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=5332, Payload=[<None>]
+[2m2026-05-29T03:13:42.087646Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m Sending ACK packet for async command 5332
+[2m2026-05-29T03:13:42.087664Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (7 bytes): [AA,55,53,32,FF,02,83]
+[2m2026-05-29T03:13:42.089313Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m Received time sync request (0x5332). Replying with timestamp.
+[2m2026-05-29T03:13:42.089381Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (15 bytes): [AA,55,53,0B,33,00,00,01,9E,71,B9,2E,C9,04,50]
+[2m2026-05-29T03:13:42.100647Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE READ raw=63 bytes:[07,55,AA,53,33,FF,02,84,43,36,38,31,39,33,03,4A,00,00,01,9E,71,B5,CF,B3,A2,01,00,03,08,00,65,77,61,79,20,47,57,33,55,08,50,2A,08,60,55,AA,53,03,32,01,87,55,AA,53,1F,19,00,00,01,9E,71,AE,A3] proto=7 bytes:[55,AA,53,33,FF,02,84]
+[2m2026-05-29T03:13:42.100761Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=53FF, Payload=ACK(5333)
+[2m2026-05-29T03:13:45.624807Z[0m [32m INFO[0m [2mWyzeSenseRS::engine[0m[2m:[0m Deleting sensor: 77A8C793
+[2m2026-05-29T03:13:45.624926Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m ===> Sending command packet: Packet: Cmd=5325, Payload=[37,37,41,38,43,37,39,33]
+[2m2026-05-29T03:13:45.624992Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (15 bytes): [AA,55,53,0B,25,37,37,41,38,43,37,39,33,03,4F]
+[2m2026-05-29T03:13:45.640534Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE READ raw=63 bytes:[17,55,AA,53,25,FF,02,76,55,AA,53,0C,26,37,37,41,38,43,37,39,33,FF,04,50,A2,01,00,03,08,00,65,77,61,79,20,47,57,33,55,08,50,2A,08,60,55,AA,53,03,32,01,87,55,AA,53,1F,19,00,00,01,9E,71,AE,A3] proto=23 bytes:[55,AA,53,25,FF,02,76,55,AA,53,0C,26,37,37,41,38,43,37,39,33,FF,04,50]
+[2m2026-05-29T03:13:45.640632Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=53FF, Payload=ACK(5325)
+[2m2026-05-29T03:13:45.640661Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=5326, Payload=[37,37,41,38,43,37,39,33,ff]
+[2m2026-05-29T03:13:45.640691Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m Sending ACK packet for async command 5326
+[2m2026-05-29T03:13:45.640745Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (7 bytes): [AA,55,53,26,FF,02,77]
+[2m2026-05-29T03:13:45.649146Z[0m [32m INFO[0m [2mWyzeSenseRS::engine[0m[2m:[0m Retrieving sensor list...
+[2m2026-05-29T03:13:45.649202Z[0m [32m INFO[0m [2mWyzeSenseRS::engine[0m[2m:[0m Retrieving sensor count...
+[2m2026-05-29T03:13:45.649217Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m ===> Sending command packet: Packet: Cmd=532E, Payload=[<None>]
+[2m2026-05-29T03:13:45.649252Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (7 bytes): [AA,55,53,03,2E,01,83]
+[2m2026-05-29T03:13:45.661327Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE READ raw=63 bytes:[0F,55,AA,53,2E,FF,02,7F,55,AA,53,04,2F,01,01,86,38,43,37,39,33,FF,04,50,A2,01,00,03,08,00,65,77,61,79,20,47,57,33,55,08,50,2A,08,60,55,AA,53,03,32,01,87,55,AA,53,1F,19,00,00,01,9E,71,AE,A3] proto=15 bytes:[55,AA,53,2E,FF,02,7F,55,AA,53,04,2F,01,01,86]
+[2m2026-05-29T03:13:45.661397Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=53FF, Payload=ACK(532E)
+[2m2026-05-29T03:13:45.661415Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=532F, Payload=[01]
+[2m2026-05-29T03:13:45.661431Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m Sending ACK packet for async command 532F
+[2m2026-05-29T03:13:45.661440Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (7 bytes): [AA,55,53,2F,FF,02,80]
+[2m2026-05-29T03:13:45.661513Z[0m [32m INFO[0m [2mWyzeSenseRS::engine[0m[2m:[0m 1 sensors reported by dongle
+[2m2026-05-29T03:13:45.661553Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m ===> Sending command packet: Packet: Cmd=5330, Payload=[01]
+[2m2026-05-29T03:13:45.661572Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (8 bytes): [AA,55,53,04,30,01,01,87]
+[2m2026-05-29T03:13:45.674059Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE READ raw=63 bytes:[07,55,AA,53,30,FF,02,81,55,AA,53,04,2F,01,01,86,38,43,37,39,33,FF,04,50,A2,01,00,03,08,00,65,77,61,79,20,47,57,33,55,08,50,2A,08,60,55,AA,53,03,32,01,87,55,AA,53,1F,19,00,00,01,9E,71,AE,A3] proto=7 bytes:[55,AA,53,30,FF,02,81]
+[2m2026-05-29T03:13:45.674133Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=53FF, Payload=ACK(5330)
+[2m2026-05-29T03:13:45.686559Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE READ raw=63 bytes:[0F,55,AA,53,0B,31,37,37,43,36,38,31,39,33,03,4A,38,43,37,39,33,FF,04,50,A2,01,00,03,08,00,65,77,61,79,20,47,57,33,55,08,50,2A,08,60,55,AA,53,03,32,01,87,55,AA,53,1F,19,00,00,01,9E,71,AE,A3] proto=15 bytes:[55,AA,53,0B,31,37,37,43,36,38,31,39,33,03,4A]
+[2m2026-05-29T03:13:45.686604Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=5331, Payload=[37,37,43,36,38,31,39,33]
+[2m2026-05-29T03:13:45.686625Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m Sending ACK packet for async command 5331
+[2m2026-05-29T03:13:45.686636Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (7 bytes): [AA,55,53,31,FF,02,82]
+[2m2026-05-29T03:13:45.687953Z[0m [32m INFO[0m [2mWyzeSenseRS::engine[0m[2m:[0m Sensor 1/1: MAC=77C68193
+[2m2026-05-29T03:13:45.687986Z[0m [32m INFO[0m [2mWyzeSenseRS::engine[0m[2m:[0m Successfully retrieved 1 paired sensors
+[2m2026-05-29T03:13:45.793185Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE READ raw=63 bytes:[07,55,AA,53,03,32,01,87,43,36,38,31,39,33,03,4A,38,43,37,39,33,FF,04,50,A2,01,00,03,08,00,65,77,61,79,20,47,57,33,55,08,50,2A,08,60,55,AA,53,03,32,01,87,55,AA,53,1F,19,00,00,01,9E,71,AE,A3] proto=7 bytes:[55,AA,53,03,32,01,87]
+[2m2026-05-29T03:13:45.793255Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=5332, Payload=[<None>]
+[2m2026-05-29T03:13:45.793274Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m Sending ACK packet for async command 5332
+[2m2026-05-29T03:13:45.793286Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (7 bytes): [AA,55,53,32,FF,02,83]
+[2m2026-05-29T03:13:45.794275Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m Received time sync request (0x5332). Replying with timestamp.
+[2m2026-05-29T03:13:45.794323Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (15 bytes): [AA,55,53,0B,33,00,00,01,9E,71,B9,3D,42,03,D8]
+[2m2026-05-29T03:13:45.804719Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE READ raw=63 bytes:[07,55,AA,53,33,FF,02,84,43,36,38,31,39,33,03,4A,38,43,37,39,33,FF,04,50,A2,01,00,03,08,00,65,77,61,79,20,47,57,33,55,08,50,2A,08,60,55,AA,53,03,32,01,87,55,AA,53,1F,19,00,00,01,9E,71,AE,A3] proto=7 bytes:[55,AA,53,33,FF,02,84]
+[2m2026-05-29T03:13:45.804769Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=53FF, Payload=ACK(5333)
+[2m2026-05-29T03:13:48.359084Z[0m [32m INFO[0m [2mWyzeSenseRS::engine[0m[2m:[0m Deleting sensor: 77C68193
+[2m2026-05-29T03:13:48.359198Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m ===> Sending command packet: Packet: Cmd=5325, Payload=[37,37,43,36,38,31,39,33]
+[2m2026-05-29T03:13:48.359256Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (15 bytes): [AA,55,53,0B,25,37,37,43,36,38,31,39,33,03,3E]
+[2m2026-05-29T03:13:48.374460Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE READ raw=63 bytes:[17,55,AA,53,25,FF,02,76,55,AA,53,0C,26,37,37,43,36,38,31,39,33,FF,04,3F,A2,01,00,03,08,00,65,77,61,79,20,47,57,33,55,08,50,2A,08,60,55,AA,53,03,32,01,87,55,AA,53,1F,19,00,00,01,9E,71,AE,A3] proto=23 bytes:[55,AA,53,25,FF,02,76,55,AA,53,0C,26,37,37,43,36,38,31,39,33,FF,04,3F]
+[2m2026-05-29T03:13:48.374542Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=53FF, Payload=ACK(5325)
+[2m2026-05-29T03:13:48.374587Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=5326, Payload=[37,37,43,36,38,31,39,33,ff]
+[2m2026-05-29T03:13:48.374616Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m Sending ACK packet for async command 5326
+[2m2026-05-29T03:13:48.374629Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (7 bytes): [AA,55,53,26,FF,02,77]
+[2m2026-05-29T03:13:48.381927Z[0m [32m INFO[0m [2mWyzeSenseRS::engine[0m[2m:[0m Retrieving sensor list...
+[2m2026-05-29T03:13:48.381977Z[0m [32m INFO[0m [2mWyzeSenseRS::engine[0m[2m:[0m Retrieving sensor count...
+[2m2026-05-29T03:13:48.381995Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m ===> Sending command packet: Packet: Cmd=532E, Payload=[<None>]
+[2m2026-05-29T03:13:48.382020Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (7 bytes): [AA,55,53,03,2E,01,83]
+[2m2026-05-29T03:13:48.393043Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE READ raw=63 bytes:[0F,55,AA,53,2E,FF,02,7F,55,AA,53,04,2F,00,01,85,36,38,31,39,33,FF,04,3F,A2,01,00,03,08,00,65,77,61,79,20,47,57,33,55,08,50,2A,08,60,55,AA,53,03,32,01,87,55,AA,53,1F,19,00,00,01,9E,71,AE,A3] proto=15 bytes:[55,AA,53,2E,FF,02,7F,55,AA,53,04,2F,00,01,85]
+[2m2026-05-29T03:13:48.393107Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=53FF, Payload=ACK(532E)
+[2m2026-05-29T03:13:48.393129Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=532F, Payload=[00]
+[2m2026-05-29T03:13:48.393150Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m Sending ACK packet for async command 532F
+[2m2026-05-29T03:13:48.393163Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (7 bytes): [AA,55,53,2F,FF,02,80]
+[2m2026-05-29T03:13:48.393245Z[0m [32m INFO[0m [2mWyzeSenseRS::engine[0m[2m:[0m 0 sensors reported by dongle
+[2m2026-05-29T03:13:48.393261Z[0m [32m INFO[0m [2mWyzeSenseRS::engine[0m[2m:[0m No sensors paired to dongle.
+[2m2026-05-29T03:13:53.261516Z[0m [32m INFO[0m [2mWyzeSenseRS::engine[0m[2m:[0m Setting scan mode to: true
+[2m2026-05-29T03:13:53.261611Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m ===> Sending command packet: Packet: Cmd=531C, Payload=[01]
+[2m2026-05-29T03:13:53.261654Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (8 bytes): [AA,55,53,04,1C,01,01,73]
+[2m2026-05-29T03:13:53.273067Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE READ raw=63 bytes:[0E,55,AA,53,1C,FF,02,6D,55,AA,53,03,1D,01,72,85,36,38,31,39,33,FF,04,3F,A2,01,00,03,08,00,65,77,61,79,20,47,57,33,55,08,50,2A,08,60,55,AA,53,03,32,01,87,55,AA,53,1F,19,00,00,01,9E,71,AE,A3] proto=14 bytes:[55,AA,53,1C,FF,02,6D,55,AA,53,03,1D,01,72]
+[2m2026-05-29T03:13:53.273133Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=53FF, Payload=ACK(531C)
+[2m2026-05-29T03:13:53.273151Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=531D, Payload=[<None>]
+[2m2026-05-29T03:13:53.273167Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m Sending ACK packet for async command 531D
+[2m2026-05-29T03:13:53.273185Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (7 bytes): [AA,55,53,1D,FF,02,6E]
+[2m2026-05-29T03:14:05.849904Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE READ raw=63 bytes:[0A,37,37,41,38,43,37,39,33,03,00,03,1D,01,72,85,36,38,31,39,33,FF,04,3F,A2,01,00,03,08,00,65,77,61,79,20,47,57,33,55,08,50,2A,08,60,55,AA,53,03,32,01,87,55,AA,53,1F,19,00,00,01,9E,71,AE,A3] proto=10 bytes:[37,37,41,38,43,37,39,33,03,00]
+[2m2026-05-29T03:14:07.165350Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE READ raw=63 bytes:[12,55,AA,53,0E,20,A3,37,37,41,38,43,37,39,33,02,1E,04,10,39,33,FF,04,3F,A2,01,00,03,08,00,65,77,61,79,20,47,57,33,55,08,50,2A,08,60,55,AA,53,03,32,01,87,55,AA,53,1F,19,00,00,01,9E,71,AE,A3] proto=18 bytes:[55,AA,53,0E,20,A3,37,37,41,38,43,37,39,33,02,1E,04,10]
+[2m2026-05-29T03:14:07.165494Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=5320, Payload=[a3,37,37,41,38,43,37,39,33,02,1e]
+[2m2026-05-29T03:14:07.165549Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m Sending ACK packet for async command 5320
+[2m2026-05-29T03:14:07.165584Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (7 bytes): [AA,55,53,20,FF,02,71]
+[2m2026-05-29T03:14:07.176485Z[0m [32m INFO[0m [2mWyzeSenseRS::engine[0m[2m:[0m Auto-Pairing: Scanned sensor 77A8C793 detected. Exchanging R1 token...
+[2m2026-05-29T03:14:07.176527Z[0m [32m INFO[0m [2mWyzeSenseRS::engine[0m[2m:[0m Exchanging R1 crypto token with sensor 77A8C793...
+[2m2026-05-29T03:14:07.176547Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m ===> Sending command packet: Packet: Cmd=5321, Payload=[37,37,41,38,43,37,39,33,4f,6b,35,48,50,4e,51,34,6c,66,37,37,75,37,35,34]
+[2m2026-05-29T03:14:07.176587Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (31 bytes): [AA,55,53,1B,21,37,37,41,38,43,37,39,33,4F,6B,35,48,50,4E,51,34,6C,66,37,37,75,37,35,34,08,0A]
+[2m2026-05-29T03:14:07.176581Z[0m [32m INFO[0m [2mWyzeSenseRS[0m[2m:[0m STATE EVENT: MAC=77A8C793, Data=Scanned
+[2m2026-05-29T03:14:07.189041Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE READ raw=63 bytes:[07,55,AA,53,21,FF,02,72,37,41,38,43,37,39,33,02,1E,04,10,39,33,FF,04,3F,A2,01,00,03,08,00,65,77,61,79,20,47,57,33,55,08,50,2A,08,60,55,AA,53,03,32,01,87,55,AA,53,1F,19,00,00,01,9E,71,AE,A3] proto=7 bytes:[55,AA,53,21,FF,02,72]
+[2m2026-05-29T03:14:07.189117Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=53FF, Payload=ACK(5321)
+[2m2026-05-29T03:14:08.058408Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE READ raw=63 bytes:[3E,A5,37,37,41,38,43,37,39,33,75,57,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62,02,1E,00,19,25,01,00,55,AA,53,1E,22,A5,37,37,41,38,43,37,39,33,75,57,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=62 bytes:[A5,37,37,41,38,43,37,39,33,75,57,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62,02,1E,00,19,25,01,00,55,AA,53,1E,22,A5,37,37,41,38,43,37,39,33,75,57,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62]
+[2m2026-05-29T03:14:08.063414Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE READ raw=63 bytes:[04,02,1E,0C,C5,38,43,37,39,33,75,57,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62,02,1E,00,19,25,01,00,55,AA,53,1E,22,A5,37,37,41,38,43,37,39,33,75,57,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=4 bytes:[02,1E,0C,C5]
+[2m2026-05-29T03:14:08.063553Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=5322, Payload=[a5,37,37,41,38,43,37,39,33,75,57,7b,bd,d8,a6,43,fa,d2,43,8c,51,76,c3,55,62,02,1e]
+[2m2026-05-29T03:14:08.063641Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m Sending ACK packet for async command 5322
+[2m2026-05-29T03:14:08.063669Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (7 bytes): [AA,55,53,22,FF,02,73]
+[2m2026-05-29T03:14:08.063785Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m GetSensorR1 returned 27 bytes
+[2m2026-05-29T03:14:08.063848Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m Auto-Pairing: GetSensorR1 returned 27 bytes for 77A8C793
+[2m2026-05-29T03:14:08.063879Z[0m [32m INFO[0m [2mWyzeSenseRS::engine[0m[2m:[0m Auto-Pairing: Turning off scan mode...
+[2m2026-05-29T03:14:08.063893Z[0m [32m INFO[0m [2mWyzeSenseRS::engine[0m[2m:[0m Setting scan mode to: false
+[2m2026-05-29T03:14:08.063912Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m ===> Sending command packet: Packet: Cmd=531C, Payload=[00]
+[2m2026-05-29T03:14:08.063946Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (8 bytes): [AA,55,53,04,1C,00,01,72]
+[2m2026-05-29T03:14:08.078782Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE READ raw=63 bytes:[0E,55,AA,53,1C,FF,02,6D,55,AA,53,03,1D,01,72,A6,43,FA,D2,43,8C,51,76,C3,55,62,02,1E,00,19,25,01,00,55,AA,53,1E,22,A5,37,37,41,38,43,37,39,33,75,57,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=14 bytes:[55,AA,53,1C,FF,02,6D,55,AA,53,03,1D,01,72]
+[2m2026-05-29T03:14:08.078825Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=53FF, Payload=ACK(531C)
+[2m2026-05-29T03:14:08.078840Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=531D, Payload=[<None>]
+[2m2026-05-29T03:14:08.078853Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m Sending ACK packet for async command 531D
+[2m2026-05-29T03:14:08.078862Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (7 bytes): [AA,55,53,1D,FF,02,6E]
+[2m2026-05-29T03:14:08.231039Z[0m [32m INFO[0m [2mWyzeSenseRS::engine[0m[2m:[0m Auto-Pairing: Committing verification for sensor 77A8C793 to NVRAM...
+[2m2026-05-29T03:14:08.231179Z[0m [32m INFO[0m [2mWyzeSenseRS::engine[0m[2m:[0m Verifying sensor 77A8C793...
+[2m2026-05-29T03:14:08.231229Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m ===> Sending command packet: Packet: Cmd=5323, Payload=[37,37,41,38,43,37,39,33,ff,04]
+[2m2026-05-29T03:14:08.231306Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (17 bytes): [AA,55,53,0D,23,37,37,41,38,43,37,39,33,FF,04,04,52]
+[2m2026-05-29T03:14:08.243005Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE READ raw=63 bytes:[0E,55,AA,53,23,FF,02,74,55,AA,53,03,24,01,79,A6,43,FA,D2,43,8C,51,76,C3,55,62,02,1E,00,19,25,01,00,55,AA,53,1E,22,A5,37,37,41,38,43,37,39,33,75,57,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=14 bytes:[55,AA,53,23,FF,02,74,55,AA,53,03,24,01,79]
+[2m2026-05-29T03:14:08.243065Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=53FF, Payload=ACK(5323)
+[2m2026-05-29T03:14:08.243080Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=5324, Payload=[<None>]
+[2m2026-05-29T03:14:08.243094Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m Sending ACK packet for async command 5324
+[2m2026-05-29T03:14:08.243104Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (7 bytes): [AA,55,53,24,FF,02,75]
+[2m2026-05-29T03:14:08.243154Z[0m [32m INFO[0m [2mWyzeSenseRS::engine[0m[2m:[0m Auto-Pairing: Sensor 77A8C793 successfully paired & committed to NVRAM!
+[2m2026-05-29T03:14:08.297418Z[0m [32m INFO[0m [2mWyzeSenseRS::engine[0m[2m:[0m Retrieving sensor list...
+[2m2026-05-29T03:14:08.297489Z[0m [32m INFO[0m [2mWyzeSenseRS::engine[0m[2m:[0m Retrieving sensor count...
+[2m2026-05-29T03:14:08.297506Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m ===> Sending command packet: Packet: Cmd=532E, Payload=[<None>]
+[2m2026-05-29T03:14:08.297533Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (7 bytes): [AA,55,53,03,2E,01,83]
+[2m2026-05-29T03:14:08.309214Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE READ raw=63 bytes:[0F,55,AA,53,2E,FF,02,7F,55,AA,53,04,2F,01,01,86,43,FA,D2,43,8C,51,76,C3,55,62,02,1E,00,19,25,01,00,55,AA,53,1E,22,A5,37,37,41,38,43,37,39,33,75,57,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=15 bytes:[55,AA,53,2E,FF,02,7F,55,AA,53,04,2F,01,01,86]
+[2m2026-05-29T03:14:08.309381Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=53FF, Payload=ACK(532E)
+[2m2026-05-29T03:14:08.309436Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=532F, Payload=[01]
+[2m2026-05-29T03:14:08.309552Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m Sending ACK packet for async command 532F
+[2m2026-05-29T03:14:08.309604Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (7 bytes): [AA,55,53,2F,FF,02,80]
+[2m2026-05-29T03:14:08.309697Z[0m [32m INFO[0m [2mWyzeSenseRS::engine[0m[2m:[0m 1 sensors reported by dongle
+[2m2026-05-29T03:14:08.309746Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m ===> Sending command packet: Packet: Cmd=5330, Payload=[01]
+[2m2026-05-29T03:14:08.309777Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (8 bytes): [AA,55,53,04,30,01,01,87]
+[2m2026-05-29T03:14:08.323073Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE READ raw=63 bytes:[07,55,AA,53,30,FF,02,81,55,AA,53,04,2F,01,01,86,43,FA,D2,43,8C,51,76,C3,55,62,02,1E,00,19,25,01,00,55,AA,53,1E,22,A5,37,37,41,38,43,37,39,33,75,57,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=7 bytes:[55,AA,53,30,FF,02,81]
+[2m2026-05-29T03:14:08.323164Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=53FF, Payload=ACK(5330)
+[2m2026-05-29T03:14:08.335260Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE READ raw=63 bytes:[0F,55,AA,53,0B,31,37,37,41,38,43,37,39,33,03,5B,43,FA,D2,43,8C,51,76,C3,55,62,02,1E,00,19,25,01,00,55,AA,53,1E,22,A5,37,37,41,38,43,37,39,33,75,57,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=15 bytes:[55,AA,53,0B,31,37,37,41,38,43,37,39,33,03,5B]
+[2m2026-05-29T03:14:08.335344Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=5331, Payload=[37,37,41,38,43,37,39,33]
+[2m2026-05-29T03:14:08.335376Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m Sending ACK packet for async command 5331
+[2m2026-05-29T03:14:08.335391Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (7 bytes): [AA,55,53,31,FF,02,82]
+[2m2026-05-29T03:14:08.336701Z[0m [32m INFO[0m [2mWyzeSenseRS::engine[0m[2m:[0m Sensor 1/1: MAC=77A8C793
+[2m2026-05-29T03:14:08.336749Z[0m [32m INFO[0m [2mWyzeSenseRS::engine[0m[2m:[0m Successfully retrieved 1 paired sensors
+[2m2026-05-29T03:14:08.441897Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE READ raw=63 bytes:[07,55,AA,53,03,32,01,87,41,38,43,37,39,33,03,5B,43,FA,D2,43,8C,51,76,C3,55,62,02,1E,00,19,25,01,00,55,AA,53,1E,22,A5,37,37,41,38,43,37,39,33,75,57,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=7 bytes:[55,AA,53,03,32,01,87]
+[2m2026-05-29T03:14:08.442022Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=5332, Payload=[<None>]
+[2m2026-05-29T03:14:08.442063Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m Sending ACK packet for async command 5332
+[2m2026-05-29T03:14:08.442101Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (7 bytes): [AA,55,53,32,FF,02,83]
+[2m2026-05-29T03:14:08.445988Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m Received time sync request (0x5332). Replying with timestamp.
+[2m2026-05-29T03:14:08.446087Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (15 bytes): [AA,55,53,0B,33,00,00,01,9E,71,B9,95,BE,04,AC]
+[2m2026-05-29T03:14:08.456230Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE READ raw=63 bytes:[07,55,AA,53,33,FF,02,84,41,38,43,37,39,33,03,5B,43,FA,D2,43,8C,51,76,C3,55,62,02,1E,00,19,25,01,00,55,AA,53,1E,22,A5,37,37,41,38,43,37,39,33,75,57,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=7 bytes:[55,AA,53,33,FF,02,84]
+[2m2026-05-29T03:14:08.456306Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=53FF, Payload=ACK(5333)
+[2m2026-05-29T03:14:08.670414Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE READ raw=63 bytes:[21,55,AA,53,1D,19,00,00,01,9E,71,B9,96,85,A1,37,37,41,38,43,37,39,33,02,1C,4C,00,01,01,00,00,34,07,7A,AA,53,1E,22,A5,37,37,41,38,43,37,39,33,75,57,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=33 bytes:[55,AA,53,1D,19,00,00,01,9E,71,B9,96,85,A1,37,37,41,38,43,37,39,33,02,1C,4C,00,01,01,00,00,34,07,7A]
+[2m2026-05-29T03:14:08.670595Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,71,b9,96,85,a1,37,37,41,38,43,37,39,33,02,1c,4c,00,01,01,00,00,34]
+[2m2026-05-29T03:14:08.670677Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m Sending ACK packet for async command 5319
+[2m2026-05-29T03:14:08.670710Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+[2m2026-05-29T03:14:08.682749Z[0m [32m INFO[0m [2mWyzeSenseRS[0m[2m:[0m STATE EVENT: MAC=77A8C793, Data=StatusOnly
+[2m2026-05-29T03:14:08.792818Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE READ raw=63 bytes:[21,55,AA,53,1D,19,00,00,01,9E,71,B9,96,FB,A2,37,37,41,38,43,37,39,33,02,1C,4D,00,01,01,00,01,34,07,F3,AA,53,1E,22,A5,37,37,41,38,43,37,39,33,75,57,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=33 bytes:[55,AA,53,1D,19,00,00,01,9E,71,B9,96,FB,A2,37,37,41,38,43,37,39,33,02,1C,4D,00,01,01,00,01,34,07,F3]
+[2m2026-05-29T03:14:08.792989Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,71,b9,96,fb,a2,37,37,41,38,43,37,39,33,02,1c,4d,00,01,01,00,01,34]
+[2m2026-05-29T03:14:08.793057Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m Sending ACK packet for async command 5319
+[2m2026-05-29T03:14:08.793086Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+[2m2026-05-29T03:14:08.801069Z[0m [32m INFO[0m [2mWyzeSenseRS[0m[2m:[0m STATE EVENT: MAC=77A8C793, Data=Motion { is_active: true }
+[2m2026-05-29T03:14:12.443335Z[0m [32m INFO[0m [2mWyzeSenseRS::engine[0m[2m:[0m Setting scan mode to: true
+[2m2026-05-29T03:14:12.443433Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m ===> Sending command packet: Packet: Cmd=531C, Payload=[01]
+[2m2026-05-29T03:14:12.443503Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (8 bytes): [AA,55,53,04,1C,01,01,73]
+[2m2026-05-29T03:14:12.455617Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE READ raw=63 bytes:[0E,55,AA,53,1C,FF,02,6D,55,AA,53,03,1D,01,72,37,37,41,38,43,37,39,33,02,1C,4D,00,01,01,00,01,34,07,F3,AA,53,1E,22,A5,37,37,41,38,43,37,39,33,75,57,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=14 bytes:[55,AA,53,1C,FF,02,6D,55,AA,53,03,1D,01,72]
+[2m2026-05-29T03:14:12.455707Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=53FF, Payload=ACK(531C)
+[2m2026-05-29T03:14:12.455745Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=531D, Payload=[<None>]
+[2m2026-05-29T03:14:12.455769Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m Sending ACK packet for async command 531D
+[2m2026-05-29T03:14:12.455786Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (7 bytes): [AA,55,53,1D,FF,02,6E]
+[2m2026-05-29T03:14:22.651567Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE READ raw=63 bytes:[0A,37,37,43,36,38,31,39,33,04,00,03,1D,01,72,37,37,41,38,43,37,39,33,02,1C,4D,00,01,01,00,01,34,07,F3,AA,53,1E,22,A5,37,37,41,38,43,37,39,33,75,57,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=10 bytes:[37,37,43,36,38,31,39,33,04,00]
+[2m2026-05-29T03:14:23.952015Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE READ raw=63 bytes:[12,55,AA,53,0E,20,A3,37,37,43,36,38,31,39,33,07,0F,03,F5,43,37,39,33,02,1C,4D,00,01,01,00,01,34,07,F3,AA,53,1E,22,A5,37,37,41,38,43,37,39,33,75,57,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=18 bytes:[55,AA,53,0E,20,A3,37,37,43,36,38,31,39,33,07,0F,03,F5]
+[2m2026-05-29T03:14:23.952184Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=5320, Payload=[a3,37,37,43,36,38,31,39,33,07,0f]
+[2m2026-05-29T03:14:23.952241Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m Sending ACK packet for async command 5320
+[2m2026-05-29T03:14:23.952269Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (7 bytes): [AA,55,53,20,FF,02,71]
+[2m2026-05-29T03:14:23.962990Z[0m [32m INFO[0m [2mWyzeSenseRS::engine[0m[2m:[0m Auto-Pairing: Scanned sensor 77C68193 detected. Exchanging R1 token...
+[2m2026-05-29T03:14:23.963025Z[0m [32m INFO[0m [2mWyzeSenseRS::engine[0m[2m:[0m Exchanging R1 crypto token with sensor 77C68193...
+[2m2026-05-29T03:14:23.963048Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m ===> Sending command packet: Packet: Cmd=5321, Payload=[37,37,43,36,38,31,39,33,4f,6b,35,48,50,4e,51,34,6c,66,37,37,75,37,35,34]
+[2m2026-05-29T03:14:23.963097Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (31 bytes): [AA,55,53,1B,21,37,37,43,36,38,31,39,33,4F,6B,35,48,50,4E,51,34,6C,66,37,37,75,37,35,34,07,F9]
+[2m2026-05-29T03:14:23.963158Z[0m [32m INFO[0m [2mWyzeSenseRS[0m[2m:[0m STATE EVENT: MAC=77C68193, Data=Scanned
+[2m2026-05-29T03:14:23.975033Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE READ raw=63 bytes:[07,55,AA,53,21,FF,02,72,37,43,36,38,31,39,33,07,0F,03,F5,43,37,39,33,02,1C,4D,00,01,01,00,01,34,07,F3,AA,53,1E,22,A5,37,37,41,38,43,37,39,33,75,57,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=7 bytes:[55,AA,53,21,FF,02,72]
+[2m2026-05-29T03:14:23.975100Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=53FF, Payload=ACK(5321)
+[2m2026-05-29T03:14:25.640817Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE READ raw=63 bytes:[3E,A5,37,37,43,36,38,31,39,33,F7,66,EF,04,3D,A0,E2,2C,85,06,20,94,19,1F,38,27,07,0F,00,00,00,00,00,55,AA,53,1E,22,A5,37,37,43,36,38,31,39,33,F7,66,EF,04,3D,A0,E2,2C,85,06,20,94,19,1F,38,27] proto=62 bytes:[A5,37,37,43,36,38,31,39,33,F7,66,EF,04,3D,A0,E2,2C,85,06,20,94,19,1F,38,27,07,0F,00,00,00,00,00,55,AA,53,1E,22,A5,37,37,43,36,38,31,39,33,F7,66,EF,04,3D,A0,E2,2C,85,06,20,94,19,1F,38,27]
+[2m2026-05-29T03:14:25.645226Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE READ raw=63 bytes:[04,07,0F,0A,1A,36,38,31,39,33,F7,66,EF,04,3D,A0,E2,2C,85,06,20,94,19,1F,38,27,07,0F,00,00,00,00,00,55,AA,53,1E,22,A5,37,37,43,36,38,31,39,33,F7,66,EF,04,3D,A0,E2,2C,85,06,20,94,19,1F,38,27] proto=4 bytes:[07,0F,0A,1A]
+[2m2026-05-29T03:14:25.645343Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=5322, Payload=[a5,37,37,43,36,38,31,39,33,f7,66,ef,04,3d,a0,e2,2c,85,06,20,94,19,1f,38,27,07,0f]
+[2m2026-05-29T03:14:25.645429Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m Sending ACK packet for async command 5322
+[2m2026-05-29T03:14:25.645476Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (7 bytes): [AA,55,53,22,FF,02,73]
+[2m2026-05-29T03:14:25.645585Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m GetSensorR1 returned 27 bytes
+[2m2026-05-29T03:14:25.645615Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m Auto-Pairing: GetSensorR1 returned 27 bytes for 77C68193
+[2m2026-05-29T03:14:25.645633Z[0m [32m INFO[0m [2mWyzeSenseRS::engine[0m[2m:[0m Auto-Pairing: Turning off scan mode...
+[2m2026-05-29T03:14:25.645648Z[0m [32m INFO[0m [2mWyzeSenseRS::engine[0m[2m:[0m Setting scan mode to: false
+[2m2026-05-29T03:14:25.645668Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m ===> Sending command packet: Packet: Cmd=531C, Payload=[00]
+[2m2026-05-29T03:14:25.645702Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (8 bytes): [AA,55,53,04,1C,00,01,72]
+[2m2026-05-29T03:14:25.660397Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE READ raw=63 bytes:[0E,55,AA,53,1C,FF,02,6D,55,AA,53,03,1D,01,72,A0,E2,2C,85,06,20,94,19,1F,38,27,07,0F,00,00,00,00,00,55,AA,53,1E,22,A5,37,37,43,36,38,31,39,33,F7,66,EF,04,3D,A0,E2,2C,85,06,20,94,19,1F,38,27] proto=14 bytes:[55,AA,53,1C,FF,02,6D,55,AA,53,03,1D,01,72]
+[2m2026-05-29T03:14:25.660506Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=53FF, Payload=ACK(531C)
+[2m2026-05-29T03:14:25.660540Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=531D, Payload=[<None>]
+[2m2026-05-29T03:14:25.660569Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m Sending ACK packet for async command 531D
+[2m2026-05-29T03:14:25.660593Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (7 bytes): [AA,55,53,1D,FF,02,6E]
+[2m2026-05-29T03:14:25.812878Z[0m [32m INFO[0m [2mWyzeSenseRS::engine[0m[2m:[0m Auto-Pairing: Committing verification for sensor 77C68193 to NVRAM...
+[2m2026-05-29T03:14:25.812945Z[0m [32m INFO[0m [2mWyzeSenseRS::engine[0m[2m:[0m Verifying sensor 77C68193...
+[2m2026-05-29T03:14:25.812969Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m ===> Sending command packet: Packet: Cmd=5323, Payload=[37,37,43,36,38,31,39,33,ff,04]
+[2m2026-05-29T03:14:25.813004Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (17 bytes): [AA,55,53,0D,23,37,37,43,36,38,31,39,33,FF,04,04,41]
+[2m2026-05-29T03:14:25.825266Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE READ raw=63 bytes:[0E,55,AA,53,23,FF,02,74,55,AA,53,03,24,01,79,A0,E2,2C,85,06,20,94,19,1F,38,27,07,0F,00,00,00,00,00,55,AA,53,1E,22,A5,37,37,43,36,38,31,39,33,F7,66,EF,04,3D,A0,E2,2C,85,06,20,94,19,1F,38,27] proto=14 bytes:[55,AA,53,23,FF,02,74,55,AA,53,03,24,01,79]
+[2m2026-05-29T03:14:25.825315Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=53FF, Payload=ACK(5323)
+[2m2026-05-29T03:14:25.825330Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=5324, Payload=[<None>]
+[2m2026-05-29T03:14:25.825343Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m Sending ACK packet for async command 5324
+[2m2026-05-29T03:14:25.825352Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (7 bytes): [AA,55,53,24,FF,02,75]
+[2m2026-05-29T03:14:25.825389Z[0m [32m INFO[0m [2mWyzeSenseRS::engine[0m[2m:[0m Auto-Pairing: Sensor 77C68193 successfully paired & committed to NVRAM!
+[2m2026-05-29T03:14:25.966684Z[0m [32m INFO[0m [2mWyzeSenseRS::engine[0m[2m:[0m Retrieving sensor list...
+[2m2026-05-29T03:14:25.966750Z[0m [32m INFO[0m [2mWyzeSenseRS::engine[0m[2m:[0m Retrieving sensor count...
+[2m2026-05-29T03:14:25.966768Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m ===> Sending command packet: Packet: Cmd=532E, Payload=[<None>]
+[2m2026-05-29T03:14:25.966813Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (7 bytes): [AA,55,53,03,2E,01,83]
+[2m2026-05-29T03:14:25.977965Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE READ raw=63 bytes:[0F,55,AA,53,2E,FF,02,7F,55,AA,53,04,2F,02,01,87,E2,2C,85,06,20,94,19,1F,38,27,07,0F,00,00,00,00,00,55,AA,53,1E,22,A5,37,37,43,36,38,31,39,33,F7,66,EF,04,3D,A0,E2,2C,85,06,20,94,19,1F,38,27] proto=15 bytes:[55,AA,53,2E,FF,02,7F,55,AA,53,04,2F,02,01,87]
+[2m2026-05-29T03:14:25.978031Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=53FF, Payload=ACK(532E)
+[2m2026-05-29T03:14:25.978049Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=532F, Payload=[02]
+[2m2026-05-29T03:14:25.978065Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m Sending ACK packet for async command 532F
+[2m2026-05-29T03:14:25.978074Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (7 bytes): [AA,55,53,2F,FF,02,80]
+[2m2026-05-29T03:14:25.978146Z[0m [32m INFO[0m [2mWyzeSenseRS::engine[0m[2m:[0m 2 sensors reported by dongle
+[2m2026-05-29T03:14:25.978171Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m ===> Sending command packet: Packet: Cmd=5330, Payload=[02]
+[2m2026-05-29T03:14:25.978186Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (8 bytes): [AA,55,53,04,30,02,01,88]
+[2m2026-05-29T03:14:25.989856Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE READ raw=63 bytes:[07,55,AA,53,30,FF,02,81,55,AA,53,04,2F,02,01,87,E2,2C,85,06,20,94,19,1F,38,27,07,0F,00,00,00,00,00,55,AA,53,1E,22,A5,37,37,43,36,38,31,39,33,F7,66,EF,04,3D,A0,E2,2C,85,06,20,94,19,1F,38,27] proto=7 bytes:[55,AA,53,30,FF,02,81]
+[2m2026-05-29T03:14:25.989946Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=53FF, Payload=ACK(5330)
+[2m2026-05-29T03:14:26.003149Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE READ raw=63 bytes:[0F,55,AA,53,0B,31,37,37,41,38,43,37,39,33,03,5B,E2,2C,85,06,20,94,19,1F,38,27,07,0F,00,00,00,00,00,55,AA,53,1E,22,A5,37,37,43,36,38,31,39,33,F7,66,EF,04,3D,A0,E2,2C,85,06,20,94,19,1F,38,27] proto=15 bytes:[55,AA,53,0B,31,37,37,41,38,43,37,39,33,03,5B]
+[2m2026-05-29T03:14:26.003226Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=5331, Payload=[37,37,41,38,43,37,39,33]
+[2m2026-05-29T03:14:26.003250Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m Sending ACK packet for async command 5331
+[2m2026-05-29T03:14:26.003265Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (7 bytes): [AA,55,53,31,FF,02,82]
+[2m2026-05-29T03:14:26.005629Z[0m [32m INFO[0m [2mWyzeSenseRS::engine[0m[2m:[0m Sensor 1/2: MAC=77A8C793
+[2m2026-05-29T03:14:26.110417Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE READ raw=63 bytes:[0F,55,AA,53,0B,31,37,37,43,36,38,31,39,33,03,4A,E2,2C,85,06,20,94,19,1F,38,27,07,0F,00,00,00,00,00,55,AA,53,1E,22,A5,37,37,43,36,38,31,39,33,F7,66,EF,04,3D,A0,E2,2C,85,06,20,94,19,1F,38,27] proto=15 bytes:[55,AA,53,0B,31,37,37,43,36,38,31,39,33,03,4A]
+[2m2026-05-29T03:14:26.110547Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=5331, Payload=[37,37,43,36,38,31,39,33]
+[2m2026-05-29T03:14:26.110591Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m Sending ACK packet for async command 5331
+[2m2026-05-29T03:14:26.110613Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (7 bytes): [AA,55,53,31,FF,02,82]
+[2m2026-05-29T03:14:26.112144Z[0m [32m INFO[0m [2mWyzeSenseRS::engine[0m[2m:[0m Sensor 2/2: MAC=77C68193
+[2m2026-05-29T03:14:26.112206Z[0m [32m INFO[0m [2mWyzeSenseRS::engine[0m[2m:[0m Successfully retrieved 2 paired sensors
+[2m2026-05-29T03:14:26.215301Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE READ raw=63 bytes:[07,55,AA,53,03,32,01,87,43,36,38,31,39,33,03,4A,E2,2C,85,06,20,94,19,1F,38,27,07,0F,00,00,00,00,00,55,AA,53,1E,22,A5,37,37,43,36,38,31,39,33,F7,66,EF,04,3D,A0,E2,2C,85,06,20,94,19,1F,38,27] proto=7 bytes:[55,AA,53,03,32,01,87]
+[2m2026-05-29T03:14:26.215397Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=5332, Payload=[<None>]
+[2m2026-05-29T03:14:26.215423Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m Sending ACK packet for async command 5332
+[2m2026-05-29T03:14:26.215438Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (7 bytes): [AA,55,53,32,FF,02,83]
+[2m2026-05-29T03:14:26.216649Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m Received time sync request (0x5332). Replying with timestamp.
+[2m2026-05-29T03:14:26.216705Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (15 bytes): [AA,55,53,0B,33,00,00,01,9E,71,B9,DB,28,04,5C]
+[2m2026-05-29T03:14:26.227092Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE READ raw=63 bytes:[07,55,AA,53,33,FF,02,84,43,36,38,31,39,33,03,4A,E2,2C,85,06,20,94,19,1F,38,27,07,0F,00,00,00,00,00,55,AA,53,1E,22,A5,37,37,43,36,38,31,39,33,F7,66,EF,04,3D,A0,E2,2C,85,06,20,94,19,1F,38,27] proto=7 bytes:[55,AA,53,33,FF,02,84]
+[2m2026-05-29T03:14:26.227158Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=53FF, Payload=ACK(5333)
+[2m2026-05-29T03:14:27.128087Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE READ raw=63 bytes:[21,55,AA,53,1D,19,00,00,01,9E,71,B9,DE,7F,A1,37,37,43,36,38,31,39,33,07,1B,5C,00,01,00,11,53,34,08,22,AA,53,1E,22,A5,37,37,43,36,38,31,39,33,F7,66,EF,04,3D,A0,E2,2C,85,06,20,94,19,1F,38,27] proto=33 bytes:[55,AA,53,1D,19,00,00,01,9E,71,B9,DE,7F,A1,37,37,43,36,38,31,39,33,07,1B,5C,00,01,00,11,53,34,08,22]
+[2m2026-05-29T03:14:27.128288Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,71,b9,de,7f,a1,37,37,43,36,38,31,39,33,07,1b,5c,00,01,00,11,53,34]
+[2m2026-05-29T03:14:27.128436Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m Sending ACK packet for async command 5319
+[2m2026-05-29T03:14:27.128487Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+[2m2026-05-29T03:14:27.140849Z[0m [32m INFO[0m [2mWyzeSenseRS[0m[2m:[0m STATE EVENT: MAC=77C68193, Data=StatusOnly
+[2m2026-05-29T03:14:27.439193Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE READ raw=63 bytes:[23,55,AA,53,1F,19,00,00,01,9E,71,B9,DF,A6,E8,37,37,43,36,38,31,39,33,07,1B,5F,00,03,1C,26,2C,11,54,32,09,05,1E,22,A5,37,37,43,36,38,31,39,33,F7,66,EF,04,3D,A0,E2,2C,85,06,20,94,19,1F,38,27] proto=35 bytes:[55,AA,53,1F,19,00,00,01,9E,71,B9,DF,A6,E8,37,37,43,36,38,31,39,33,07,1B,5F,00,03,1C,26,2C,11,54,32,09,05]
+[2m2026-05-29T03:14:27.439310Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,71,b9,df,a6,e8,37,37,43,36,38,31,39,33,07,1b,5f,00,03,1c,26,2c,11,54,32]
+[2m2026-05-29T03:14:27.439353Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m Sending ACK packet for async command 5319
+[2m2026-05-29T03:14:27.439382Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+[2m2026-05-29T03:14:27.447425Z[0m [32m INFO[0m [2mWyzeSenseRS[0m[2m:[0m STATE EVENT: MAC=77C68193, Data=Climate { temperature: 28.38, humidity: 44 }
+[2m2026-05-29T03:14:54.545752Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE READ raw=63 bytes:[23,55,AA,53,1F,19,00,00,01,9E,71,BA,44,A6,E8,37,37,43,36,38,31,39,33,07,1B,5F,00,03,1C,2B,27,11,55,33,08,6D,1E,22,A5,37,37,43,36,38,31,39,33,F7,66,EF,04,3D,A0,E2,2C,85,06,20,94,19,1F,38,27] proto=35 bytes:[55,AA,53,1F,19,00,00,01,9E,71,BA,44,A6,E8,37,37,43,36,38,31,39,33,07,1B,5F,00,03,1C,2B,27,11,55,33,08,6D]
+[2m2026-05-29T03:14:54.545919Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,71,ba,44,a6,e8,37,37,43,36,38,31,39,33,07,1b,5f,00,03,1c,2b,27,11,55,33]
+[2m2026-05-29T03:14:54.547122Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m Sending ACK packet for async command 5319
+[2m2026-05-29T03:14:54.547187Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+[2m2026-05-29T03:14:54.559052Z[0m [32m INFO[0m [2mWyzeSenseRS[0m[2m:[0m STATE EVENT: MAC=77C68193, Data=Climate { temperature: 28.43, humidity: 39 }
+[2m2026-05-29T03:15:08.190631Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE READ raw=63 bytes:[21,55,AA,53,1D,19,00,00,01,9E,71,BA,77,7D,A2,37,37,41,38,43,37,39,33,02,1A,4C,00,01,00,00,02,30,07,50,08,6D,1E,22,A5,37,37,43,36,38,31,39,33,F7,66,EF,04,3D,A0,E2,2C,85,06,20,94,19,1F,38,27] proto=33 bytes:[55,AA,53,1D,19,00,00,01,9E,71,BA,77,7D,A2,37,37,41,38,43,37,39,33,02,1A,4C,00,01,00,00,02,30,07,50]
+[2m2026-05-29T03:15:08.190781Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,71,ba,77,7d,a2,37,37,41,38,43,37,39,33,02,1a,4c,00,01,00,00,02,30]
+[2m2026-05-29T03:15:08.190846Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m Sending ACK packet for async command 5319
+[2m2026-05-29T03:15:08.190873Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+[2m2026-05-29T03:15:08.203258Z[0m [32m INFO[0m [2mWyzeSenseRS[0m[2m:[0m STATE EVENT: MAC=77A8C793, Data=Motion { is_active: false }
+[2m2026-05-29T03:15:12.852923Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE READ raw=63 bytes:[21,55,AA,53,1D,19,00,00,01,9E,71,BA,88,DC,A2,37,37,41,38,43,37,39,33,02,1A,5D,00,01,01,00,03,30,07,D3,08,6D,1E,22,A5,37,37,43,36,38,31,39,33,F7,66,EF,04,3D,A0,E2,2C,85,06,20,94,19,1F,38,27] proto=33 bytes:[55,AA,53,1D,19,00,00,01,9E,71,BA,88,DC,A2,37,37,41,38,43,37,39,33,02,1A,5D,00,01,01,00,03,30,07,D3]
+[2m2026-05-29T03:15:12.853076Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,71,ba,88,dc,a2,37,37,41,38,43,37,39,33,02,1a,5d,00,01,01,00,03,30]
+[2m2026-05-29T03:15:12.853143Z[0m [34mDEBUG[0m [2mWyzeSenseRS::engine[0m[2m:[0m Sending ACK packet for async command 5319
+[2m2026-05-29T03:15:12.853172Z[0m [35mTRACE[0m [2mWyzeSenseRS::transport::hidraw[0m[2m:[0m WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+[2m2026-05-29T03:15:12.864297Z[0m [32m INFO[0m [2mWyzeSenseRS[0m[2m:[0m STATE EVENT: MAC=77A8C793, Data=Motion { is_active: true }

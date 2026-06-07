@@ -2,6 +2,7 @@
 
 # Log files
 *.log
+!tests/captures/logs/*.log
 
 # Capture files (recorded by --capture flag)
 *.jsonl

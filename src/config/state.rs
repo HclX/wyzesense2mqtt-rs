@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::fs::{self, File};
 use std::io::{Write, Read};
@@ -24,7 +24,7 @@ fn default_battery() -> Option<u8> {
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq)]
 pub struct SystemState {
-    pub sensors: HashMap<String, PersistedSensorState>,
+    pub sensors: BTreeMap<String, PersistedSensorState>,
 }
 
 impl SystemState {
