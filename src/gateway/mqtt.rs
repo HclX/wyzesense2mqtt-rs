@@ -22,6 +22,7 @@ pub struct MqttGateway {
     topic_root: String,
     published_discovery: Arc<tokio::sync::Mutex<HashSet<String>>>,
     sensor_manager: Arc<Mutex<SensorManager>>,
+    broadcast_tx: tokio::sync::broadcast::Sender<()>,
 }
 
 impl MqttGateway {
@@ -31,6 +32,7 @@ impl MqttGateway {
         cmd_tx: mpsc::Sender<GatewayCommand>,
         topic_root: String,
         sensor_manager: Arc<Mutex<SensorManager>>,
+        broadcast_tx: tokio::sync::broadcast::Sender<()>,
     ) -> Self {
         mqtt_options.set_clean_start(false);
         let mut connect_props = rumqttc::v5::mqttbytes::v5::ConnectProperties::default();
@@ -47,6 +49,7 @@ impl MqttGateway {
             topic_root,
             published_discovery: Arc::new(tokio::sync::Mutex::new(HashSet::new())),
             sensor_manager,
+            broadcast_tx,
         }
     }
 
@@ -113,6 +116,7 @@ impl MqttGateway {
         let topic_root = self.topic_root.clone();
         let published_discovery = self.published_discovery.clone();
         let sensor_manager_worker = self.sensor_manager.clone();
+        let broadcast_tx = self.broadcast_tx.clone();
 
         loop {
             if let Some(event) = event_rx.recv().await {
@@ -124,6 +128,7 @@ impl MqttGateway {
                 {
                     let mut manager = sensor_manager_worker.lock().unwrap();
                     if manager.dispatch_event(&event) {
+                        let _ = broadcast_tx.send(());
                         if let Some(sensor) = manager.get_sensors().get(&event.mac) {
                             is_online = sensor.is_online;
                         }

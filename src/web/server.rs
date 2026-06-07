@@ -7,11 +7,14 @@ use serde_json::json;
 use axum::{
     extract::{Path, State},
     http::StatusCode,
-    response::{Html, IntoResponse},
+    response::{Html, IntoResponse, sse::{Event, Sse}},
     routing::{delete, get, post},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
+use tokio_stream::wrappers::BroadcastStream;
+use tokio_stream::StreamExt;
+use std::convert::Infallible;
 use std::sync::Arc;
 use std::net::SocketAddr;
 use tokio::sync::Mutex;
@@ -23,6 +26,7 @@ use crate::protocol::sensor::SensorManager;
 pub struct WebState<T: AsyncTransport> {
     pub engine: Arc<Mutex<Engine<T>>>,
     pub sensor_manager: Arc<std::sync::Mutex<SensorManager>>,
+    pub broadcast_tx: tokio::sync::broadcast::Sender<()>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -73,11 +77,13 @@ pub struct RawPacketResponse {
 pub async fn start_web_server<T: AsyncTransport + Clone + 'static>(
     engine: Engine<T>,
     sensor_manager: Arc<std::sync::Mutex<SensorManager>>,
+    broadcast_tx: tokio::sync::broadcast::Sender<()>,
     port: u16,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let shared_state = Arc::new(WebState {
         engine: Arc::new(Mutex::new(engine)),
         sensor_manager,
+        broadcast_tx,
     });
 
     let cors = CorsLayer::new()
@@ -96,6 +102,7 @@ pub async fn start_web_server<T: AsyncTransport + Clone + 'static>(
         .route("/api/chime/:mac", post(trigger_chime::<T>))
         .route("/api/fix", post(fix_sensors::<T>))
         .route("/api/raw", post(send_raw_packet::<T>))
+        .route("/api/events", get(sse_handler::<T>))
         .layer(cors)
         .with_state(shared_state);
 
@@ -110,6 +117,18 @@ pub async fn start_web_server<T: AsyncTransport + Clone + 'static>(
 // --- GET / serving HTML packed UI ---
 async fn serve_dashboard() -> impl IntoResponse {
     Html(HTML_CONTENT)
+}
+
+// --- GET /api/events ---
+async fn sse_handler<T: AsyncTransport + Clone + 'static>(
+    State(state): State<Arc<WebState<T>>>,
+) -> Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>> {
+    let rx = state.broadcast_tx.subscribe();
+    let stream = BroadcastStream::new(rx).filter_map(|res| match res {
+        Ok(_) => Some(Ok(Event::default().data("update"))),
+        Err(_) => None,
+    });
+    Sse::new(stream).keep_alive(axum::response::sse::KeepAlive::default())
 }
 
 // --- GET /api/dongle ---
@@ -190,6 +209,7 @@ async fn unpair_sensor<T: AsyncTransport + Clone + 'static>(
         Ok(_) => {
             let mut manager = state.sensor_manager.lock().unwrap();
             let _ = manager.delete_and_persist_sensor(&mac);
+            let _ = state.broadcast_tx.send(());
             (
                 StatusCode::OK,
                 Json(SuccessResponse {
@@ -218,13 +238,16 @@ async fn toggle_scan<T: AsyncTransport + Clone + 'static>(
 ) -> impl IntoResponse {
     let mut engine = state.engine.lock().await;
     match engine.set_scan(payload.enable).await {
-        Ok(_) => (
-            StatusCode::OK,
-            Json(ScanResponse {
-                scan_active: payload.enable,
-            }),
-        )
-            .into_response(),
+        Ok(_) => {
+            let _ = state.broadcast_tx.send(());
+            (
+                StatusCode::OK,
+                Json(ScanResponse {
+                    scan_active: payload.enable,
+                }),
+            )
+                .into_response()
+        },
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
@@ -289,6 +312,9 @@ async fn fix_sensors<T: AsyncTransport + Clone + 'static>(
                     }
                 }
             }
+            if !purged.is_empty() {
+                let _ = state.broadcast_tx.send(());
+            }
             (
                 StatusCode::OK,
                 Json(json!({
@@ -344,20 +370,22 @@ const HTML_CONTENT: &str = r##"
     </style>
 </head>
 <body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col">
-    <header class="border-b border-slate-800 bg-slate-900/50 backdrop-blur px-6 py-4 sticky top-0 z-50 flex items-center justify-between">
-        <div class="flex items-center space-x-3">
-            <span class="text-2xl">📡</span>
-            <h1 class="text-xl font-bold tracking-tight text-teal-400">Wyze Sense to MQTT Bridge (Rust) Control Dashboard</h1>
-        </div>
-        <div id="dongle-badge" class="flex items-center space-x-2 bg-slate-800 px-3 py-1.5 rounded-full text-xs font-semibold text-slate-400">
-            <span class="w-2 h-2 rounded-full bg-rose-500 animate-pulse" id="status-dot"></span>
-            <span id="status-text">USB Dongle Offline</span>
+    <header class="border-b border-slate-800 bg-slate-900/50 backdrop-blur sticky top-0 z-50">
+        <div class="max-w-[1400px] w-full mx-auto px-6 py-4 flex items-center justify-between">
+            <div class="flex items-center space-x-3">
+                <span class="text-2xl">📡</span>
+                <h1 class="text-xl font-bold tracking-tight text-teal-400">Wyze Sense to MQTT Bridge (Rust) Control Dashboard</h1>
+            </div>
+            <div id="dongle-badge" class="flex items-center space-x-2 bg-slate-800 px-3 py-1.5 rounded-full text-xs font-semibold text-slate-400">
+                <span class="w-2 h-2 rounded-full bg-rose-500 animate-pulse" id="status-dot"></span>
+                <span id="status-text">USB Dongle Offline</span>
+            </div>
         </div>
     </header>
 
-    <main class="flex-1 max-w-6xl w-full mx-auto p-6 grid grid-cols-1 md:grid-cols-3 gap-6">
+    <main class="flex-1 max-w-[1400px] w-full mx-auto p-6 grid grid-cols-1 lg:grid-cols-4 gap-6">
         <!-- Left Column: System State & Control -->
-        <div class="md:col-span-1 flex flex-col gap-6">
+        <div class="lg:col-span-1 flex flex-col gap-6">
             <!-- Dongle Metadata Card -->
             <div class="bg-slate-900 rounded-2xl border border-slate-800 p-6 shadow-xl">
                 <h2 class="text-lg font-bold text-teal-400 mb-4 flex items-center"><span class="mr-2">🕹️</span> Dongle Details</h2>
@@ -386,7 +414,7 @@ const HTML_CONTENT: &str = r##"
         </div>
 
         <!-- Right Column: Sensor Management & Hex Terminal -->
-        <div class="md:col-span-2 flex flex-col gap-6">
+        <div class="lg:col-span-3 flex flex-col gap-6">
             <!-- Active Sensors List -->
             <div class="bg-slate-900 rounded-2xl border border-slate-800 p-6 shadow-xl">
                 <div class="flex items-center justify-between mb-4">
@@ -399,6 +427,7 @@ const HTML_CONTENT: &str = r##"
                             <tr>
                                 <th class="py-3.5 px-4">MAC Key</th>
                                 <th class="py-3.5 px-4">Type</th>
+                                <th class="py-3.5 px-4">State</th>
                                 <th class="py-3.5 px-4">Version</th>
                                 <th class="py-3.5 px-4">Battery</th>
                                 <th class="py-3.5 px-4">Signal</th>
@@ -509,6 +538,44 @@ const HTML_CONTENT: &str = r##"
                         typeBadge = `<span class="px-2.5 py-1 rounded-full text-xs font-semibold border border-purple-950 bg-purple-950/20 text-purple-400 capitalize">🏃 Motion</span>`;
                     }
 
+                    // Formulate State Badge
+                    let stateBadge = `<span class="text-slate-500 italic">Unknown</span>`;
+                    if (sensor.state) {
+                        switch (sensor.state.kind) {
+                            case "Contact":
+                                if (sensor.state.is_open) {
+                                    stateBadge = `<span class="text-rose-400 font-bold">Open</span>`;
+                                } else {
+                                    stateBadge = `<span class="text-emerald-400 font-bold">Closed</span>`;
+                                }
+                                break;
+                            case "Motion":
+                                if (sensor.state.is_active) {
+                                    stateBadge = `<span class="text-rose-400 font-bold">Active</span>`;
+                                } else {
+                                    stateBadge = `<span class="text-emerald-400 font-bold">Clear</span>`;
+                                }
+                                break;
+                            case "Leak":
+                                if (sensor.state.is_wet) {
+                                    stateBadge = `<span class="text-blue-400 font-bold">Wet</span>`;
+                                } else {
+                                    stateBadge = `<span class="text-emerald-400 font-bold">Dry</span>`;
+                                }
+                                break;
+                            case "Climate":
+                                stateBadge = `<span class="text-cyan-400 font-mono">${sensor.state.temperature}°C / ${sensor.state.humidity}%</span>`;
+                                break;
+                            case "Chime":
+                                stateBadge = `<span class="text-slate-400">Ready</span>`;
+                                break;
+                            case "Unknown":
+                            default:
+                                stateBadge = `<span class="text-slate-500 italic">Unknown</span>`;
+                                break;
+                        }
+                    }
+
                     // Formulate Actions column buttons dynamically!
                     let actionsHtml = `<button onclick="unpairSensor('${sensor.mac}')" class="text-xs py-1.5 px-3 rounded-lg bg-rose-950 hover:bg-rose-900 text-rose-400 transition">Unpair</button>`;
                     if (sensor.sensor_type === "chime" || sensor.sensor_type === "Chime") {
@@ -523,6 +590,7 @@ const HTML_CONTENT: &str = r##"
                     tr.innerHTML = `
                         <td class="py-3.5 px-4 font-mono font-semibold text-teal-400">${sensor.mac}</td>
                         <td class="py-3.5 px-4">${typeBadge}</td>
+                        <td class="py-3.5 px-4">${stateBadge}</td>
                         <td class="py-3.5 px-4 font-mono text-xs text-slate-400">${sensor.version}</td>
                         <td class="py-3.5 px-4">${batteryBadge}</td>
                         <td class="py-3.5 px-4">${signalBadge}</td>
@@ -745,7 +813,15 @@ const HTML_CONTENT: &str = r##"
         // Startup Loaders
         loadDongleDetails();
         loadSensors();
-        setInterval(syncScanState, 3000);
+        
+        // SSE Listener for real-time updates
+        const evtSource = new EventSource(`${API_BASE}/api/events`);
+        evtSource.onmessage = (event) => {
+            if (event.data === "update") {
+                loadCachedSensors();
+                syncScanState();
+            }
+        };
     </script>
 </body>
 </html>

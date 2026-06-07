@@ -238,6 +238,9 @@ async fn run_daemon<T: wyzesense2mqtt_rs::transport::AsyncTransport + Clone + 's
     // Setup mpsc channels for MQTT gateway command callbacks
     let (gateway_cmd_tx, mut gateway_cmd_rx) = mpsc::channel::<GatewayCommand>(32);
 
+    // Setup broadcast channel for Web UI SSE (Server-Sent Events)
+    let (broadcast_tx, _broadcast_rx) = tokio::sync::broadcast::channel::<()>(16);
+
     // Instantiate the core engine
     let state_path = "state/state.yaml";
     let config_path = "config/sensors.yaml";
@@ -376,6 +379,7 @@ async fn run_daemon<T: wyzesense2mqtt_rs::transport::AsyncTransport + Clone + 's
                 gateway_cmd_tx,
                 config.mqtt.self_topic_root.clone(),
                 Arc::clone(&sensor_manager),
+                broadcast_tx.clone(),
             );
 
             // Spawn MQTT bridge in background
@@ -388,11 +392,20 @@ async fn run_daemon<T: wyzesense2mqtt_rs::transport::AsyncTransport + Clone + 's
         }
     } else {
         info!("MQTT Gateway is disabled. Serving Web Control Panel only.");
-        // Drain the event receiver task so it doesn't backpressure the engine
+        // Drain the event receiver task and dispatch events to the sensor manager
         let mut drain_rx = event_rx;
+        let sensor_manager_drain = Arc::clone(&sensor_manager);
+        let broadcast_tx_drain = broadcast_tx.clone();
         tokio::spawn(async move {
             while let Some(evt) = drain_rx.recv().await {
                 info!("STATE EVENT: MAC={}, Data={:?}", evt.mac, evt.data);
+                let changed = {
+                    let mut manager = sensor_manager_drain.lock().unwrap();
+                    manager.dispatch_event(&evt)
+                };
+                if changed {
+                    let _ = broadcast_tx_drain.send(());
+                }
             }
         });
     }
@@ -420,7 +433,7 @@ async fn run_daemon<T: wyzesense2mqtt_rs::transport::AsyncTransport + Clone + 's
 
     // Route B: Web REST Control Server (if enabled)
     if config.web.enabled {
-        start_web_server(engine, Arc::clone(&sensor_manager), config.web.port).await?;
+        start_web_server(engine, Arc::clone(&sensor_manager), broadcast_tx.clone(), config.web.port).await?;
     } else {
         info!("Web Panel is disabled. Running in headless daemon mode.");
         if let Some(handle) = mqtt_gateway_handle {

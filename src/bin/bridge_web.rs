@@ -65,12 +65,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     // 4. Setup dynamic event channel (we discard them or just print them in the log since this is the control web console)
     let (event_tx, mut event_rx) = mpsc::channel::<DongleEvent>(128);
-
-    tokio::spawn(async move {
-        while let Some(evt) = event_rx.recv().await {
-            info!("STATE EVENT [{}]: {:?}", evt.mac, evt.data);
-        }
-    });
+    let (broadcast_tx, _broadcast_rx) = tokio::sync::broadcast::channel::<()>(16);
 
     // 5. Instantiate the engine and SensorManager
     let mut engine = Engine::new(transport, event_tx, None);
@@ -78,6 +73,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         "config/sensors.yaml".to_string(),
         "config/state.yaml".to_string(),
     )));
+
+    let sensor_manager_clone = Arc::clone(&sensor_manager);
+    let broadcast_tx_clone = broadcast_tx.clone();
+    tokio::spawn(async move {
+        while let Some(evt) = event_rx.recv().await {
+            info!("STATE EVENT [{}]: {:?}", evt.mac, evt.data);
+            let changed = {
+                let mut manager = sensor_manager_clone.lock().unwrap();
+                manager.dispatch_event(&evt)
+            };
+            if changed {
+                let _ = broadcast_tx_clone.send(());
+            }
+        }
+    });
 
     // Start background worker loop
     let _exit_tx = engine.start();
@@ -96,7 +106,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     }
 
     // 7. Start HTTP REST Web UI blocking thread
-    start_web_server(engine, sensor_manager, port).await?;
+    start_web_server(engine, sensor_manager, broadcast_tx, port).await?;
 
     Ok(())
 }
