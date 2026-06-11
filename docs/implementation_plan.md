@@ -23,8 +23,20 @@ This document maps out the step-by-step development phases for **WyzeSenseRS**. 
    - Write code to calculate and validate checksums.
 
 3. **Telemetry Types (`src/protocol/telemetry.rs`):**
-   - Define `SensorTelemetry` enum variants (`Contact`, `Motion`, `Leak`, `Climate`, `Heartbeat`).
+   - Define `TelemetryData` enum variants:
+     - `Heartbeat` — battery, rssi, die temperature (°C from `AON_BATMON:TEMP`), event sequence counter
+     - `Alarm` — battery, rssi, state, die temperature, event sequence
+     - `AlarmData` — rssi, 12-byte ring buffer of per-slot alarm event counts (0xAB, Motion V1 only)
+     - `Climate` — battery, rssi, temperature (°C), humidity (%)
+     - `Leak` — battery, rssi, state, probe state, probe available
+     - `Scanned` — firmware version
+     - `Offline` — synthetic event for availability timeout
+     - `UnknownEvent` — raw bytes for unrecognized event types
    - Write decoder functions mapping byte array slices into specific telemetry variants.
+   - Battery byte is voltage-proportional (`raw / 32.0` V), not a percentage.
+     Per-chemistry discharge curves in `src/protocol/battery.rs` convert to capacity %.
+   - RSSI byte is dongle-appended (not part of the sensor's RF payload).
+   - Known but rare event types: `0xD1` (Extended Data), `0xE1` (Extended Event), `0xE3` (Extended Status).
 
 4. **Unit Tests:**
    - Write tests using hardcoded hex byte arrays of known events (e.g. Contact Sensor Open, Motion Sensor Active, Climate data) to assert correct structural parsing.

@@ -1,5 +1,13 @@
 # Wyze Sense to MQTT Bridge (Rust): Object-Oriented Refactoring Design
 
+> [!WARNING]
+> **Superseded Document.** This design proposed a trait-based polymorphic architecture
+> (`Box<dyn WyzeSensor>` with separate `ContactSensor`, `MotionSensor`, etc. structs).
+> The project instead adopted a **unified struct + tagged enum** composition design,
+> documented in [`DESIGN.md`](../DESIGN.md). That design uses a single `WyzeSensor` struct
+> with a `SensorState` enum for type-specific state, which is simpler, more performant,
+> and avoids `dyn` dispatch overhead. This document is preserved for historical reference only.
+
 This document outlines the architectural blueprint for refactoring **Wyze Sense to MQTT Bridge (Rust)** from a legacy Python-mapped structure into an idiomatic, type-safe, and modular Object-Oriented Design (OOD) utilizing Rust's trait-based polymorphic system.
 
 ---
