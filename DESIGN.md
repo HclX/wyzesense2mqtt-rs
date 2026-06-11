@@ -94,6 +94,8 @@ classDiagram
         +timeout_sec: u64
         +battery_pct: Option~u8~
         +rssi_dbm: i8
+        +die_temperature_c: Option~i8~
+        +event_sequence: Option~u16~
         +sw_version: String
         +is_online: bool
         +last_seen: u64

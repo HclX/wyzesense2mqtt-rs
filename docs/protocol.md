@@ -135,7 +135,7 @@ When the full command word is `0x53FF` (Async ACK):
 
 | Notification | Code | Description |
 | :--- | :--- | :--- |
-| **Sensor Alarm** | `0x5319` | Telemetry event (heartbeat, alarm, climate). See Section 6. |
+| **Sensor Alarm** | `0x5319` | Telemetry event (heartbeat, alarm, alarm data, climate). See Section 6. |
 | **Sensor Scan** | `0x5320` | New sensor detected during scan mode. See Section 5.2. |
 | **Time Sync Request** | `0x5332` | Dongle requests current time. Host must reply with `0x5333`. |
 | **Event Log** | `0x5335` | Dongle log entry (informational, can be ignored). |
@@ -231,7 +231,7 @@ All standard telemetry events arrive via `0x5319`. The payload has an **18-byte 
 | Offset | Size | Name | Description |
 | :--- | :--- | :--- | :--- |
 | **0..8** | 8 | **Timestamp** | Big-endian `u64` millisecond Unix epoch. Divide by 1000.0 for seconds. |
-| **8** | 1 | **Event Type** | `0xA1` Heartbeat, `0xA2` Alarm, `0xE8` Climate. |
+| **8** | 1 | **Event Type** | `0xA1` Heartbeat, `0xA2` Alarm, `0xAB` Alarm Data, `0xE8` Climate. See Section 6.2–6.5. |
 | **9..17** | 8 | **Sensor MAC** | 8-byte ASCII MAC string. |
 | **17** | 1 | **Sensor Type** | See Sensor Type Table below. |
 
@@ -252,25 +252,27 @@ All standard telemetry events arrive via `0x5319`. The payload has an **18-byte 
 The event data following the 18-byte header is **8 bytes**, unpacked as format `>BBBBBHB`:
 
 ```
-+--------------+--------------+--------------+--------------+--------------+-------------------+-------------------+
-| DataType(1B) | Battery(1B)  | Unknown(1B)  | Unknown(1B)  | State (1B)   | Sequence (2B, BE) | Signal Str. (1B)  |
-+--------------+--------------+--------------+--------------+--------------+-------------------+-------------------+
- 0              1              2              3              4              5                    7
++--------------------+--------------+--------------+--------------+--------------+-------------------+-------------------+
+| Die Temp °C (1B)   | Battery(1B)  | Unknown(1B)  | Unknown(1B)  | State (1B)   | Sequence (2B, BE) | Signal Str. (1B)  |
++--------------------+--------------+--------------+--------------+--------------+-------------------+-------------------+
+ 0                    1              2              3              4              5                    7
 ```
 
 | Offset | Size | Field | Description |
 | :--- | :--- | :--- | :--- |
-| **0** | 1 | **Data Type** | Event subtype marker (e.g., `0x14`, `0x19`). Informational only. |
-| **1** | 1 | **Battery** | Battery percentage (0–100). For Contact V2 (`0x0E`): raw value is **doubled** (`min(100, raw * 2)`) because it uses a single 1.5V battery. |
+| **0** | 1 | **Die Temperature** | On-chip die temperature in °C, sourced from `AON_BATMON:TEMP` register. Signed value. Replaces previously-labeled "Data Type" field. |
+| **1** | 1 | **Battery** | Raw voltage-proportional byte from `AON_BATMON:BAT >> 3`. **NOT a percentage.** Convert to voltage: `V = raw / 32.0` (0.03125V per unit). For Contact V2 (`0x0E`): value is **doubled** (`min(100, raw * 2)`) because it uses a single 1.5V AAA battery at half-scale. See the battery module for per-chemistry discharge curve lookup. |
 | **2** | 1 | **Unknown** | Reserved/unknown byte. |
 | **3** | 1 | **Unknown** | Reserved/unknown byte. |
 | **4** | 1 | **State** | Binary sensor state. See Sensor Type Table for state mapping. Only meaningful for Alarm events (`0xA2`). |
-| **5..7** | 2 | **Sequence** | Big-endian `u16` packet sequence number. |
-| **7** | 1 | **Signal Strength** | Unsigned RSSI value. Decoded dBm = `-raw_value`. |
+| **5..7** | 2 | **Event Sequence** | Big-endian `u16` monotonic counter. Increments by 1 per event, does NOT reset on reboot. Useful for detecting dropped packets. |
+| **7** | 1 | **Signal Strength** | Unsigned RSSI value. Decoded dBm = `-raw_value`. **Note**: This byte is appended by the dongle, not transmitted by the sensor — it represents the dongle's receive signal strength for this packet. |
 
 > **⚠️ Previous Documentation Error**: The state byte is at **offset 4**, NOT offset 2. The Python reference implementation confirms this via `struct.unpack_from(">BBBBBHB", data)` where state is the **5th** unpacked field. Offsets 2 and 3 are unknown/reserved bytes.
 
-**Heartbeat (`0xA1`)**: Uses the same 8-byte structure but the `State` field is not semantically used. Only `Battery` and `Signal Strength` are meaningful.
+> **📡 RSSI Clarification**: The signal strength byte at offset 7 is **dongle-appended** — it is NOT part of the sensor's over-the-air RF payload. The dongle measures the received signal strength and appends it to the event data before forwarding over USB.
+
+**Heartbeat (`0xA1`)**: Uses the same 8-byte structure but the `State` field is not semantically used. `Die Temperature`, `Battery`, `Event Sequence`, and `Signal Strength` are all valid.
 
 **Alarm (`0xA2`)**: All fields are meaningful. The `State` field indicates the current binary state of the sensor.
 
@@ -283,12 +285,33 @@ Payload: [00,00,00,00,00,00,00,00, a2, 37,37,41,38,43,37,39,33, 02, 14,5c,00,01,
 Event Data: [14, 5c, 00, 01, 00, 00, 12, 3c]
              DT  Bat  ??   ??  St   Seq---  RSSI
              
-  Battery:  0x5C = 92%
-  State:    0x00 = Inactive (at offset 4)
-  RSSI:     0x3C = 60 → -60 dBm
+  Die Temp:   0x14 = 20°C
+  Battery:    0x5C = raw 92 → voltage = 92/32.0 = 2.875V
+  State:      0x00 = Inactive (at offset 4)
+  Sequence:   0x0012 = 18 (monotonic, non-resetting)
+  RSSI:       0x3C = 60 → -60 dBm (dongle-measured)
 ```
 
-### 6.3 Climate Event Data (`0xE8`)
+### 6.3 Alarm Data Event (`0xAB`)
+
+Alarm Data packets carry a **12-byte ring buffer** of historical alarm event counts per time slot. Only observed from Motion V1 sensors.
+
+The event data following the 18-byte header:
+
+```
++-------------------+---------------------------------------------------------------------------+-------------------+
+| Unknown (1B)      | Ring Buffer (12 Bytes)                                                    | Signal Str. (1B)  |
++-------------------+---------------------------------------------------------------------------+-------------------+
+ 0                   1                                                                            13
+```
+
+| Offset | Size | Field | Description |
+| :--- | :--- | :--- | :--- |
+| **0** | 1 | **Unknown** | Reserved/unknown byte. |
+| **1..13** | 12 | **Ring Buffer** | 12 slots, each containing the count of alarm events in that time interval. |
+| **13** | 1 | **Signal Strength** | Unsigned RSSI. Dongle-appended. dBm = `-raw_value`. |
+
+### 6.4 Climate Event Data (`0xE8`)
 
 The event data is **10 bytes**, unpacked as format `>BBBBBBBBBB`:
 
@@ -301,11 +324,11 @@ The event data is **10 bytes**, unpacked as format `>BBBBBBBBBB`:
 
 | Offset | Size | Field | Description |
 | :--- | :--- | :--- | :--- |
-| **1** | 1 | Battery | Battery percentage. |
+| **1** | 1 | Battery | Raw voltage-proportional byte (same encoding as §6.2). |
 | **4** | 1 | Temp Hi | Temperature integer part (°C). |
 | **5** | 1 | Temp Lo | Temperature decimal part. |
 | **6** | 1 | Humidity | Humidity percentage. |
-| **9** | 1 | Signal Strength | Unsigned RSSI. dBm = `-raw_value`. |
+| **9** | 1 | Signal Strength | Unsigned RSSI. Dongle-appended. dBm = `-raw_value`. |
 
 **Temperature Decoding**: `temperature_celsius = temp_hi + (temp_lo / 100.0)`
 
@@ -314,13 +337,13 @@ The event data is **10 bytes**, unpacked as format `>BBBBBBBBBB`:
 Alarm1 Payload: [...header..., 18, 5f, 00, 03, 15, 2e, 30, 11, 36, 26]
                                DT  Bat  ??   ??  TH   TL   Hum  ??  Seq  RSSI
 
-  Battery:     0x5F = 95%
+  Battery:     0x5F = raw 95 → voltage = 95/32.0 = 2.969V
   Temperature: 0x15 + (0x2E / 100) = 21 + 0.46 = 21.46°C
   Humidity:    0x30 = 48%
-  RSSI:        0x26 = 38 → -38 dBm
+  RSSI:        0x26 = 38 → -38 dBm (dongle-measured)
 ```
 
-### 6.4 Alarm2 — `NOTIFY_SENSOR_ALARM2` (`0x5355`)
+### 6.5 Alarm2 — `NOTIFY_SENSOR_ALARM2` (`0x5355`)
 
 Alarm2 packets are used for **Leak Sensor** events. They have a different header format — **no timestamp** field. The current system time should be used instead.
 
@@ -346,11 +369,11 @@ Unpacked as format `>BBBBBBBBBBB`:
 
 | Offset | Size | Field | Description |
 | :--- | :--- | :--- | :--- |
-| **2** | 1 | Battery | Battery percentage. |
+| **2** | 1 | Battery | Raw voltage-proportional byte (same encoding as §6.2). |
 | **5** | 1 | State | `0x00`=Dry, `0x01`=Wet. |
 | **6** | 1 | Probe State | `0x00`=Dry, `0x01`=Wet (external probe). |
 | **7** | 1 | Probe Available | `0x00`=No probe, `0x01`=Probe connected. |
-| **10** | 1 | Signal Strength | Unsigned RSSI. dBm = `-raw_value`. |
+| **10** | 1 | Signal Strength | Unsigned RSSI. Dongle-appended. dBm = `-raw_value`. |
 
 ---
 
