@@ -51,6 +51,10 @@ pub struct WyzeSensor {
 
     // --- Common telemetry (uniform across all types) ---
     pub battery_pct: Option<u8>, // None for mains-powered devices (e.g., Chime)
+    /// Raw battery register byte from AON_BATMON:BAT >> 3. Voltage = raw / 32.0.
+    /// Stored for diagnostic purposes; battery_pct is derived from this via
+    /// per-chemistry discharge curve lookup.
+    pub battery_raw: Option<u8>,
     pub rssi_dbm: i8,
     /// On-chip die temperature in °C (from AON_BATMON:TEMP). This is the
     /// temperature of the sensor's CC1310 MCU die, NOT ambient temperature.
@@ -113,6 +117,24 @@ fn push_common_discovery_payloads(
                 "entity_category": "diagnostic",
             })
         ));
+
+        // Raw battery voltage diagnostic entity (V = AON_BATMON:BAT >> 3 / 32.0)
+        payloads.push((
+            format!("homeassistant/sensor/{}/battery_voltage/config", device_id),
+            json!({
+                "name": "Battery Voltage",
+                "state_topic": state_topic,
+                "value_template": "{{ value_json.battery_voltage }}",
+                "device_class": "voltage",
+                "unit_of_measurement": "V",
+                "state_class": "measurement",
+                "unique_id": format!("{}_battery_voltage", device_id),
+                "device": device,
+                "availability": availability,
+                "availability_mode": "all",
+                "entity_category": "diagnostic",
+            })
+        ));
     }
 
     payloads.push((
@@ -148,6 +170,7 @@ impl WyzeSensor {
             friendly_name,
             timeout_sec: default_timeout,
             battery_pct: default_battery,
+            battery_raw: None,
             rssi_dbm: -60,
             die_temperature_c: None,
             event_sequence: None,
@@ -214,6 +237,7 @@ impl WyzeSensor {
         if let (Some(b), Some(r)) = (battery, rssi) {
             // Only update battery for battery-powered devices
             if self.battery_pct.is_some() {
+                self.battery_raw = Some(b);
                 let pct = match BatteryChemistry::for_sensor(self.sensor_type) {
                     Some(chemistry) => raw_to_capacity(b, chemistry),
                     None => b.min(100), // Unknown chemistry: pass through raw
@@ -322,6 +346,10 @@ impl WyzeSensor {
         // Include battery only for battery-powered devices
         if let Some(battery) = self.battery_pct {
             payload["battery"] = json!(battery);
+        }
+        // Include raw battery voltage for diagnostics (V = raw / 32.0)
+        if let Some(raw) = self.battery_raw {
+            payload["battery_voltage"] = json!(format!("{:.2}", raw as f32 / 32.0));
         }
         // Merge type-specific fields
         match &self.state {
