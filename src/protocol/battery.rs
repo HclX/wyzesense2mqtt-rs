@@ -1,9 +1,14 @@
 //! Battery voltage-to-capacity conversion curves.
 //!
-//! The raw battery byte from Wyze sensors is proportional to voltage, not remaining
-//! capacity. Since battery discharge curves are non-linear (especially lithium coin
-//! cells which maintain a voltage plateau then drop steeply), reporting the raw value
-//! as a percentage is misleading — a sensor can show "70%" and die shortly after.
+//! The raw battery byte from Wyze sensors represents `AON_BATMON:BAT >> 3`,
+//! where BAT is the CC1310's battery monitor register in INT.FRAC format
+//! (bits[10:8] = integer volts 0–4, bits[7:0] = fractional 1/256V).
+//! Therefore: `voltage = raw / 32.0` (i.e. 0.03125V per unit).
+//!
+//! Since battery discharge curves are non-linear (especially lithium coin
+//! cells which maintain a voltage plateau then drop steeply), reporting the raw
+//! value as a percentage is misleading — a sensor can show "70%" and die shortly
+//! after.
 //!
 //! This module provides per-chemistry piecewise-linear discharge curves to convert
 //! the voltage-proportional raw byte into an approximate remaining capacity percentage.
@@ -53,37 +58,40 @@ impl BatteryChemistry {
 /// Discharge curve lookup tables: (raw_byte, capacity_percent).
 /// Points are in descending order of raw value.
 ///
-/// Raw byte ≈ voltage / 0.03, so raw 100 ≈ 3.0V, raw 50 ≈ 1.5V.
+/// Hardware conversion (from firmware RE, §6.4):
+///   raw = AON_BATMON:BAT >> 3
+///   voltage = raw / 32.0
+///   raw = round(voltage × 32)
 
 // 3V lithium coin cell: very flat plateau, then steep cliff
 const LITHIUM_3V_CURVE: &[(u8, u8)] = &[
-    (100, 100),  // 3.00V — fresh
-    (97,  80),   // 2.90V — still on plateau
-    (93,  50),   // 2.80V — plateau ending
-    (90,  20),   // 2.70V — dropping fast
-    (87,  10),   // 2.60V — very low
-    (83,   5),   // 2.50V — critical
-    (70,   0),   // 2.10V — dead
+    (99, 100),   // 3.09V — fresh (3.0V nominal = 96)
+    (93,  80),   // 2.91V — still on plateau
+    (90,  50),   // 2.81V — plateau ending
+    (86,  20),   // 2.69V — dropping fast
+    (83,  10),   // 2.59V — very low
+    (80,   5),   // 2.50V — critical
+    (67,   0),   // 2.09V — dead
 ];
 
 // Single AAA (1.5V): reports at half-scale, gradual slope
 const ALKALINE_1V5_CURVE: &[(u8, u8)] = &[
-    (50, 100),   // 1.50V — fresh
-    (47,  80),   // 1.40V
-    (43,  50),   // 1.30V
-    (40,  25),   // 1.20V
-    (37,  10),   // 1.10V
-    (33,   0),   // 1.00V — dead
+    (50, 100),   // 1.56V — fresh
+    (45,  80),   // 1.41V
+    (42,  50),   // 1.31V
+    (38,  25),   // 1.19V
+    (35,  10),   // 1.09V
+    (32,   0),   // 1.00V — dead
 ];
 
 // Dual AAA (3V total): alkaline but at 3V scale
 const ALKALINE_3V_CURVE: &[(u8, u8)] = &[
-    (100, 100),  // 3.00V — fresh
-    (93,  80),   // 2.80V
-    (87,  50),   // 2.60V
-    (80,  25),   // 2.40V
-    (73,  10),   // 2.20V
-    (67,   0),   // 2.00V — dead
+    (99, 100),   // 3.09V — fresh
+    (90,  80),   // 2.81V
+    (83,  50),   // 2.59V
+    (77,  25),   // 2.41V
+    (70,  10),   // 2.19V
+    (64,   0),   // 2.00V — dead
 ];
 
 /// Convert a raw voltage-proportional battery byte to estimated remaining capacity.
@@ -131,37 +139,37 @@ mod tests {
 
     #[test]
     fn coin_cell_full_battery() {
-        assert_eq!(raw_to_capacity(100, BatteryChemistry::Lithium3VCoinCell), 100);
+        assert_eq!(raw_to_capacity(99, BatteryChemistry::Lithium3VCoinCell), 100);
         // Above max raw still returns 100
         assert_eq!(raw_to_capacity(120, BatteryChemistry::Lithium3VCoinCell), 100);
     }
 
     #[test]
     fn coin_cell_dead_battery() {
-        assert_eq!(raw_to_capacity(70, BatteryChemistry::Lithium3VCoinCell), 0);
+        assert_eq!(raw_to_capacity(67, BatteryChemistry::Lithium3VCoinCell), 0);
         assert_eq!(raw_to_capacity(50, BatteryChemistry::Lithium3VCoinCell), 0);
     }
 
     #[test]
     fn coin_cell_plateau_stays_high() {
-        // On the plateau (raw 97–100), capacity should be high
-        assert!(raw_to_capacity(98, BatteryChemistry::Lithium3VCoinCell) >= 80);
+        // On the plateau (raw 93–99), capacity should be high
+        assert!(raw_to_capacity(95, BatteryChemistry::Lithium3VCoinCell) >= 80);
     }
 
     #[test]
     fn coin_cell_drops_steeply() {
-        // raw 90 should be much lower than raw 93 — steep cliff
-        let cap_93 = raw_to_capacity(93, BatteryChemistry::Lithium3VCoinCell);
+        // raw 86 should be much lower than raw 90 — steep cliff
         let cap_90 = raw_to_capacity(90, BatteryChemistry::Lithium3VCoinCell);
-        assert_eq!(cap_93, 50);
-        assert_eq!(cap_90, 20);
+        let cap_86 = raw_to_capacity(86, BatteryChemistry::Lithium3VCoinCell);
+        assert_eq!(cap_90, 50);
+        assert_eq!(cap_86, 20);
     }
 
     #[test]
     fn coin_cell_interpolation() {
-        // raw 95 is between (97,80) and (93,50) → should be ~65
-        let cap = raw_to_capacity(95, BatteryChemistry::Lithium3VCoinCell);
-        assert!(cap >= 60 && cap <= 70, "raw=95 → expected ~65, got {}", cap);
+        // raw 91 is between (93,80) and (90,50) → should be ~60
+        let cap = raw_to_capacity(91, BatteryChemistry::Lithium3VCoinCell);
+        assert!(cap >= 55 && cap <= 65, "raw=91 → expected ~60, got {}", cap);
     }
 
     // --- Single AAA curve ---
@@ -173,24 +181,24 @@ mod tests {
 
     #[test]
     fn single_aaa_dead() {
-        assert_eq!(raw_to_capacity(33, BatteryChemistry::Alkaline1V5SingleAAA), 0);
+        assert_eq!(raw_to_capacity(32, BatteryChemistry::Alkaline1V5SingleAAA), 0);
     }
 
     #[test]
     fn single_aaa_midpoint() {
-        assert_eq!(raw_to_capacity(43, BatteryChemistry::Alkaline1V5SingleAAA), 50);
+        assert_eq!(raw_to_capacity(42, BatteryChemistry::Alkaline1V5SingleAAA), 50);
     }
 
     // --- Dual AAA curve ---
 
     #[test]
     fn dual_aaa_full() {
-        assert_eq!(raw_to_capacity(100, BatteryChemistry::Alkaline3VDualAAA), 100);
+        assert_eq!(raw_to_capacity(99, BatteryChemistry::Alkaline3VDualAAA), 100);
     }
 
     #[test]
     fn dual_aaa_dead() {
-        assert_eq!(raw_to_capacity(67, BatteryChemistry::Alkaline3VDualAAA), 0);
+        assert_eq!(raw_to_capacity(64, BatteryChemistry::Alkaline3VDualAAA), 0);
     }
 
     // --- Chemistry mapping ---

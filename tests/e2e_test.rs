@@ -99,8 +99,8 @@ async fn test_sensor_lifecycle_e2e() {
         0xA2, // EVENT_TYPE_ALARM
         83, 69, 78, 83, 79, 48, 48, 49, // "SENSO001"
         0x01, // ContactV1
-        0x01, // remaining[0]: data_type
-        0x5A, // remaining[1]: battery: 90%
+        0x01, // remaining[0]: die temperature °C (AON_BATMON:TEMP)
+        0x5A, // remaining[1]: battery raw (voltage = 90/32 = 2.81V)
         0x00, // remaining[2]: unknown
         0x00, // remaining[3]: unknown
         0x01, // remaining[4]: state: 1 (open) ← correct offset!
@@ -128,8 +128,8 @@ async fn test_sensor_lifecycle_e2e() {
     );
     sensor.update_from_event(&alarm_event).unwrap();
 
-    // raw 0x5A=90 on 3V coin cell curve → 20% capacity (not the misleading 90%)
-    assert_eq!(sensor.battery_pct, Some(20));
+    // raw 0x5A=90 → 2.81V on 3V coin cell curve → 50% capacity (plateau ending)
+    assert_eq!(sensor.battery_pct, Some(50));
     assert_eq!(sensor.rssi_dbm, -60);
     assert_eq!(sensor.get_state_payload()["state"], "open");
 
@@ -141,8 +141,8 @@ async fn test_sensor_lifecycle_e2e() {
         0xA1, // EVENT_TYPE_HEARTBEAT
         83, 69, 78, 83, 79, 48, 48, 49, // "SENSO001"
         0x01, // ContactV1
-        0x02, // remaining[0]: data_type
-        0x5A, // remaining[1]: battery: 90%
+        0x02, // remaining[0]: die temperature °C
+        0x5A, // remaining[1]: battery raw (voltage = 90/32 = 2.81V)
         0x00, // remaining[2]: unknown
         0x00, // remaining[3]: unknown
         0x00, // remaining[4]: state (not used for heartbeat)

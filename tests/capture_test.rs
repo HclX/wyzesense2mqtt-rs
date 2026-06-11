@@ -196,8 +196,8 @@ fn test_real_capture_climate_event_21_46c() {
     );
     sensor.update_from_event(&event).unwrap();
 
-    // raw 0x5F=95 on 3V coin cell curve → ~65% capacity
-    assert_eq!(sensor.battery_pct, Some(65));
+    // raw 0x5F=95 → 2.97V on 3V coin cell curve → ~87% capacity
+    assert_eq!(sensor.battery_pct, Some(87));
     assert_eq!(sensor.rssi_dbm, -38);
     let state = sensor.get_state_payload();
     assert_eq!(state["temperature"], "21.46");
@@ -235,8 +235,8 @@ fn test_real_capture_climate_event_25_60c() {
     );
     sensor.update_from_event(&event).unwrap();
 
-    // raw 0x5C=92 on 3V coin cell curve → ~40% capacity
-    assert_eq!(sensor.battery_pct, Some(40));
+    // raw 0x5C=92 → 2.88V on 3V coin cell curve → ~70% capacity
+    assert_eq!(sensor.battery_pct, Some(70));
     assert_eq!(sensor.rssi_dbm, -47);
     let state = sensor.get_state_payload();
     assert_eq!(state["temperature"], "25.60");
@@ -274,8 +274,8 @@ fn test_real_capture_climate_event_24_06c() {
     );
     sensor.update_from_event(&event).unwrap();
 
-    // raw 0x5F=95 on 3V coin cell curve → ~65% capacity
-    assert_eq!(sensor.battery_pct, Some(65));
+    // raw 0x5F=95 → 2.97V on 3V coin cell curve → ~87% capacity
+    assert_eq!(sensor.battery_pct, Some(87));
     assert_eq!(sensor.rssi_dbm, -45);
     let state = sensor.get_state_payload();
     assert_eq!(state["temperature"], "24.06");
@@ -313,8 +313,8 @@ fn test_real_capture_climate_event_25_09c() {
     );
     sensor.update_from_event(&event).unwrap();
 
-    // raw 0x5F=95 on 3V coin cell curve → ~65% capacity
-    assert_eq!(sensor.battery_pct, Some(65));
+    // raw 0x5F=95 → 2.97V on 3V coin cell curve → ~87% capacity
+    assert_eq!(sensor.battery_pct, Some(87));
     assert_eq!(sensor.rssi_dbm, -45);
     let state = sensor.get_state_payload();
     assert_eq!(state["temperature"], "25.09");
@@ -356,8 +356,8 @@ fn test_real_capture_full_climate_packet_with_checksum() {
     );
     sensor.update_from_event(&event).unwrap();
 
-    // raw 0x5C=92 on 3V coin cell curve → ~40% capacity
-    assert_eq!(sensor.battery_pct, Some(40));
+    // raw 0x5C=92 → 2.88V on 3V coin cell curve → ~70% capacity
+    assert_eq!(sensor.battery_pct, Some(70));
     assert_eq!(sensor.rssi_dbm, -47);
     let state = sensor.get_state_payload();
     assert_eq!(state["temperature"], "25.60");
@@ -393,8 +393,8 @@ fn test_real_capture_full_climate_packet_21_46() {
     );
     sensor.update_from_event(&event).unwrap();
 
-    // raw 0x5F=95 on 3V coin cell curve → ~65% capacity
-    assert_eq!(sensor.battery_pct, Some(65));
+    // raw 0x5F=95 → 2.97V on 3V coin cell curve → ~87% capacity
+    assert_eq!(sensor.battery_pct, Some(87));
     assert_eq!(sensor.rssi_dbm, -38);
     let state = sensor.get_state_payload();
     assert_eq!(state["temperature"], "21.46");
