@@ -52,6 +52,13 @@ pub struct WyzeSensor {
     // --- Common telemetry (uniform across all types) ---
     pub battery_pct: Option<u8>, // None for mains-powered devices (e.g., Chime)
     pub rssi_dbm: i8,
+    /// On-chip die temperature in °C (from AON_BATMON:TEMP). This is the
+    /// temperature of the sensor's CC1310 MCU die, NOT ambient temperature.
+    /// Typically a few degrees warmer than ambient (§6.4 of firmware RE).
+    pub die_temperature_c: Option<i8>,
+    /// Monotonic event sequence counter. Increments by 1 per state-transition
+    /// event (NOT per reboot). Wraps at 0xFFFF (§6.6 correction #3).
+    pub event_sequence: Option<u16>,
     pub sw_version: String,
     pub is_online: bool,
     pub last_seen: u64,
@@ -142,6 +149,8 @@ impl WyzeSensor {
             timeout_sec: default_timeout,
             battery_pct: default_battery,
             rssi_dbm: -60,
+            die_temperature_c: None,
+            event_sequence: None,
             sw_version: "unknown".to_string(),
             is_online: true,
             last_seen: SystemTime::now()
@@ -187,13 +196,19 @@ impl WyzeSensor {
             .unwrap_or_default()
             .as_secs();
 
-        let (battery, rssi) = match &event.data {
-            TelemetryData::Heartbeat { battery, rssi } => (Some(*battery), Some(*rssi)),
-            TelemetryData::Alarm { battery, rssi, .. } => (Some(*battery), Some(*rssi)),
-            TelemetryData::Climate { battery, rssi, .. } => (Some(*battery), Some(*rssi)),
-            TelemetryData::Leak { battery, rssi, .. } => (Some(*battery), Some(*rssi)),
-            TelemetryData::Scanned { .. } => (Some(100), Some(0)),
-            _ => (None, None),
+        let (battery, rssi, die_temp, evt_seq) = match &event.data {
+            TelemetryData::Heartbeat { battery, rssi, die_temperature_c, event_sequence } =>
+                (Some(*battery), Some(*rssi), Some(*die_temperature_c), Some(*event_sequence)),
+            TelemetryData::Alarm { battery, rssi, die_temperature_c, event_sequence, .. } =>
+                (Some(*battery), Some(*rssi), Some(*die_temperature_c), Some(*event_sequence)),
+            TelemetryData::AlarmData { rssi, .. } =>
+                (None, Some(*rssi), None, None),
+            TelemetryData::Climate { battery, rssi, .. } =>
+                (Some(*battery), Some(*rssi), None, None),
+            TelemetryData::Leak { battery, rssi, .. } =>
+                (Some(*battery), Some(*rssi), None, None),
+            TelemetryData::Scanned { .. } => (Some(100), Some(0), None, None),
+            _ => (None, None, None, None),
         };
 
         if let (Some(b), Some(r)) = (battery, rssi) {
@@ -206,6 +221,12 @@ impl WyzeSensor {
                 self.battery_pct = Some(pct);
             }
             self.rssi_dbm = r;
+        }
+        if let Some(dt) = die_temp {
+            self.die_temperature_c = Some(dt);
+        }
+        if let Some(seq) = evt_seq {
+            self.event_sequence = Some(seq);
         }
     }
 
@@ -252,7 +273,8 @@ impl WyzeSensor {
             // Chime: accept all events gracefully, nothing to update
             (SensorState::Chime, _) => Ok(()),
             // Common events handled by all sensor types (including Unknown that couldn't be upgraded)
-            (_, TelemetryData::Heartbeat { .. } | TelemetryData::Scanned { .. }
+            (_, TelemetryData::Heartbeat { .. } | TelemetryData::AlarmData { .. }
+               | TelemetryData::Scanned { .. }
                | TelemetryData::Offline | TelemetryData::UnknownEvent(_)) => Ok(()),
             (state, other) => {
                 warn!("Sensor (MAC={}) with state {:?} received unexpected telemetry event: {:?}",
@@ -290,6 +312,13 @@ impl WyzeSensor {
             "sw_version": self.sw_version,
             "timestamp": self.last_seen as f64,
         });
+        // Diagnostic fields from RE analysis (§6.1, §6.4 of firmware RE summary)
+        if let Some(dt) = self.die_temperature_c {
+            payload["die_temperature"] = json!(dt);
+        }
+        if let Some(seq) = self.event_sequence {
+            payload["event_sequence"] = json!(seq);
+        }
         // Include battery only for battery-powered devices
         if let Some(battery) = self.battery_pct {
             payload["battery"] = json!(battery);
@@ -844,7 +873,7 @@ mod tests {
             timestamp: SystemTime::now(),
             sensor_type: SensorType::Unknown(0),
             event_type: DongleEvent::EVENT_TYPE_ALARM,
-            data: TelemetryData::Alarm { battery: 90, rssi: -40, state },
+            data: TelemetryData::Alarm { battery: 90, rssi: -40, state, die_temperature_c: 22, event_sequence: 0 },
         }
     }
 
@@ -874,7 +903,7 @@ mod tests {
             timestamp: SystemTime::now(),
             sensor_type: SensorType::Unknown(0),
             event_type: DongleEvent::EVENT_TYPE_HEARTBEAT,
-            data: TelemetryData::Heartbeat { battery: 90, rssi: -40 },
+            data: TelemetryData::Heartbeat { battery: 90, rssi: -40, die_temperature_c: 22, event_sequence: 0 },
         }
     }
 

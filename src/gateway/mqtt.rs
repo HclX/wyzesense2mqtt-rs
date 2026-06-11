@@ -292,6 +292,8 @@ mod tests {
                 battery: 90,
                 rssi: -60,
                 state: 1,
+                die_temperature_c: 22,
+                event_sequence: 0,
             },
         };
         sensor.update_from_event(&event).unwrap();

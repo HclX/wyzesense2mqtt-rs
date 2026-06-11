@@ -90,12 +90,31 @@ impl std::str::FromStr for SensorType {
 pub enum TelemetryData {
     Heartbeat {
         battery: u8,
+        /// RSSI in negative dBm. Dongle-appended — NOT part of the sensor's
+        /// transmitted RF payload; measured by the dongle during reception.
         rssi: i8,
+        /// On-chip die temperature in °C, read from AON_BATMON:TEMP with
+        /// battery-voltage compensation (§6.4). NOT ambient temperature;
+        /// typically a few degrees warmer than ambient.
+        die_temperature_c: i8,
+        /// Monotonic event sequence counter (16-bit BE). Increments by 1 per
+        /// state-transition event, NOT per reboot (§6.6 correction #3).
+        event_sequence: u16,
     },
     Alarm {
         battery: u8,
         rssi: i8,
         state: u8,
+        /// On-chip die temperature in °C (same source as Heartbeat).
+        die_temperature_c: i8,
+        /// Monotonic event sequence counter.
+        event_sequence: u16,
+    },
+    /// Alarm ring buffer history: 12 bytes, each representing the count of
+    /// alarm events in a time slot. Only sent by Motion V1 sensors (§6.1, 0xAB).
+    AlarmData {
+        rssi: i8,
+        ring_buffer: [u8; 12],
     },
     Climate {
         battery: u8,
@@ -127,8 +146,15 @@ pub struct DongleEvent {
 impl DongleEvent {
     pub const EVENT_TYPE_HEARTBEAT: u8 = 0xA1;
     pub const EVENT_TYPE_ALARM: u8 = 0xA2;
+    /// 0xAB: Alarm ring buffer history — 12 slots of per-interval event counts.
+    /// Only observed from Motion V1 sensors.
+    pub const EVENT_TYPE_ALARM_DATA: u8 = 0xAB;
     pub const EVENT_TYPE_CLIMATE: u8 = 0xE8;
     pub const EVENT_TYPE_LEAK: u8 = 0xEA;
+    // Documented in firmware RE (§5.10) but rare/unobserved in live captures.
+    pub const EVENT_TYPE_EXTENDED_DATA: u8 = 0xD1;
+    pub const EVENT_TYPE_EXTENDED_EVENT: u8 = 0xE1;
+    pub const EVENT_TYPE_EXTENDED_STATUS: u8 = 0xE3;
 
     /// Parses a scan event from the payload of a NOTIFY_SENSOR_SCAN (0x5320) packet.
     pub fn parse_scan(payload: &[u8]) -> Result<Self, &'static str> {
@@ -172,23 +198,58 @@ impl DongleEvent {
 
         let data = match event_type {
             Self::EVENT_TYPE_HEARTBEAT => {
+                // 0xA1 Status Report — AES-encrypted, 32B (2 blocks)
+                // remaining layout (after timestamp + event_type + MAC + sensor_type):
+                //   [0] = die temperature °C (AON_BATMON:TEMP, battery-compensated)
+                //   [1] = battery voltage (AON_BATMON:BAT >> 3, voltage ≈ byte/32.0)
+                //   [2] = config flags (typically 0x00)
+                //   [3] = marker (constant 0x01)
+                //   [4] = state/flags
+                //   [5..7] = event sequence counter (16-bit BE, monotonic +1 per event)
+                //   [7] = RSSI (dongle-appended, negate for dBm)
                 if remaining.len() < 8 {
                     return Err("Heartbeat payload too short");
                 }
+                let die_temperature_c = remaining[0] as i8;
                 let battery = remaining[1];
+                let event_sequence = u16::from_be_bytes([remaining[5], remaining[6]]);
                 let rssi = (remaining[7] as i8).saturating_neg();
-                TelemetryData::Heartbeat { battery, rssi }
+                TelemetryData::Heartbeat { battery, rssi, die_temperature_c, event_sequence }
             }
             Self::EVENT_TYPE_ALARM => {
+                // 0xA2 Registration — AES-encrypted, 32B (2 blocks)
+                // Same byte layout as 0xA1; byte[4] = sensor state (0=inactive, 1=active)
                 if remaining.len() < 8 {
                     return Err("Alarm payload too short");
                 }
+                let die_temperature_c = remaining[0] as i8;
                 let battery = remaining[1];
                 let state = remaining[4];
+                let event_sequence = u16::from_be_bytes([remaining[5], remaining[6]]);
                 let rssi = (remaining[7] as i8).saturating_neg();
-                TelemetryData::Alarm { battery, rssi, state }
+                TelemetryData::Alarm { battery, rssi, state, die_temperature_c, event_sequence }
+            }
+            Self::EVENT_TYPE_ALARM_DATA => {
+                // 0xAB Alarm Data — AES-encrypted, 32B (2 blocks)
+                // Contains a 12-byte ring buffer of per-slot alarm event counts.
+                // remaining layout:
+                //   [0..12] = ring buffer (12 bytes, each = event count per time slot)
+                //   [12..14] = flag bytes (typically 0x01, 0x01)
+                //   RSSI: last byte if present (dongle-appended)
+                if remaining.len() < 12 {
+                    return Err("AlarmData payload too short");
+                }
+                let mut ring_buffer = [0u8; 12];
+                ring_buffer.copy_from_slice(&remaining[0..12]);
+                let rssi = if remaining.len() > 12 {
+                    (remaining[remaining.len() - 1] as i8).saturating_neg()
+                } else {
+                    0
+                };
+                TelemetryData::AlarmData { rssi, ring_buffer }
             }
             Self::EVENT_TYPE_CLIMATE => {
+                // 0xE8 Climate Data — dongle-synthesized from Climate V2 sensor
                 if remaining.len() < 10 {
                     return Err("Climate payload too short");
                 }
@@ -196,6 +257,7 @@ impl DongleEvent {
                 let temp_hi = remaining[4] as i8;
                 let temp_lo = remaining[5];
                 let humidity = remaining[6];
+                // RSSI is the last byte, dongle-appended
                 let rssi = (remaining[9] as i8).saturating_neg();
                 let temperature = (temp_hi as f32) + ((temp_lo as f32) / 100.0);
                 TelemetryData::Climate {
@@ -204,6 +266,16 @@ impl DongleEvent {
                     temperature,
                     humidity,
                 }
+            }
+            Self::EVENT_TYPE_EXTENDED_DATA | Self::EVENT_TYPE_EXTENDED_EVENT
+            | Self::EVENT_TYPE_EXTENDED_STATUS => {
+                // Documented in firmware RE (§5.10) but rare/unobserved in live captures.
+                // Log at debug level and treat as unknown for now.
+                tracing::debug!(
+                    "Received known-but-unimplemented event type 0x{:02X} from {} ({} bytes)",
+                    event_type, mac, remaining.len()
+                );
+                TelemetryData::UnknownEvent(remaining.to_vec())
             }
             _ => TelemetryData::UnknownEvent(remaining.to_vec()),
         };
