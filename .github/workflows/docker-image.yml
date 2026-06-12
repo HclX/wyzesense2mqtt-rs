@@ -2,7 +2,9 @@ name: Build and Publish Docker Image
 
 on:
   push:
+    # Dev builds: every push to main
     branches: [ "main" ]
+    # Release builds: version tags (pushed only on the 'release' branch)
     tags: [ "v*.*.*" ]
   pull_request:
     branches: [ "main" ]
@@ -10,6 +12,13 @@ on:
 permissions:
   contents: read
   packages: write
+
+# If a branch push and tag push arrive for the same commit (e.g. someone
+# accidentally pushes a tag on main), cancel the earlier run so only the
+# tag-triggered build survives.
+concurrency:
+  group: docker-${{ github.sha }}
+  cancel-in-progress: true
 
 jobs:
   build:
