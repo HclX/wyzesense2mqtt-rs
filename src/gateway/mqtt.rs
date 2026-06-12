@@ -3,6 +3,7 @@ use rumqttc::v5::mqttbytes::{QoS, v5::Packet as MqttPacket};
 use tokio::sync::mpsc;
 use crate::protocol::telemetry::{DongleEvent, TelemetryData};
 use crate::protocol::sensor::SensorManager;
+use crate::engine::EnginesMap;
 use tracing::{info, error, debug, warn};
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
@@ -23,6 +24,7 @@ pub struct MqttGateway {
     published_discovery: Arc<tokio::sync::Mutex<HashSet<String>>>,
     sensor_manager: Arc<Mutex<SensorManager>>,
     broadcast_tx: tokio::sync::broadcast::Sender<()>,
+    engines: EnginesMap,
 }
 
 impl MqttGateway {
@@ -33,6 +35,7 @@ impl MqttGateway {
         topic_root: String,
         sensor_manager: Arc<Mutex<SensorManager>>,
         broadcast_tx: tokio::sync::broadcast::Sender<()>,
+        engines: EnginesMap,
     ) -> Self {
         mqtt_options.set_clean_start(false);
         let mut connect_props = rumqttc::v5::mqttbytes::v5::ConnectProperties::default();
@@ -50,6 +53,7 @@ impl MqttGateway {
             published_discovery: Arc::new(tokio::sync::Mutex::new(HashSet::new())),
             sensor_manager,
             broadcast_tx,
+            engines,
         }
     }
 
@@ -58,10 +62,12 @@ impl MqttGateway {
         let topic_root = self.topic_root.clone();
         let cmd_tx = self.cmd_tx.clone();
         let mut event_loop = self.event_loop;
+        let engines = self.engines.clone();
 
         let control_topic_scan = format!("{}/scan", topic_root);
         let control_topic_remove = format!("{}/remove", topic_root);
         let control_topic_reload = format!("{}/reload", topic_root);
+        let dongle_scan_wildcard = format!("{}/dongle/+/scan/set", topic_root);
 
         tokio::spawn(async move {
             let status_topic = format!("{}/status", topic_root);
@@ -80,7 +86,28 @@ impl MqttGateway {
             if let Err(e) = client.subscribe(&control_topic_reload, QoS::AtLeastOnce).await {
                 error!("Failed to subscribe to reload topic: {}", e);
             }
+            // Subscribe to per-dongle scan command topics (Phase 4)
+            if let Err(e) = client.subscribe(&dongle_scan_wildcard, QoS::AtLeastOnce).await {
+                error!("Failed to subscribe to dongle scan wildcard topic: {}", e);
+            }
             info!("Subscribed to MQTT control topics.");
+
+            // Publish dongle discovery for all registered engines
+            {
+                let map = engines.lock().await;
+                for (mac, engine) in map.iter() {
+                    let version = engine.dongle_version().unwrap_or("unknown").to_string();
+                    if let Err(e) = publish_dongle_discovery(&client, &topic_root, mac, &version).await {
+                        error!("Failed to publish dongle discovery for {}: {}", mac, e);
+                    } else {
+                        info!("Published HA dongle discovery for {}", mac);
+                    }
+                }
+            }
+
+            // Build the per-dongle scan topic prefix for matching
+            let dongle_topic_prefix = format!("{}/dongle/", topic_root);
+            let dongle_topic_suffix = "/scan/set";
 
             loop {
                 match event_loop.poll().await {
@@ -94,8 +121,14 @@ impl MqttGateway {
                                 let enable = payload == "1" || payload.eq_ignore_ascii_case("ON") || payload.eq_ignore_ascii_case("true");
                                 warn!("Legacy scan topic used without dongle_mac target. Ignoring. Use dongle/{{mac}}/scan instead.");
                                 // Legacy broadcast scan is not supported per exclusive scan design.
-                                // Per-dongle scan topics will be added in Phase 4.
                                 let _ = enable;
+                            } else if topic.starts_with(&dongle_topic_prefix) && topic.ends_with(dongle_topic_suffix) {
+                                // Per-dongle scan command: {topic_root}/dongle/{mac}/scan/set
+                                let inner = &topic[dongle_topic_prefix.len()..topic.len() - dongle_topic_suffix.len()];
+                                let dongle_mac = inner.to_string();
+                                let enable = payload == "1" || payload.eq_ignore_ascii_case("ON") || payload.eq_ignore_ascii_case("true");
+                                info!("Per-dongle scan command: dongle={}, enable={}", dongle_mac, enable);
+                                let _ = cmd_tx.send(GatewayCommand::Scan { enable, dongle_mac }).await;
                             } else if topic == control_topic_remove {
                                 info!("Received remove command for MAC: {}", payload);
                                 let _ = cmd_tx.send(GatewayCommand::Delete { sensor_mac: payload, dongle_mac: None }).await;
@@ -197,6 +230,100 @@ impl MqttGateway {
 
         Ok(())
     }
+}
+
+/// Publishes MQTT auto-discovery config payloads for a dongle device in Home Assistant.
+async fn publish_dongle_discovery(
+    client: &AsyncClient,
+    topic_root: &str,
+    dongle_mac: &str,
+    dongle_version: &str,
+) -> Result<(), rumqttc::v5::ClientError> {
+    let device_id = format!("wyzesense_dongle_{}", dongle_mac.to_lowercase());
+    let device = serde_json::json!({
+        "identifiers": [&device_id],
+        "name": format!("Wyze Dongle {}", dongle_mac),
+        "manufacturer": "Wyze",
+        "model": "WLPP1 USB Dongle",
+        "sw_version": dongle_version,
+        "via_device": "wyzesense2mqtt_bridge"
+    });
+
+    // 1. Binary sensor: connectivity (online/offline)
+    let status_config = serde_json::json!({
+        "name": "Status",
+        "unique_id": format!("{}_status", device_id),
+        "device_class": "connectivity",
+        "state_topic": format!("{}/dongle/{}/status", topic_root, dongle_mac),
+        "payload_on": "online",
+        "payload_off": "offline",
+        "device": device,
+        "entity_category": "diagnostic"
+    });
+    let config_topic = format!("homeassistant/binary_sensor/{}/status/config", device_id);
+    client.publish(config_topic, QoS::AtLeastOnce, true,
+        serde_json::to_vec(&status_config).unwrap()).await?;
+
+    // 2. Sensor: firmware version (diagnostic)
+    let version_config = serde_json::json!({
+        "name": "Firmware Version",
+        "unique_id": format!("{}_firmware", device_id),
+        "state_topic": format!("{}/dongle/{}/state", topic_root, dongle_mac),
+        "value_template": "{{ value_json.version }}",
+        "icon": "mdi:chip",
+        "device": device,
+        "entity_category": "diagnostic"
+    });
+    let config_topic = format!("homeassistant/sensor/{}/firmware/config", device_id);
+    client.publish(config_topic, QoS::AtLeastOnce, true,
+        serde_json::to_vec(&version_config).unwrap()).await?;
+
+    // 3. Sensor: connected sensors count (diagnostic)
+    let count_config = serde_json::json!({
+        "name": "Connected Sensors",
+        "unique_id": format!("{}_sensor_count", device_id),
+        "state_topic": format!("{}/dongle/{}/state", topic_root, dongle_mac),
+        "value_template": "{{ value_json.sensor_count }}",
+        "icon": "mdi:counter",
+        "device": device,
+        "entity_category": "diagnostic"
+    });
+    let config_topic = format!("homeassistant/sensor/{}/sensor_count/config", device_id);
+    client.publish(config_topic, QoS::AtLeastOnce, true,
+        serde_json::to_vec(&count_config).unwrap()).await?;
+
+    // 4. Switch: scan mode
+    let scan_config = serde_json::json!({
+        "name": "Scan Mode",
+        "unique_id": format!("{}_scan", device_id),
+        "state_topic": format!("{}/dongle/{}/state", topic_root, dongle_mac),
+        "value_template": "{{ value_json.scanning }}",
+        "command_topic": format!("{}/dongle/{}/scan/set", topic_root, dongle_mac),
+        "payload_on": "ON",
+        "payload_off": "OFF",
+        "state_on": "true",
+        "state_off": "false",
+        "icon": "mdi:magnify-scan",
+        "device": device,
+    });
+    let config_topic = format!("homeassistant/switch/{}/scan/config", device_id);
+    client.publish(config_topic, QoS::AtLeastOnce, true,
+        serde_json::to_vec(&scan_config).unwrap()).await?;
+
+    // 5. Publish initial status and state
+    let status_topic = format!("{}/dongle/{}/status", topic_root, dongle_mac);
+    client.publish(status_topic, QoS::AtLeastOnce, true, "online".as_bytes().to_vec()).await?;
+
+    let state_topic = format!("{}/dongle/{}/state", topic_root, dongle_mac);
+    let state = serde_json::json!({
+        "version": dongle_version,
+        "sensor_count": 0,
+        "scanning": false
+    });
+    client.publish(state_topic, QoS::AtLeastOnce, true,
+        serde_json::to_vec(&state).unwrap()).await?;
+
+    Ok(())
 }
 
 #[cfg(test)]

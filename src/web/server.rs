@@ -1,11 +1,13 @@
-use crate::engine::EnginesMap;
+use crate::engine::{Engine, EnginesMap};
 use crate::protocol::packet::Packet;
 
 use crate::protocol::telemetry::SensorType;
+use crate::transport::GatewayTransport;
 use serde_json::json;
 
 use axum::{
     extract::{Path, State},
+    extract::ws::WebSocketUpgrade,
     http::StatusCode,
     response::{Html, IntoResponse, sse::{Event, Sse}},
     routing::{delete, get, post},
@@ -19,7 +21,7 @@ use std::sync::Arc;
 use std::net::SocketAddr;
 
 use tower_http::cors::{Any, CorsLayer};
-use tracing::{info, debug};
+use tracing::{info, debug, error};
 
 use crate::protocol::sensor::SensorManager;
 
@@ -27,6 +29,7 @@ pub struct WebState {
     pub engines: EnginesMap,
     pub sensor_manager: Arc<std::sync::Mutex<SensorManager>>,
     pub broadcast_tx: tokio::sync::broadcast::Sender<()>,
+    pub event_tx: tokio::sync::mpsc::Sender<crate::protocol::telemetry::DongleEvent>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -81,12 +84,14 @@ pub async fn start_web_server(
     engines: EnginesMap,
     sensor_manager: Arc<std::sync::Mutex<SensorManager>>,
     broadcast_tx: tokio::sync::broadcast::Sender<()>,
+    event_tx: tokio::sync::mpsc::Sender<crate::protocol::telemetry::DongleEvent>,
     port: u16,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let shared_state = Arc::new(WebState {
         engines,
         sensor_manager,
         broadcast_tx,
+        event_tx,
     });
 
     let cors = CorsLayer::new()
@@ -107,6 +112,7 @@ pub async fn start_web_server(
         .route("/api/fix", post(fix_sensors))
         .route("/api/raw", post(send_raw_packet))
         .route("/api/events", get(sse_handler))
+        .route("/ws/bridge", get(ws_bridge_handler))
         .layer(cors)
         .with_state(shared_state);
 
@@ -116,6 +122,63 @@ pub async fn start_web_server(
     
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+// --- GET /ws/bridge ---
+async fn ws_bridge_handler(
+    ws: WebSocketUpgrade,
+    State(state): State<Arc<WebState>>,
+) -> impl IntoResponse {
+    ws.on_upgrade(move |socket| handle_bridge_connection(socket, state))
+}
+
+async fn handle_bridge_connection(socket: axum::extract::ws::WebSocket, state: Arc<WebState>) {
+    use futures_util::StreamExt;
+    info!("New WebSocket bridge connection established");
+
+    let (writer, reader) = socket.split();
+    let transport = GatewayTransport::WebSocket {
+        reader: Arc::new(tokio::sync::Mutex::new(reader)),
+        writer: Arc::new(tokio::sync::Mutex::new(writer)),
+    };
+
+    let mut engine = Engine::new(
+        transport,
+        state.event_tx.clone(),
+        None, // No local state path for remote dongles
+    );
+    let _exit_tx = engine.start();
+
+    // Run handshake with timeout
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(8),
+        engine.initialize_handshake(),
+    )
+    .await
+    {
+        Ok(Ok(_)) => {
+            let mac = engine.dongle_mac().unwrap_or("unknown").to_string();
+            info!("WebSocket bridge dongle registered: MAC={}", mac);
+            engine.set_auto_verify(true);
+
+            // Register in engines map
+            let mut map = state.engines.lock().await;
+            map.insert(mac, engine);
+            // Don't return - the engine's background tasks keep running
+        }
+        Ok(Err(e)) => {
+            error!("WebSocket bridge handshake failed: {}", e);
+            return;
+        }
+        Err(_) => {
+            error!("WebSocket bridge handshake timed out");
+            return;
+        }
+    }
+
+    // Keep the handler alive while the connection is active.
+    // The engine's reader loop will detect when the WebSocket closes
+    // and will exit via the transport read error.
 }
 
 // --- GET / serving HTML packed UI ---

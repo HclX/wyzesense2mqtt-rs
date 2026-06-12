@@ -3,6 +3,11 @@ pub mod hidraw;
 
 use async_trait::async_trait;
 use std::io::Result;
+use std::sync::Arc;
+
+use tokio::sync::Mutex as TokioMutex;
+use futures_util::{SinkExt, StreamExt};
+use axum::extract::ws::{WebSocket, Message};
 
 #[async_trait]
 pub trait AsyncTransport: Send + Sync {
@@ -32,8 +37,11 @@ use self::replay::ReplayTransport;
 pub enum GatewayTransport {
     /// Local USB dongle via /dev/hidrawN.
     Hidraw(HidrawTransport),
-    // WebSocket variant will be added in Phase 3.
-    // WebSocket { ... },
+    /// Remote dongle connected via WebSocket bridge.
+    WebSocket {
+        reader: Arc<TokioMutex<futures_util::stream::SplitStream<WebSocket>>>,
+        writer: Arc<TokioMutex<futures_util::stream::SplitSink<WebSocket, Message>>>,
+    },
     /// Mock transport for unit/integration tests.
     Replay(ReplayTransport),
 }
@@ -43,6 +51,34 @@ impl AsyncTransport for GatewayTransport {
     async fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
         match self {
             GatewayTransport::Hidraw(t) => t.read(buf).await,
+            GatewayTransport::WebSocket { reader, .. } => {
+                let mut reader = reader.lock().await;
+                loop {
+                    match reader.next().await {
+                        Some(Ok(Message::Binary(data))) => {
+                            let len = data.len().min(buf.len());
+                            buf[..len].copy_from_slice(&data[..len]);
+                            return Ok(len);
+                        }
+                        Some(Ok(Message::Close(_))) | None => {
+                            return Err(std::io::Error::new(
+                                std::io::ErrorKind::BrokenPipe,
+                                "WebSocket stream ended",
+                            ));
+                        }
+                        Some(Ok(_)) => {
+                            // Skip non-binary messages (Ping, Pong, Text)
+                            continue;
+                        }
+                        Some(Err(e)) => {
+                            return Err(std::io::Error::new(
+                                std::io::ErrorKind::BrokenPipe,
+                                format!("WebSocket read error: {}", e),
+                            ));
+                        }
+                    }
+                }
+            }
             GatewayTransport::Replay(t) => t.read(buf).await,
         }
     }
@@ -50,7 +86,27 @@ impl AsyncTransport for GatewayTransport {
     async fn write(&mut self, buf: &[u8]) -> Result<()> {
         match self {
             GatewayTransport::Hidraw(t) => t.write(buf).await,
+            GatewayTransport::WebSocket { writer, .. } => {
+                let mut writer = writer.lock().await;
+                writer
+                    .send(Message::Binary(buf.to_vec()))
+                    .await
+                    .map_err(|e| {
+                        std::io::Error::new(
+                            std::io::ErrorKind::BrokenPipe,
+                            format!("WebSocket write error: {}", e),
+                        )
+                    })?;
+                writer.flush().await.map_err(|e| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::BrokenPipe,
+                        format!("WebSocket flush error: {}", e),
+                    )
+                })?;
+                Ok(())
+            }
             GatewayTransport::Replay(t) => t.write(buf).await,
         }
     }
 }
+

@@ -69,7 +69,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (broadcast_tx, _broadcast_rx) = tokio::sync::broadcast::channel::<()>(16);
 
     // 5. Instantiate the engine and SensorManager
-    let mut engine = Engine::new(GatewayTransport::Hidraw(transport), event_tx, None);
+    let mut engine = Engine::new(GatewayTransport::Hidraw(transport), event_tx.clone(), None);
     let sensor_manager = Arc::new(std::sync::Mutex::new(SensorManager::new(
         "config/sensors.yaml".to_string(),
         "config/state.yaml".to_string(),
@@ -116,7 +116,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     }
 
     // 8. Start HTTP REST Web UI blocking thread
-    start_web_server(engines, sensor_manager, broadcast_tx, port).await?;
+    start_web_server(engines, sensor_manager, broadcast_tx, event_tx.clone(), port).await?;
 
     Ok(())
 }

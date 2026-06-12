@@ -394,6 +394,7 @@ async fn run_daemon(
                 config.mqtt.self_topic_root.clone(),
                 Arc::clone(&sensor_manager),
                 broadcast_tx.clone(),
+                Arc::clone(&engines),
             );
 
             // Spawn MQTT bridge in background
@@ -463,7 +464,7 @@ async fn run_daemon(
 
     // Route B: Web REST Control Server (if enabled)
     if config.web.enabled {
-        start_web_server(Arc::clone(&engines), Arc::clone(&sensor_manager), broadcast_tx.clone(), config.web.port).await?;
+        start_web_server(Arc::clone(&engines), Arc::clone(&sensor_manager), broadcast_tx.clone(), event_tx.clone(), config.web.port).await?;
     } else {
         info!("Web Panel is disabled. Running in headless daemon mode.");
         if let Some(handle) = mqtt_gateway_handle {
