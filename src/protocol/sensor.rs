@@ -302,7 +302,7 @@ impl WyzeSensor {
             (SensorState::Chime, _) => Ok(()),
             // Common events handled by all sensor types (including Unknown that couldn't be upgraded)
             (_, TelemetryData::Heartbeat { .. } | TelemetryData::AlarmData { .. }
-               | TelemetryData::Scanned { .. }
+               | TelemetryData::Scanned { .. } | TelemetryData::Paired { .. }
                | TelemetryData::Offline | TelemetryData::UnknownEvent(_)) => Ok(()),
             (state, other) => {
                 warn!("Sensor (MAC={}) with state {:?} received unexpected telemetry event: {:?}",
@@ -780,6 +780,8 @@ impl SensorManager {
     /// Loads sensors from state.yaml that are NOT already in the manager.
     /// These represent sensors persisted from previous sessions whose dongle
     /// is currently offline — they show as "unassociated" in the dashboard.
+    /// Reserved for Phase 5 disconnect handling.
+    #[allow(dead_code)]
     pub fn load_state_orphans(&mut self) -> Result<usize, Box<dyn std::error::Error>> {
         let system_state = SystemState::load_from_yaml(&self.state_path).unwrap_or_default();
         let mut count = 0;
@@ -938,6 +940,16 @@ impl SensorManager {
             }
         }
 
+        // Associate sensor with its source dongle (if the event carries dongle identity)
+        if let Some(ref dmac) = event.dongle_mac {
+            if let Some(sensor) = self.sensors.get_mut(&event.mac) {
+                if sensor.dongle_mac.as_ref() != Some(dmac) {
+                    info!("Associating sensor {} with dongle {}", event.mac, dmac);
+                    sensor.dongle_mac = Some(dmac.clone());
+                }
+            }
+        }
+
         let mut success = false;
         if let Some(sensor) = self.sensors.get_mut(&event.mac) {
             if let Err(e) = sensor.update_from_event(event) {
@@ -1009,6 +1021,7 @@ mod tests {
             sensor_type: SensorType::Unknown(0),
             event_type: DongleEvent::EVENT_TYPE_ALARM,
             data: TelemetryData::Alarm { battery: 90, rssi: -40, state, die_temperature_c: 22, event_sequence: 0 },
+            dongle_mac: None,
         }
     }
 
@@ -1019,6 +1032,7 @@ mod tests {
             sensor_type: SensorType::Unknown(0),
             event_type: DongleEvent::EVENT_TYPE_CLIMATE,
             data: TelemetryData::Climate { battery: 95, rssi: -50, temperature: temp, humidity: hum, die_temperature_c: 22, event_sequence: 0 },
+            dongle_mac: None,
         }
     }
 
@@ -1029,6 +1043,7 @@ mod tests {
             sensor_type: SensorType::Unknown(0),
             event_type: DongleEvent::EVENT_TYPE_ALARM,
             data: TelemetryData::Leak { battery: 96, rssi: -60, state, probe_state, probe_available },
+            dongle_mac: None,
         }
     }
 
@@ -1039,6 +1054,7 @@ mod tests {
             sensor_type: SensorType::Unknown(0),
             event_type: DongleEvent::EVENT_TYPE_HEARTBEAT,
             data: TelemetryData::Heartbeat { battery: 90, rssi: -40, die_temperature_c: 22, event_sequence: 0 },
+            dongle_mac: None,
         }
     }
 

@@ -71,6 +71,7 @@ fn test_system_state_persistence() {
             battery: Some(90),
             signal: -60,
             state: wyzesense2mqtt_rs::protocol::sensor::SensorState::Unknown,
+            dongle_mac: None,
         },
     );
 

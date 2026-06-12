@@ -1,5 +1,6 @@
 pub mod replay;
 pub mod hidraw;
+pub mod virtual_dongle;
 
 use async_trait::async_trait;
 use std::io::Result;

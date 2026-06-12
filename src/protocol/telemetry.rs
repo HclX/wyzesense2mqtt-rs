@@ -135,6 +135,9 @@ pub enum TelemetryData {
     },
     UnknownEvent(Vec<u8>),
     Scanned { version: u8 },
+    /// Synthetic event emitted by the engine after a sensor has been successfully
+    /// paired and committed to NVRAM. Triggers auto-discovery in SensorManager.
+    Paired { version: u8 },
     Offline,
 }
 
@@ -145,6 +148,9 @@ pub struct DongleEvent {
     pub sensor_type: SensorType,
     pub event_type: u8,
     pub data: TelemetryData,
+    /// Which dongle generated this event (set by the engine's reader loop).
+    /// Used to associate newly discovered sensors with the correct dongle.
+    pub dongle_mac: Option<String>,
 }
 
 impl DongleEvent {
@@ -180,6 +186,7 @@ impl DongleEvent {
             sensor_type,
             event_type,
             data: TelemetryData::Scanned { version },
+            dongle_mac: None,
         })
     }
 
@@ -309,6 +316,7 @@ impl DongleEvent {
             sensor_type,
             event_type,
             data,
+            dongle_mac: None,
         })
     }
 
@@ -355,6 +363,7 @@ impl DongleEvent {
             sensor_type,
             event_type,
             data,
+            dongle_mac: None,
         })
     }
 }

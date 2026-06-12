@@ -9,6 +9,7 @@ use std::fs::File;
 pub struct HidrawTransport {
     read_file: Arc<std::sync::Mutex<File>>,
     write_file: Arc<std::sync::Mutex<File>>,
+    device_path: String,
 }
 
 impl HidrawTransport {
@@ -16,7 +17,8 @@ impl HidrawTransport {
     /// and duplicates the descriptor to separate read and write locks, preventing I/O deadlocks.
     pub async fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
         let path_buf = path.as_ref().to_path_buf();
-        
+        let device_path = path_buf.to_string_lossy().to_string();
+
         // Open and clone file descriptor inside a blocking thread
         let (read_file, write_file) = tokio::task::spawn_blocking(move || {
             let f = std::fs::OpenOptions::new()
@@ -32,7 +34,13 @@ impl HidrawTransport {
         Ok(Self {
             read_file: Arc::new(std::sync::Mutex::new(read_file)),
             write_file: Arc::new(std::sync::Mutex::new(write_file)),
+            device_path,
         })
+    }
+
+    /// Returns the device path this transport was opened on (e.g., "/dev/hidraw0").
+    pub fn device_path(&self) -> &str {
+        &self.device_path
     }
 }
 
@@ -265,13 +273,16 @@ mod tests {
     }
 }
 
-/// Scans Linux sysfs hidraw directory to automatically discover the assigned device node path
-/// for the Wyze Sense USB Bridge (Vendor ID: 1a86, Product ID: e024).
-pub fn discover_dongle_device() -> std::result::Result<String, Box<dyn std::error::Error + Send + Sync>> {
+/// Scans Linux sysfs hidraw directory to automatically discover ALL assigned device node paths
+/// for Wyze Sense USB Bridges (Vendor ID: 1a86, Product ID: e024).
+///
+/// Returns a `Vec<String>` of device paths (e.g., `["/dev/hidraw0", "/dev/hidraw2"]`).
+pub fn discover_all_dongle_devices() -> std::result::Result<Vec<String>, Box<dyn std::error::Error + Send + Sync>> {
     let sys_path = "/sys/class/hidraw";
     let dir = std::fs::read_dir(sys_path)
         .map_err(|e| Error::new(ErrorKind::NotFound, format!("Failed to open Linux /sys/class/hidraw directory: {}", e)))?;
 
+    let mut devices = Vec::new();
     for entry in dir {
         if let Ok(entry) = entry {
             let path = entry.path();
@@ -280,16 +291,28 @@ pub fn discover_dongle_device() -> std::result::Result<String, Box<dyn std::erro
                 // Check for QinHeng Electronics Wyze Bridge signature (1a86:e024)
                 if link_str.contains("1a86:e024") || (link_str.contains("1a86") && link_str.contains("e024")) {
                     if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                        let dev_path = format!("/dev/{}", name);
-                        return Ok(dev_path);
+                        devices.push(format!("/dev/{}", name));
                     }
                 }
             }
         }
     }
 
-    Err(Box::new(Error::new(
-        ErrorKind::NotFound,
-        "Wyze Sense USB Dongle device node could not be discovered automatically. Please make sure it is plugged in.",
-    )))
+    // Sort for deterministic ordering (hidraw0, hidraw1, ...)
+    devices.sort();
+    Ok(devices)
+}
+
+/// Scans Linux sysfs hidraw directory to automatically discover the assigned device node path
+/// for the Wyze Sense USB Bridge (Vendor ID: 1a86, Product ID: e024).
+///
+/// Returns the first discovered device. For multi-dongle support, use `discover_all_dongle_devices()`.
+pub fn discover_dongle_device() -> std::result::Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    let devices = discover_all_dongle_devices()?;
+    devices.into_iter().next().ok_or_else(|| {
+        Box::new(Error::new(
+            ErrorKind::NotFound,
+            "Wyze Sense USB Dongle device node could not be discovered automatically. Please make sure it is plugged in.",
+        )) as Box<dyn std::error::Error + Send + Sync>
+    })
 }

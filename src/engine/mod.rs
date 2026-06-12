@@ -35,6 +35,10 @@ pub struct Engine {
     pub transport_label: String,     // "local" or "bridge"
     pub device_path: Option<String>, // e.g. /dev/hidraw0
     pub remote_addr: Option<String>, // e.g. 192.168.1.5:43210
+    /// Notified when the engine's transport encounters a fatal error.
+    pub disconnect_notify: Arc<tokio::sync::Notify>,
+    /// Shared dongle MAC for the reader loop to stamp onto DongleEvents.
+    shared_dongle_mac: Arc<Mutex<Option<String>>>,
 }
 
 impl Engine {
@@ -45,6 +49,8 @@ impl Engine {
         let auto_verify = Arc::new(AtomicBool::new(false));
         let sensor_list_tx = Arc::new(Mutex::new(None));
         let is_scanning = Arc::new(AtomicBool::new(false));
+        let disconnect_notify = Arc::new(tokio::sync::Notify::new());
+        let shared_dongle_mac = Arc::new(Mutex::new(None));
 
         let engine = Self {
             transport: transport.clone(),
@@ -62,6 +68,8 @@ impl Engine {
             transport_label: "local".to_string(),
             device_path: None,
             remote_addr: None,
+            disconnect_notify: Arc::clone(&disconnect_notify),
+            shared_dongle_mac: Arc::clone(&shared_dongle_mac),
         };
 
         let mut engine_clone = Self {
@@ -77,9 +85,11 @@ impl Engine {
             sensor_list_tx: Arc::clone(&sensor_list_tx),
             is_scanning: Arc::clone(&is_scanning),
             state_path: state_path.clone(),
-            transport_label: String::new(),
+            transport_label: "worker".to_string(),
             device_path: None,
             remote_addr: None,
+            disconnect_notify: Arc::clone(&disconnect_notify),
+            shared_dongle_mac: Arc::clone(&shared_dongle_mac),
         };
 
         tokio::spawn(async move {
@@ -111,6 +121,17 @@ impl Engine {
                     error!("Auto-Pairing: Failed to verify sensor {}: {}", mac, e);
                 } else {
                     info!("Auto-Pairing: Sensor {} successfully paired & committed to NVRAM!", mac);
+                    // Emit a synthetic Paired event so SensorManager auto-discovers
+                    // and associates this sensor with the correct dongle.
+                    let paired_evt = DongleEvent {
+                        mac: mac.clone(),
+                        timestamp: std::time::SystemTime::now(),
+                        sensor_type: s_type,
+                        event_type: 0xFE, // synthetic
+                        data: TelemetryData::Paired { version },
+                        dongle_mac: engine_clone.shared_dongle_mac.lock().unwrap().clone(),
+                    };
+                    let _ = engine_clone.event_tx.send(paired_evt).await;
                 }
             }
         });
@@ -161,11 +182,13 @@ impl Engine {
         let event_tx = self.event_tx.clone();
         let auto_verify_tx = self.auto_verify_tx.clone();
         let sensor_list_tx = Arc::clone(&self.sensor_list_tx);
+        let shared_dongle_mac = Arc::clone(&self.shared_dongle_mac);
  
         // Duplicate self references for local callbacks
         let mut tx_transport = self.transport.clone();
         let sensors_worker = Arc::clone(&self.sensors);
         let state_path_worker = self.state_path.clone();
+        let disconnect_notify_clone = Arc::clone(&self.disconnect_notify);
  
         // Spawn read worker loop
         tokio::spawn(async move {
@@ -206,6 +229,7 @@ impl Engine {
                                                 &auto_verify_tx,
                                                 &sensor_list_tx,
                                                 &state_path_worker,
+                                                &shared_dongle_mac,
                                             ).await;
                                         }
                                         Err(e) => {
@@ -226,8 +250,9 @@ impl Engine {
                                 }
                             }
                             Err(e) => {
-                                error!("Error reading from transport: {}. Exiting process...", e);
-                                std::process::exit(1);
+                                warn!("Transport read error, signaling disconnect: {}", e);
+                                disconnect_notify_clone.notify_one();
+                                break;
                             }
                         }
                     }
@@ -259,6 +284,7 @@ impl Engine {
         auto_verify_tx: &mpsc::Sender<(String, SensorType, u8)>,
         sensor_list_tx: &Arc<Mutex<Option<mpsc::Sender<String>>>>,
         _state_path: &Option<String>,
+        shared_dongle_mac: &Arc<Mutex<Option<String>>>,
     ) {
         debug!("<=== Received packet: {}", pkt);
 
@@ -306,7 +332,8 @@ impl Engine {
                 // Telemetry packet Alarm1
                 if let PacketPayload::Bytes(bytes) = pkt.payload {
                     match DongleEvent::parse_alarm1(&bytes) {
-                        Ok(evt) => {
+                        Ok(mut evt) => {
+                            evt.dongle_mac = shared_dongle_mac.lock().unwrap().clone();
                             let _ = event_tx.send(evt).await;
                         }
                         Err(e) => warn!("Failed to parse alarm1 telemetry event: {}", e),
@@ -317,7 +344,8 @@ impl Engine {
                 // Telemetry packet Alarm2
                 if let PacketPayload::Bytes(bytes) = pkt.payload {
                     match DongleEvent::parse_alarm2(&bytes) {
-                        Ok(evt) => {
+                        Ok(mut evt) => {
+                            evt.dongle_mac = shared_dongle_mac.lock().unwrap().clone();
                             let _ = event_tx.send(evt).await;
                         }
                         Err(e) => warn!("Failed to parse alarm2 telemetry event: {}", e),
@@ -328,7 +356,8 @@ impl Engine {
                 // Sensor Scan Notification
                 if let PacketPayload::Bytes(bytes) = pkt.payload {
                     match DongleEvent::parse_scan(&bytes) {
-                        Ok(evt) => {
+                        Ok(mut evt) => {
+                            evt.dongle_mac = shared_dongle_mac.lock().unwrap().clone();
                             let mac = evt.mac.clone();
                             let s_type = evt.sensor_type;
                             let version = if let TelemetryData::Scanned { version } = &evt.data { *version } else { 0 };
@@ -429,7 +458,8 @@ impl Engine {
             let mac = String::from_utf8(bytes)
                 .map_err(|_| Error::new(ErrorKind::InvalidData, "MAC has non-UTF8 bytes"))?;
             info!("Dongle MAC address: {}", mac);
-            self.dongle_mac = Some(mac);
+            self.dongle_mac = Some(mac.clone());
+            *self.shared_dongle_mac.lock().unwrap() = Some(mac);
         } else {
             return Err(Error::new(ErrorKind::InvalidData, "MAC response payload mismatch"));
         }
@@ -678,6 +708,8 @@ impl Clone for Engine {
             transport_label: self.transport_label.clone(),
             device_path: self.device_path.clone(),
             remote_addr: self.remote_addr.clone(),
+            disconnect_notify: Arc::clone(&self.disconnect_notify),
+            shared_dongle_mac: Arc::clone(&self.shared_dongle_mac),
         }
     }
 }

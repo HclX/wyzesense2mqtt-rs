@@ -100,6 +100,20 @@ impl Default for LoggingConfig {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct BridgeConfig {
+    #[serde(default = "default_false")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub auth_token: Option<String>,
+}
+
+impl Default for BridgeConfig {
+    fn default() -> Self {
+        Self { enabled: default_false(), auth_token: None }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct AppConfig {
     #[serde(default)]
@@ -110,6 +124,8 @@ pub struct AppConfig {
     pub mqtt: MqttConfig,
     #[serde(default)]
     pub logging: LoggingConfig,
+    #[serde(default)]
+    pub bridge: BridgeConfig,
 }
 
 impl AppConfig {
@@ -147,6 +163,8 @@ impl AppConfig {
         if let Ok(val) = std::env::var("HASS_TOPIC_ROOT") { config.mqtt.hass_topic_root = val; }
         if let Ok(val) = std::env::var("LOG_LEVEL") { config.logging.level = val; }
         if let Ok(val) = std::env::var("LOG_NO_ANSI") { config.logging.no_ansi = val.parse().unwrap_or(config.logging.no_ansi); }
+        if let Ok(val) = std::env::var("BRIDGE_ENABLED") { config.bridge.enabled = val.parse().unwrap_or(config.bridge.enabled); }
+        if let Ok(val) = std::env::var("BRIDGE_AUTH_TOKEN") { config.bridge.auth_token = Some(val); }
 
         // Ensure that if host is set, MQTT is enabled
         if config.mqtt.host.is_some() {
@@ -189,6 +207,12 @@ mqtt:
   password: "your_secure_password"
   self_topic_root: "wyzesense2mqtt"
   hass_topic_root: "homeassistant"
+
+# WebSocket Bridge Settings
+# (Optional token-based authentication for remote dongle bridges)
+bridge:
+  enabled: false
+  # auth_token: "your_secret_token"
 
 # Diagnostics Structural Logging Level
 # (Options: trace, debug, info, warn, error)

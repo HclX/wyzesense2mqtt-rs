@@ -1,19 +1,23 @@
 # Wyze Sense to MQTT Bridge (Rust) 📡
 
-A high-performance, lightweight, asynchronous USB-to-MQTT gateway for **Wyze Sense (V1 & V2)** sub-GHz sensors, written in native **Rust**.
+A high-performance, lightweight, asynchronous USB-to-MQTT gateway for **Wyze Sense (V1 & V2)** sub-GHz sensors, written in native **Rust**. Supports **multi-dongle** deployments with local USB + remote WebSocket bridges.
 
-**Wyze Sense to MQTT Bridge (Rust)** bridges your physical Wyze Sense contact, motion, leak, and climate sensors directly into Home Assistant, Node-RED, or any MQTT broker with **zero cloud dependencies**, extremely fast response times, and a premium embedded Web UI dashboard.
+**Wyze Sense to MQTT Bridge (Rust)** bridges your physical Wyze Sense contact, motion, leak, and climate sensors directly into Home Assistant, Node-RED, or any MQTT broker with **zero cloud dependencies**, extremely fast response times, and a premium embedded Web UI dashboard. Connect multiple USB dongles — locally or via lightweight remote bridges — for whole-home coverage from a single gateway.
 
 ---
 
 ## ✨ Features
 
 *   **🚀 Unified Daemon Architecture**: Runs a background MQTT bridge event loop, an Axum-powered REST web server, and an availability monitor concurrently in a single process with a negligible RAM footprint.
+*   **🔌 Multi-Dongle Support**: Connect multiple USB dongles — locally or via remote WebSocket bridges — for whole-home RF coverage from a single gateway process.
+*   **📡 Remote Dongle Bridges**: Deploy lightweight `dongle_bridge` binaries on remote machines to relay USB traffic over WebSocket back to the central gateway.
+*   **🔄 Auto-Pairing & Disconnect Detection**: Sensors are automatically associated with their dongle. Disconnected dongles are detected instantly and sensors become unassociated until the dongle reconnects.
 *   **🏠 Home Assistant Auto-Discovery**: Automatically registers sensors with Home Assistant showing battery states, signal strength (RSSI), and active/inactive telemetry states.
-*   **🎨 Premium Embedded Web UI Dashboard**: An elegant, dark-mode control panel served directly from the binary. Contains an active sensor database, a visual pairing center, and a diagnostic raw hex console.
+*   **🎨 Premium Embedded Web UI Dashboard**: An elegant, dark-mode control panel with per-dongle sensor cards, per-dongle scan/pair actions, and real-time disconnect indicators.
 *   **🤝 Trait-Based Sensor Polymorphism**: Safe, type-secure modelling for Contact (V1/V2), Motion (V1/V2), Leak (V2), and Climate (V2) sensors.
 *   **💻 Lock-Free CLI Subcommands**: Control pairing, trigger chimes, list sensors, or inject raw packets directly from your terminal *without stopping the background daemon* using automatic REST fallback routing.
 *   **🔒 Safe Persistence**: Stores sensor database mappings persistently using atomic write operations to guarantee zero corruption during power losses.
+*   **🧪 Comprehensive E2E Test Suite**: 14 full-stack integration tests using an in-process `VirtualDongle` simulator — no hardware required.
 
 ---
 
@@ -73,7 +77,10 @@ The gateway requires physical connection to the Wyze Sense USB receiver (Bridge)
     cd wyzesense2mqtt-rs
     cargo build --release
     ```
-    The compiled binary will be available at `target/release/wyzesense2mqtt-rs`.
+    Compiled binaries:
+    - `target/release/wyzesense2mqtt-rs` — Main gateway daemon
+    - `target/release/dongle_bridge` — Remote dongle bridge relay
+    - `target/release/virtual_dongle` — Virtual dongle simulator for testing
 3.  **Setup USB Permissions** (Allows running without `sudo`):
     Create a udev rule at `/etc/udev/rules.d/99-wyzesense.rules`:
     ```text
@@ -99,9 +106,17 @@ A sectioned profile is used to control all subsystems. Here is a standard config
 # ----------------------------------------------
 
 # USB Dongle Settings
-# (Set to "auto" to dynamically scan Linux sysfs class for the Wyze bridge)
+# "auto"          — auto-detect ALL /dev/hidraw* Wyze dongles
+# "none"          — disable local USB (WebSocket bridge-only mode)
+# "/dev/hidraw0"  — explicit path to a single dongle
 usb:
   dongle: "auto"
+
+# Remote Dongle Bridge Settings
+# Enable to accept WebSocket connections from remote dongle_bridge instances
+bridge:
+  enabled: false
+  # auth_token: "your_secret_token"    # Optional: require token for bridge auth
 
 # Web Console Panel Settings
 web:
@@ -133,10 +148,14 @@ logging:
 
 Access the web panel by opening your browser to `http://localhost:8080` (or the port overridden in your config).
 
-*   **🕹️ Dongle Details**: Real-time status display of your USB bridge connection, NVRAM MAC, and device firmware version.
-*   **🔋 Paired Sensors Table**: Shows a clean live list of paired sensors. Displays battery percentages, RSSI signal strength, firmware versions, and relative last-seen times.
-*   **🤝 Pairing Center**: Toggle dynamic pairing scans. Includes a countdown timer (defaults to 60s) that automatically shuts off pairing mode once a sensor is successfully registered.
-*   **💻 Hex Diagnostics Console**: An advanced debugging terminal. Write custom hex comma-separated packet byte streams directly onto the physical USB connection line and view returned frames in real time.
+*   **🔌 Dongle-Centric Layout**: Each connected dongle appears as its own card showing MAC, firmware version, transport type (local/bridge), and remote address. Sensors are grouped under their owning dongle.
+*   **🔋 Per-Dongle Sensor Tables**: Each dongle card shows its paired sensors with battery percentages, RSSI signal strength, firmware versions, and relative last-seen times.
+*   **📦 Unassociated Sensors**: A special section (dashed border) shows sensors restored from state whose dongle is not currently online.
+*   **⚙️ Per-Dongle Actions Modal**: Click the Actions button on any dongle to open a modal with:
+    * **📡 Pairing Center** — Start/stop sensor scan (60s auto-timeout)
+    * **🧹 Maintenance** — Purge ghost sensors from dongle NVRAM
+    * **💻 Hex Console** — Send/receive raw HID packets for debugging
+*   **🔄 Real-Time Disconnect Detection**: When a dongle disconnects, its card is instantly removed and sensors become unassociated.
 
 ---
 
@@ -182,7 +201,7 @@ wyzesense2mqtt-rs [SUBCOMMAND] [OPTIONS]
 *   **On Host**: Add the udev rule listed in the bare-metal installation section and restart udev.
 
 ### 2. Multiple `/dev/hidraw` devices
-If you have multiple HID devices connected, the daemon might pick up the wrong one. In your `config.yaml` under `usb`, set `dongle: "/dev/hidrawX"` (replacing `X` with the correct node) rather than `auto` to lock execution to the correct bridge.
+With `usb.dongle: "auto"`, the gateway auto-discovers **all** matching Wyze Sense dongles via sysfs and creates an engine for each. If you want to restrict to a specific dongle, set `dongle: "/dev/hidrawX"` explicitly. To disable local USB entirely (WebSocket bridges only), set `dongle: "none"`.
 
 ### 3. Capturing raw data for debugging
 To capture raw USB packet logs, increase log verbosity in `config.yaml`:
@@ -191,6 +210,43 @@ logging:
   level: "trace"
 ```
 This records all byte read/write transactions. You can extract captured frames for test replays using the Python script provided in `tools/extract_packets.py`.
+
+---
+
+## 🔌 Remote Dongle Bridge
+
+Deploy the `dongle_bridge` binary on any machine with a USB dongle to relay traffic to your central gateway over WebSocket:
+
+```bash
+./dongle_bridge --device /dev/hidraw0 --gateway ws://gateway-host:8080/ws/bridge
+```
+
+Optional flags:
+*   `--token SECRET` — Authenticate with the gateway (requires `bridge.auth_token` in gateway config)
+
+The bridge is a transparent byte-level relay (~200 lines) with automatic reconnection. Multiple bridges can connect simultaneously for whole-home coverage.
+
+---
+
+## 🧪 Testing
+
+The project includes a comprehensive E2E test suite using in-process `VirtualDongle` simulators — **no hardware required**.
+
+```bash
+# Run all tests (unit + integration + E2E)
+cargo test
+
+# Run only the 14 full-stack E2E tests
+cargo test --test full_e2e_test
+```
+
+The E2E suite covers multi-dongle lifecycle, disconnect detection, sensor re-pairing across dongles, leak/climate events, and battery level propagation.
+
+For development/manual testing, the `virtual_dongle` binary simulates dongles with YAML-configured pre-paired sensors:
+
+```bash
+./virtual_dongle --config dongle.yaml
+```
 
 ---
 

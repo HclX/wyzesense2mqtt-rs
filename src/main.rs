@@ -173,23 +173,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     info!("===============================================================");
     info!("Configuration loaded successfully. Log Level set to: {}", config.logging.level);
 
-    // 5. Run Auto-Discovery for USB Dongle path if set to "auto"
-    if config.usb.dongle.to_lowercase() == "auto" {
+    // 5. Resolve USB Dongle device paths into a Vec
+    let dongle_setting = config.usb.dongle.to_lowercase();
+    let device_paths: Vec<String> = if dongle_setting == "none" {
+        info!("USB Dongle set to 'none'. Running in bridge-only mode.");
+        Vec::new()
+    } else if dongle_setting == "auto" {
         info!("USB Dongle path set to 'auto'. Scanning Linux sysfs class...");
-        match wyzesense2mqtt_rs::transport::hidraw::discover_dongle_device() {
-            Ok(discovered_path) => {
-                info!("Auto-Discovery: Found Wyze Sense Bridge on {}", discovered_path);
-                config.usb.dongle = discovered_path;
+        match wyzesense2mqtt_rs::transport::hidraw::discover_all_dongle_devices() {
+            Ok(paths) if paths.is_empty() => {
+                error!("Auto-Discovery: No Wyze Sense USB dongles found!");
+                return Err("No Wyze Sense USB dongles found".into());
+            }
+            Ok(paths) => {
+                for p in &paths {
+                    info!("Auto-Discovery: Found Wyze Sense Bridge on {}", p);
+                }
+                paths
             }
             Err(e) => {
                 error!("Auto-Discovery failed: {}", e);
                 return Err(e);
             }
         }
-    }
+    } else {
+        // Specific device path provided
+        vec![config.usb.dongle.clone()]
+    };
 
     if args.len() > 1 {
         // A subcommand was passed! Run CLI Subcommand Client mode
+        // For CLI mode, use the first available dongle path
+        let cli_dongle = device_paths.first().cloned().unwrap_or_else(|| "none".to_string());
+        if cli_dongle != "none" {
+            config.usb.dongle = cli_dongle;
+        }
         let cmd = args[1].to_lowercase();
         let daemon_url = format!("http://127.0.0.1:{}", config.web.port);
         
@@ -213,31 +231,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // 5. Default Mode: Start the Unified Daemon
     info!("Initializing Wyze Sense to MQTT Bridge (Rust) Daemon mode...");
 
-    if config.usb.dongle.to_lowercase() == "none" {
+    if device_paths.is_empty() {
         info!("  USB Device: DISABLED (bridge-only mode)");
         info!("  Web Console: http://localhost:{}", config.web.port);
-        return run_daemon(None, config).await;
+        return run_daemon(vec![], config).await;
     }
 
-    info!("  USB Device: {}", config.usb.dongle);
+    // Open all Hidraw transports
+    let mut transports: Vec<GatewayTransport> = Vec::new();
+    for path in &device_paths {
+        info!("  USB Device: {}", path);
+        match HidrawTransport::open(path).await {
+            Ok(t) => transports.push(GatewayTransport::Hidraw(t)),
+            Err(e) => {
+                error!("Failed to open USB hidraw device [{}]: {}", path, e);
+                return Err(e.into());
+            }
+        }
+    }
     info!("  Web Console: http://localhost:{}", config.web.port);
 
-    // Open Hidraw transport asynchronously
-    let transport = match HidrawTransport::open(&config.usb.dongle).await {
-        Ok(t) => t,
-        Err(e) => {
-            error!("Failed to open USB hidraw device [{}]: {}", config.usb.dongle, e);
-            return Err(e.into());
-        }
-    };
-
-    return run_daemon(Some(GatewayTransport::Hidraw(transport)), config).await;
+    return run_daemon(transports, config).await;
 }
 
 async fn run_daemon(
-    transport: Option<GatewayTransport>,
+    transports: Vec<GatewayTransport>,
     config: AppConfig,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+
+    // Persistent storage for engine exit handles — prevents worker tasks from being killed
+    let mut engine_exit_handles: Vec<tokio::sync::oneshot::Sender<()>> = Vec::new();
 
     // Setup central events channel (shared across all engines)
     let (event_tx, event_rx) = mpsc::channel::<DongleEvent>(128);
@@ -269,71 +292,105 @@ async fn run_daemon(
         }
     }
 
-    // --- Local USB Dongle Engine (optional) ---
-    if let Some(transport) = transport {
-        let mut engine = Engine::new(transport, event_tx.clone(), Some(state_path.to_string()));
-        engine.transport_label = "local".to_string();
-        engine.device_path = Some(config.usb.dongle.clone());
-
-        // Start background worker loop
-        let _exit_tx = engine.start();
-
-        // Perform dongle unlock handshake
-        match tokio::time::timeout(Duration::from_secs(8), engine.initialize_handshake()).await {
-            Ok(Ok(_)) => {
-                info!("Dongle successfully unlocked and authenticated!");
-                engine.set_auto_verify(true);
-
-                // Register engine in the engines map by its MAC
-                let dongle_mac = engine.dongle_mac().unwrap_or("unknown").to_string();
-                info!("Registering dongle {} in engines registry", dongle_mac);
-
-                // Warm up paired sensors cache from NVRAM and merge with saved configs
-                info!("Warming up paired sensors cache from NVRAM...");
-                match engine.get_sensor_list().await {
-                    Ok(sensors_list) => {
-                        let mut manager = sensor_manager.lock().unwrap();
-                        if let Err(e) = manager.load_sensors(&sensors_list) {
-                            error!("Failed to load/bootstrap sensors: {}", e);
-                        } else {
-                            info!("Sensors memory cache successfully warmed up!");
-                            
-                            // Inject dummy events for each cached sensor to trigger initial MQTT discovery & state sync
-                            for sensor in manager.get_sensors().values() {
-                                let dummy = DongleEvent {
-                                    mac: sensor.mac.clone(),
-                                    timestamp: std::time::SystemTime::now(),
-                                    sensor_type: sensor.sensor_type,
-                                    event_type: 0xFF,
-                                    data: TelemetryData::UnknownEvent(Vec::new()),
-                                };
-                                let _ = event_tx.try_send(dummy);
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        warn!("Failed to warm up sensors cache on startup: {}", e);
-                    }
-                }
-
-                // Insert into registry
-                {
-                    let mut map = engines.lock().await;
-                    map.insert(dongle_mac, engine);
-                }
-            }
-            Ok(Err(e)) => {
-                error!("Failed during dongle handshake: {}", e);
-                return Err(e.into());
-            }
-            Err(_) => {
-                error!("Dongle handshake timed out! Make sure USB device is connected.");
-                return Err("Handshake timeout".into());
-            }
-        }
-    } else {
+    // --- Local USB Dongle Engines (supports multiple dongles) ---
+    if transports.is_empty() {
         info!("No local USB dongle configured. Running in bridge-only mode.");
         info!("Waiting for remote dongles to connect via WebSocket at /ws/bridge");
+    }
+
+    for transport in transports {
+        let device_path = match &transport {
+            GatewayTransport::Hidraw(h) => h.device_path().to_string(),
+            _ => "unknown".to_string(),
+        };
+
+        let mut engine = Engine::new(transport, event_tx.clone(), Some(state_path.to_string()));
+        engine.transport_label = "local".to_string();
+        engine.device_path = Some(device_path.clone());
+
+            // Start background worker loop
+            let exit_tx = engine.start();
+
+            // Perform dongle unlock handshake
+            match tokio::time::timeout(Duration::from_secs(8), engine.initialize_handshake()).await {
+                Ok(Ok(_)) => {
+                    info!("Dongle on {} successfully unlocked and authenticated!", device_path);
+                    engine.set_auto_verify(true);
+
+                    let dongle_mac = engine.dongle_mac().unwrap_or("unknown").to_string();
+                    info!("Registering dongle {} ({}) in engines registry", dongle_mac, device_path);
+
+                    // Warm up paired sensors cache from NVRAM and merge with saved configs
+                    info!("Warming up paired sensors cache from NVRAM for dongle {}...", dongle_mac);
+                    match engine.get_sensor_list().await {
+                        Ok(sensors_list) => {
+                            let mut manager = sensor_manager.lock().unwrap();
+                            if let Err(e) = manager.load_sensors(&sensors_list) {
+                                error!("Failed to load/bootstrap sensors for dongle {}: {}", dongle_mac, e);
+                            } else {
+                                info!("Sensors memory cache for dongle {} successfully warmed up!", dongle_mac);
+
+                                // Inject dummy events for each cached sensor to trigger initial MQTT discovery & state sync
+                                let sensor_macs: Vec<String> = manager.get_sensors().keys().cloned().collect();
+                                for mac in &sensor_macs {
+                                    if let Some(sensor) = manager.get_sensors().get(mac.as_str()) {
+                                        let dummy = DongleEvent {
+                                            mac: sensor.mac.clone(),
+                                            timestamp: std::time::SystemTime::now(),
+                                            sensor_type: sensor.sensor_type,
+                                            event_type: 0xFF,
+                                            data: TelemetryData::UnknownEvent(Vec::new()),
+                                            dongle_mac: None,
+                                        };
+                                        let _ = event_tx.try_send(dummy);
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            warn!("Failed to warm up sensors cache for dongle {} on startup: {}", dongle_mac, e);
+                        }
+                    }
+
+                    // Clone disconnect_notify BEFORE moving engine into the map
+                    let disconnect_notify = engine.disconnect_notify.clone();
+
+                    // Insert into registry
+                    {
+                        let mut map = engines.lock().await;
+                        map.insert(dongle_mac.clone(), engine);
+                    }
+
+                    // Spawn disconnect watcher for this local USB dongle
+                    {
+                        let engines_disconnect = Arc::clone(&engines);
+                        let sensor_manager_disconnect = Arc::clone(&sensor_manager);
+                        let mac_clone = dongle_mac.clone();
+                        let broadcast_tx_clone = broadcast_tx.clone();
+                        tokio::spawn(async move {
+                            disconnect_notify.notified().await;
+                            warn!("Local USB dongle {} disconnected! Cleaning up...", mac_clone);
+                            engines_disconnect.lock().await.remove(&mac_clone);
+                            {
+                                let mut manager = sensor_manager_disconnect.lock().unwrap();
+                                manager.unassign_dongle(&mac_clone);
+                            }
+                            let _ = broadcast_tx_clone.send(());
+                        });
+                    }
+
+                    // Store exit handle so the engine worker stays alive
+                    engine_exit_handles.push(exit_tx);
+                }
+            Ok(Err(e)) => {
+                error!("Failed during dongle handshake on {}: {}. Skipping.", device_path, e);
+                continue;
+            }
+            Err(_) => {
+                error!("Dongle handshake timed out on {}! Skipping.", device_path);
+                continue;
+            }
+        }
     }
 
     // Start dynamic Availability Monitor in the background
@@ -366,6 +423,7 @@ async fn run_daemon(
                 sensor_type: s_type,
                 event_type: 0x00,
                 data: TelemetryData::Offline,
+                dongle_mac: None,
             };
             let _ = event_tx_timeout.send(offline_evt).await;
         }
@@ -455,25 +513,28 @@ async fn run_daemon(
         while let Some(cmd) = gateway_cmd_rx.recv().await {
             match cmd {
                 GatewayCommand::Scan { enable, dongle_mac } => {
-                    let mut map = engines_cmd.lock().await;
-                    if let Some(engine) = map.get_mut(&dongle_mac) {
+                    // Clone engine to avoid holding lock across await
+                    let engine = {
+                        let map = engines_cmd.lock().await;
+                        map.get(&dongle_mac).cloned()
+                    };
+                    if let Some(mut engine) = engine {
                         let _ = engine.set_scan(enable).await;
                     } else {
                         warn!("Scan command for unknown dongle: {}", dongle_mac);
                     }
                 }
                 GatewayCommand::Delete { sensor_mac, dongle_mac } => {
-                    let mut map = engines_cmd.lock().await;
-                    if let Some(target_mac) = dongle_mac {
-                        // Targeted delete
-                        if let Some(engine) = map.get_mut(&target_mac) {
-                            let _ = engine.delete_sensor(&sensor_mac).await;
-                        }
+                    // Clone engines to avoid holding lock across await
+                    let engine_clones: Vec<Engine> = if let Some(target_mac) = dongle_mac {
+                        let map = engines_cmd.lock().await;
+                        map.get(&target_mac).cloned().into_iter().collect()
                     } else {
-                        // Broadcast delete to all engines
-                        for (_, engine) in map.iter_mut() {
-                            let _ = engine.delete_sensor(&sensor_mac).await;
-                        }
+                        let map = engines_cmd.lock().await;
+                        map.values().cloned().collect()
+                    };
+                    for mut engine in engine_clones {
+                        let _ = engine.delete_sensor(&sensor_mac).await;
                     }
                     let mut manager = sensor_manager_cmd_clone.lock().unwrap();
                     let _ = manager.delete_and_persist_sensor(&sensor_mac);
@@ -487,7 +548,7 @@ async fn run_daemon(
 
     // Route B: Web REST Control Server (if enabled)
     if config.web.enabled {
-        start_web_server(Arc::clone(&engines), Arc::clone(&sensor_manager), broadcast_tx.clone(), event_tx.clone(), config.web.port).await?;
+        start_web_server(Arc::clone(&engines), Arc::clone(&sensor_manager), broadcast_tx.clone(), event_tx.clone(), config.web.port, config.bridge.auth_token.clone()).await?;
     } else {
         info!("Web Panel is disabled. Running in headless daemon mode.");
         if let Some(handle) = mqtt_gateway_handle {
@@ -545,11 +606,18 @@ async fn run_cli_via_rest(
         }
         "pair" => {
             println!("Enabling pair scan mode... Trigger reset on your sensor.");
+            // Fetch first available dongle MAC from the daemon
+            let dongles_res = client.get(&format!("{}/api/dongles", base_url)).send().await?;
+            let dongles_body: serde_json::Value = dongles_res.json().await?;
+            let dongle_mac = dongles_body["dongles"].as_array()
+                .and_then(|a| a.first())
+                .and_then(|d| d["mac"].as_str())
+                .ok_or("No dongles connected to daemon")?;
             client.post(&format!("{}/api/scan", base_url))
-                .json(&json!({ "enable": true }))
+                .json(&json!({ "enable": true, "dongle_mac": dongle_mac }))
                 .send()
                 .await?;
-            println!("Scan enabled successfully! Pair via the Web Console dashboard.");
+            println!("Scan enabled on dongle {}! Pair via the Web Console dashboard.", dongle_mac);
         }
         "unpair" => {
             if args.is_empty() { return Err("Missing sensor MAC address argument".into()); }
@@ -578,8 +646,15 @@ async fn run_cli_via_rest(
                 .filter(|s| !s.is_empty())
                 .map(|s| u8::from_str_radix(s, 16).unwrap())
                 .collect();
+            // Fetch first available dongle MAC from the daemon
+            let dongles_res = client.get(&format!("{}/api/dongles", base_url)).send().await?;
+            let dongles_body: serde_json::Value = dongles_res.json().await?;
+            let dongle_mac = dongles_body["dongles"].as_array()
+                .and_then(|a| a.first())
+                .and_then(|d| d["mac"].as_str())
+                .ok_or("No dongles connected to daemon")?;
             let res = client.post(&format!("{}/api/raw", base_url))
-                .json(&json!({ "bytes": bytes }))
+                .json(&json!({ "bytes": bytes, "dongle_mac": dongle_mac }))
                 .send()
                 .await?;
             let body: serde_json::Value = res.json().await?;

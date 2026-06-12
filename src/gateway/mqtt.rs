@@ -431,7 +431,7 @@ mod tests {
                 die_temperature_c: 22,
                 event_sequence: 0,
             },
-        };
+        dongle_mac: None, };
         sensor.update_from_event(&event).unwrap();
         let payload = sensor.get_state_payload();
         assert_eq!(payload["state"], "open");
@@ -459,7 +459,7 @@ mod tests {
                 probe_state: 1,
                 probe_available: true,
             },
-        };
+        dongle_mac: None, };
         sensor.update_from_event(&event).unwrap();
         let payload = sensor.get_state_payload();
         assert_eq!(payload["state"], "wet");
@@ -486,7 +486,7 @@ mod tests {
                 probe_state: 0,
                 probe_available: false,
             },
-        };
+        dongle_mac: None, };
         sensor.update_from_event(&event).unwrap();
         let payload = sensor.get_state_payload();
         assert_eq!(payload["state"], "dry");

@@ -76,7 +76,7 @@ async fn test_web_endpoints_integration() {
     let (test_event_tx, _test_event_rx) = mpsc::channel::<DongleEvent>(32);
     let engines_server = Arc::clone(&engines);
     tokio::spawn(async move {
-        if let Err(e) = start_web_server(engines_server, sensor_manager, broadcast_tx, test_event_tx, port).await {
+        if let Err(e) = start_web_server(engines_server, sensor_manager, broadcast_tx, test_event_tx, port, None).await {
             panic!("Web server failed to run: {}", e);
         }
     });

@@ -16,6 +16,8 @@ pub struct ReplayTransport {
     responses: Arc<Mutex<HashMap<u16, VecDeque<Vec<u8>>>>>,
     // Notify waiters when new data is enqueued for reading
     notify: Arc<Notify>,
+    // When true, read() returns BrokenPipe immediately
+    poisoned: Arc<Mutex<bool>>,
 }
 
 impl ReplayTransport {
@@ -25,7 +27,14 @@ impl ReplayTransport {
             written_data: Arc::new(Mutex::new(Vec::new())),
             responses: Arc::new(Mutex::new(HashMap::new())),
             notify: Arc::new(Notify::new()),
+            poisoned: Arc::new(Mutex::new(false)),
         }
+    }
+
+    /// Poison the transport so that all future reads return BrokenPipe.
+    pub fn disconnect(&self) {
+        *self.poisoned.lock().unwrap() = true;
+        self.notify.notify_waiters();
     }
 
     /// Register an automatic response for a specific command ID.
@@ -67,6 +76,12 @@ impl ReplayTransport {
 impl AsyncTransport for ReplayTransport {
     async fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
         loop {
+            {
+                let poisoned = self.poisoned.lock().unwrap();
+                if *poisoned {
+                    return Err(std::io::Error::new(std::io::ErrorKind::BrokenPipe, "Transport disconnected"));
+                }
+            }
             {
                 let mut queue = self.read_queue.lock().unwrap();
                 if !queue.is_empty() {

@@ -116,7 +116,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     }
 
     // 8. Start HTTP REST Web UI blocking thread
-    start_web_server(engines, sensor_manager, broadcast_tx, event_tx.clone(), port).await?;
+    start_web_server(engines, sensor_manager, broadcast_tx, event_tx.clone(), port, None).await?;
 
     Ok(())
 }

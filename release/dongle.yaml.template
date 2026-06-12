@@ -1,0 +1,91 @@
+# =============================================================================
+# Virtual Dongle Configuration Template
+# =============================================================================
+#
+# This config file drives the `virtual_dongle` binary, which simulates a
+# Wyze Sense USB dongle over WebSocket. Use it for development, testing,
+# and demos without physical hardware.
+#
+# Usage:
+#   ./virtual_dongle --config dongle.yaml
+#
+# Interactive CLI commands (type while running):
+#   alarm <MAC> <0|1>           — Inject contact/motion alarm (0=closed, 1=open)
+#   leak <MAC> <dry|wet>        — Inject leak event
+#   climate <MAC> <temp> <hum>  — Inject climate reading (e.g. climate CLMT0001 22.5 48)
+#   heartbeat <MAC>             — Inject heartbeat event
+#   scan <MAC> <type>           — Inject scanned sensor (triggers pairing flow)
+#   pair <MAC> <type>           — Shortcut: scan + auto-verify
+#   status                      — Show dongle state and sensor list
+#   help                        — Show all commands
+#
+# =============================================================================
+
+# --- Dongle Identity ---
+# Reported to the gateway during the 5-step handshake.
+dongle:
+  mac: "VIRTUAL1"               # 8-char alphanumeric dongle MAC
+  version: "V2.3.9"             # Firmware version string
+
+# --- Gateway Connection ---
+gateway:
+  url: "ws://127.0.0.1:8080/ws/bridge"   # WebSocket URL of the gateway
+  # auth_token: "your_secret"             # Optional: must match gateway's bridge.auth_token
+  auto_reconnect: true                    # Reconnect on disconnect
+  reconnect_delay_secs: 5                 # Seconds between reconnection attempts
+
+# --- Logging ---
+logging:
+  level: "info"                 # trace, debug, info, warn, error
+
+# --- Pre-Paired Sensors ---
+# Sensors listed here are reported in the dongle's NVRAM sensor list during
+# handshake, and will generate periodic heartbeats automatically.
+#
+# Supported sensor_type values: contact, motion, climate, leak, chime
+#
+# Optional fields per sensor:
+#   battery (0-100, default: 90)
+#   rssi (positive dBm, internally negated, default: 60 → -60 dBm)
+#   state: "open"/"closed" for contact, "active"/"inactive" for motion
+#   temperature/humidity: for climate sensors
+#   leak_state: "dry"/"wet" for leak sensors
+#   auto_event_interval_secs: periodic event generation interval (null = manual only)
+
+sensors:
+  # Contact sensor — front door
+  - mac: FRTDOOR1
+    sensor_type: contact
+    battery: 95
+    rssi: 55
+    state: closed
+
+  # Motion sensor — living room
+  - mac: LVMOTN01
+    sensor_type: motion
+    battery: 88
+    rssi: 50
+    state: inactive
+
+  # Climate sensor — bedroom
+  - mac: BDCLMT01
+    sensor_type: climate
+    battery: 80
+    rssi: 45
+    temperature: 22.5
+    humidity: 48
+
+  # Leak sensor — basement
+  - mac: BSMLEAK1
+    sensor_type: leak
+    battery: 90
+    rssi: 60
+    leak_state: dry
+
+  # Automated motion sensor — triggers every 30 seconds
+  # - mac: AUTOMOQ1
+  #   sensor_type: motion
+  #   battery: 85
+  #   rssi: 50
+  #   state: inactive
+  #   auto_event_interval_secs: 30

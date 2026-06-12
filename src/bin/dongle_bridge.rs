@@ -1,6 +1,6 @@
-// ws_bridge: Transparent USB↔WebSocket relay for remote dongles
+// dongle_bridge: Transparent USB↔WebSocket relay for remote dongles
 //
-// Usage: ws_bridge --device /dev/hidraw0 --gateway ws://host:8080/ws/bridge
+// Usage: dongle_bridge --device /dev/hidraw0 --gateway ws://host:8080/ws/bridge
 //
 // This binary opens a local USB dongle via HidrawTransport and connects to
 // a remote gateway server over WebSocket. It bidirectionally relays raw bytes
@@ -28,6 +28,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Parse arguments
     let mut device_path = "/dev/hidraw0".to_string();
     let mut gateway_url = "ws://127.0.0.1:8080/ws/bridge".to_string();
+    let mut auth_token: Option<String> = None;
 
     let args: Vec<String> = std::env::args().collect();
     let mut idx = 1;
@@ -49,33 +50,43 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     return Err("Missing argument for --gateway".into());
                 }
             }
+            "--token" | "-t" => {
+                if idx + 1 < args.len() {
+                    auth_token = Some(args[idx + 1].clone());
+                    idx += 2;
+                } else {
+                    return Err("Missing argument for --token".into());
+                }
+            }
             "--help" | "-h" => {
-                println!("ws_bridge: USB↔WebSocket relay for remote Wyze Sense dongles");
+                println!("dongle_bridge: USB↔WebSocket relay for remote Wyze Sense dongles");
                 println!();
                 println!("USAGE:");
-                println!("    ws_bridge [OPTIONS]");
+                println!("    dongle_bridge [OPTIONS]");
                 println!();
                 println!("OPTIONS:");
                 println!("    -d, --device <PATH>     USB hidraw device path [default: /dev/hidraw0]");
                 println!("    -g, --gateway <URL>     Gateway WebSocket URL [default: ws://127.0.0.1:8080/ws/bridge]");
+                println!("    -t, --token <TOKEN>     Auth token for bridge authentication");
                 println!("    -h, --help              Print this help message");
                 return Ok(());
             }
             other => {
                 eprintln!("Unknown argument: {}", other);
-                eprintln!("Usage: ws_bridge [--device PATH] [--gateway URL]");
+                eprintln!("Usage: dongle_bridge [--device PATH] [--gateway URL]");
                 return Err("Unknown argument".into());
             }
         }
     }
 
-    info!("ws_bridge starting up");
+    info!("dongle_bridge starting up");
     info!("  USB Device: {}", device_path);
     info!("  Gateway:    {}", gateway_url);
+    info!("  Auth Token: {}", if auth_token.is_some() { "configured" } else { "none" });
 
     // Reconnect loop
     loop {
-        match run_bridge(&device_path, &gateway_url).await {
+        match run_bridge(&device_path, &gateway_url, auth_token.as_deref()).await {
             Ok(_) => {
                 info!("Bridge session ended cleanly");
             }
@@ -92,6 +103,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 async fn run_bridge(
     device_path: &str,
     gateway_url: &str,
+    auth_token: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // 1. Open local USB dongle
     info!("Opening USB device: {}", device_path);
@@ -102,7 +114,10 @@ async fn run_bridge(
 
     // 2. Connect to gateway WebSocket
     info!("Connecting to gateway: {}", gateway_url);
-    let ws_url = format!("{}?device={}", gateway_url, device_path.replace('/', "%2F"));
+    let mut ws_url = format!("{}?device={}", gateway_url, device_path.replace('/', "%2F"));
+    if let Some(token) = auth_token {
+        ws_url.push_str(&format!("&token={}", token));
+    }
     let (ws_stream, _response) = connect_async(&ws_url).await?;
     info!("WebSocket connection established");
 
@@ -110,7 +125,7 @@ async fn run_bridge(
 
     // 3. Bidirectional relay
     // USB → WebSocket
-    let usb_to_ws = tokio::spawn(async move {
+    let mut usb_to_ws = tokio::spawn(async move {
         let mut buf = [0u8; 1024];
         loop {
             match transport_read.read(&mut buf).await {
@@ -134,7 +149,7 @@ async fn run_bridge(
     });
 
     // WebSocket → USB
-    let ws_to_usb = tokio::spawn(async move {
+    let mut ws_to_usb = tokio::spawn(async move {
         while let Some(msg) = ws_reader.next().await {
             match msg {
                 Ok(Message::Binary(data)) => {
@@ -159,13 +174,15 @@ async fn run_bridge(
         }
     });
 
-    // Wait for either direction to finish
+    // Wait for either direction to finish, then abort the other
     tokio::select! {
-        _ = usb_to_ws => {
-            info!("USB→WS relay ended");
+        _ = &mut usb_to_ws => {
+            info!("USB→WS relay ended, aborting WS→USB task");
+            ws_to_usb.abort();
         }
-        _ = ws_to_usb => {
-            info!("WS→USB relay ended");
+        _ = &mut ws_to_usb => {
+            info!("WS→USB relay ended, aborting USB→WS task");
+            usb_to_ws.abort();
         }
     }
 

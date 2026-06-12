@@ -1,12 +1,12 @@
 # Wyze Sense to MQTT Bridge (Rust): System Architecture & Design Specification
 
-This document defines the architecture, component interactions, and design patterns of **Wyze Sense to MQTT Bridge (Rust)** (formerly `WyzeSenseRS`), a high-performance, asynchronous USB-to-MQTT gateway for Wyze Sense (V1/V2) sensors compiled in Rust.
+This document defines the architecture, component interactions, and design patterns of **Wyze Sense to MQTT Bridge (Rust)** (formerly `WyzeSenseRS`), a high-performance, asynchronous USB-to-MQTT gateway for Wyze Sense (V1/V2) sensors compiled in Rust. For multi-dongle architecture details, see [docs/multi_dongle_design.md](docs/multi_dongle_design.md).
 
 ---
 
 ## 1. Core Architectural Blueprint
 
-Due to Linux kernel restrictions, only a single process can open the USB HID device `/dev/hidrawX` at any given time. To prevent conflict between the Web Dashboard, the background MQTT broker gateway, and diagnostic CLI tools, the **Wyze Sense to MQTT Bridge (Rust)** uses a **Unified Target Architecture** compiled into a single binary.
+Due to Linux kernel restrictions, only a single process can open the USB HID device `/dev/hidrawX` at any given time. To prevent conflict between the Web Dashboard, the background MQTT broker gateway, and diagnostic CLI tools, the **Wyze Sense to MQTT Bridge (Rust)** uses a **Unified Target Architecture** compiled into a single binary. The gateway supports **N engines** (one per dongle) via `EnginesMap`, with local USB and remote WebSocket bridges feeding into a central event bus.
 
 ```
                Wyze Sense to MQTT Bridge (Rust) (Single Process)
@@ -14,30 +14,40 @@ Due to Linux kernel restrictions, only a single process can open the USB HID dev
         |                                                                              |
         |   +-----------------------+  +-----------------------+  +----------------+   |
         |   |   Axum Web UI Task    |  |  MQTT Gateway Task    |  |  CLI Client    |   |
-        |   | (REST Server: port)   |  |  (rumqttc Publisher)  |  |  Subcommand    |   |
+        |   | (REST + /ws/bridge)   |  |  (rumqttc Publisher)  |  |  Subcommand    |   |
         |   +-----------+-----------+  +-----------+-----------+  +-------+--------+   |
         |               |                          |                      |            |
         |               +-------------+------------+                      | (HTTP API) |
         |                             |                                   |            |
         |                             v                                   |            |
-        |                    +--------+--------+                          |            |
-        |                    |  Engine Actor   | <------------------------+            |
-        |                    | (Arc<Mutex<E>>) |                                       |
-        |                    +--------+--------+                                       |
-        |                             |                                                |
-        |                             v                                                |
-        |                    +--------+--------+                                       |
-        |                    |  USB hidraw0    |                                       |
-        |                    +-----------------+                                       |
-        |                                                                              |
+        |              +──────────────+──────────────+                     |            |
+        |              │     EnginesMap              │ <-------------------+            |
+        |              │  HashMap<MAC, Engine>       │                                  |
+        |              +──┬──────┬──────┬────────────+                                  |
+        |                 │      │      │                                               |
+        |                 v      v      v                                               |
+        |         +-------+-+  +-+------+-+  +--------+-+                               |
+        |         │Engine A │  │Engine B  │  │Engine C  │  ... (N engines)               |
+        |         │hidraw0  │  │hidraw1   │  │WebSocket │                                |
+        |         +---------+  +----------+  +----------+                                |
+        |                                         ▲                                     |
+        |                                         │ ws://host:8080/ws/bridge             |
         +------------------------------------------------------------------------------+
+                                                  │
+                                          ┌───────┴───────┐
+                                          │ dongle_bridge  │ (remote machine)
+                                          │ /dev/hidraw0   │
+                                          └───────────────┘
 ```
 
 ### 1.1 Execution Modes
 1.  **Daemon Mode (Default)**:
     *   Booted by running `wyzesense2mqtt-rs` without subcommands.
-    *   Instantiates the core asynchronous USB `Engine`.
-    *   Performs a 5-step cryptographic/protocol handshake to unlock the dongle.
+    *   Auto-discovers all local USB dongles (or uses explicit path) and creates one `Engine` per dongle.
+    *   Performs a 5-step cryptographic/protocol handshake on each dongle.
+    *   Optionally accepts remote `dongle_bridge` connections via `/ws/bridge` WebSocket endpoint.
+    *   All engines feed into a central event bus; `SensorManager` is the single source of truth.
+    *   Spawns disconnect watchers per engine via `disconnect_notify`.
     *   Spawns a background Axum Web REST server and beautiful embedded Single-Page console.
     *   Spawns a background `rumqttc` MQTT Gateway task, managing topics, status reports, and Home Assistant Auto-Discovery.
     *   Spawns the background `AvailabilityMonitor` to sweep timeouts and persist states.
@@ -65,7 +75,12 @@ Wyze Sense devices include diverse sensors (Contact, Motion, Leak, Climate) and 
 classDiagram
     class Engine {
         <<struct>>
-        -transport: AsyncTransport
+        -transport: GatewayTransport
+        +dongle_mac: Option~String~
+        +disconnect_notify: Arc~Notify~
+        +transport_label: String
+        +device_path: String
+        +remote_addr: String
         +initialize_handshake()
         +set_scan(enable: bool)
         +play_chime(mac: &str)
@@ -78,7 +93,9 @@ classDiagram
         -sensors: HashMap~String, WyzeSensor~
         -config_path: String
         -state_path: String
-        +load_sensors(mac_list: &[String])
+        +load_all_from_state()
+        +assign_dongle(dongle_mac, mac_list)
+        +unassign_dongle(dongle_mac)
         +register_and_persist_sensor(mac, sensor_type)
         +delete_and_persist_sensor(mac)
         +dispatch_event(event: &DongleEvent)
@@ -90,6 +107,7 @@ classDiagram
         <<struct>>
         +mac: String
         +sensor_type: SensorType
+        +dongle_mac: Option~String~
         +friendly_name: String
         +timeout_sec: u64
         +battery_pct: Option~u8~
@@ -162,7 +180,7 @@ The system maintains two YAML files with clearly separated responsibilities:
 | File | Purpose | Editable by | Authority |
 |---|---|---|---|
 | `config/sensors.yaml` | Human preferences | Human + code (append-only for new entries) | Name, timeout |
-| `config/state.yaml` | Runtime state cache | Code only | Sensor type, battery, rssi, type-specific state |
+| `state/state.yaml` | Runtime state cache | Code only | Sensor type, battery, rssi, dongle_mac, type-specific state |
 
 **`sensors.yaml`** — User preferences (name overrides, custom timeouts):
 ```yaml
@@ -197,6 +215,7 @@ sensors:
     signal: -50
     state:
       kind: Chime
+    dongle_mac: 77A85A36
 ```
 
 ### 3.2 Type Authority & Load Priority
@@ -211,9 +230,11 @@ timeout_sec:    sensors.yaml > type-based default
 
 ### 3.3 Bootstrap and NVRAM Sync
 
-1.  At startup, the `Engine` retrieves the physical paired MAC address list stored in the USB dongle's NVRAM.
-2.  `SensorManager` cross-references this list with `state.yaml` (for type and cached state) and `sensors.yaml` (for name/timeout preferences), constructing `WyzeSensor` instances directly via `WyzeSensor::new()`.
-3.  Full type-specific state is restored from `state.yaml` — no synthetic event generation needed.
+1.  At startup, `SensorManager::load_all_from_state()` loads ALL sensors from `state.yaml`, including their persisted `dongle_mac` affinity.
+2.  For each dongle that connects, `Engine` retrieves the NVRAM sensor list and `assign_dongle(dongle_mac, nvram_macs)` associates those sensors with the dongle. New sensors (in NVRAM but not in state) are created with defaults.
+3.  During pairing, the engine emits a synthetic `TelemetryData::Paired` event after NVRAM verify. `SensorManager` auto-discovers and associates the sensor with the correct dongle.
+4.  On dongle disconnect, `Engine::disconnect_notify` fires immediately. The gateway removes the engine from `EnginesMap` and calls `unassign_dongle()` to clear the `dongle_mac` field on affected sensors.
+5.  Full type-specific state is restored from `state.yaml` — no synthetic event generation needed.
 
 ### 3.4 Atomic State Saving
 

@@ -21,7 +21,7 @@ use std::sync::Arc;
 use std::net::SocketAddr;
 
 use tower_http::cors::{Any, CorsLayer};
-use tracing::{info, debug, error};
+use tracing::{info, debug, error, warn};
 
 use crate::protocol::sensor::SensorManager;
 
@@ -33,6 +33,8 @@ pub struct WebState {
     /// Keeps engine worker loops alive for bridge-connected dongles.
     /// When an exit_tx is dropped, its engine's background loop exits.
     pub engine_exit_handles: tokio::sync::Mutex<Vec<tokio::sync::oneshot::Sender<()>>>,
+    /// Optional auth token required for WebSocket bridge connections.
+    pub bridge_auth_token: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -56,7 +58,7 @@ pub struct SuccessResponse {
 #[derive(Serialize, Deserialize)]
 pub struct ScanRequest {
     pub enable: bool,
-    pub dongle_mac: Option<String>,
+    pub dongle_mac: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -89,6 +91,7 @@ pub async fn start_web_server(
     broadcast_tx: tokio::sync::broadcast::Sender<()>,
     event_tx: tokio::sync::mpsc::Sender<crate::protocol::telemetry::DongleEvent>,
     port: u16,
+    bridge_auth_token: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let shared_state = Arc::new(WebState {
         engines,
@@ -96,6 +99,7 @@ pub async fn start_web_server(
         broadcast_tx,
         event_tx,
         engine_exit_handles: tokio::sync::Mutex::new(Vec::new()),
+        bridge_auth_token,
     });
 
     let cors = CorsLayer::new()
@@ -134,10 +138,22 @@ async fn ws_bridge_handler(
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
     axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<SocketAddr>,
     State(state): State<Arc<WebState>>,
-) -> impl IntoResponse {
+) -> axum::response::Response {
+    // Validate bridge auth token if configured
+    if let Some(ref expected_token) = state.bridge_auth_token {
+        match params.get("token") {
+            Some(token) if token == expected_token => { /* ok */ }
+            _ => {
+                warn!("Bridge auth rejected from {}", addr);
+                return (StatusCode::UNAUTHORIZED, "Invalid or missing auth token").into_response();
+            }
+        }
+    }
+
     let remote_addr = addr.to_string();
     let device_path = params.get("device").cloned();
     ws.on_upgrade(move |socket| handle_bridge_connection(socket, state, remote_addr, device_path))
+        .into_response()
 }
 
 async fn handle_bridge_connection(
@@ -162,11 +178,11 @@ async fn handle_bridge_connection(
     );
     engine.transport_label = "bridge".to_string();
     engine.device_path = device_path;
-    engine.remote_addr = Some(remote_addr);
+    engine.remote_addr = Some(remote_addr.clone());
     let exit_tx = engine.start();
 
     // Run handshake with timeout
-    match tokio::time::timeout(
+    let mac = match tokio::time::timeout(
         std::time::Duration::from_secs(8),
         engine.initialize_handshake(),
     )
@@ -187,18 +203,7 @@ async fn handle_bridge_connection(
                     info!("Assigned {} NVRAM sensors to bridge dongle {}", sensors_list.len(), mac);
 
                     // Inject dummy events to trigger MQTT discovery for assigned sensors
-                    for sensor_mac in &sensors_list {
-                        if let Some(sensor) = manager.get_sensors().get(sensor_mac) {
-                            let dummy = crate::protocol::telemetry::DongleEvent {
-                                mac: sensor.mac.clone(),
-                                timestamp: std::time::SystemTime::now(),
-                                sensor_type: sensor.sensor_type,
-                                event_type: 0xFF,
-                                data: crate::protocol::telemetry::TelemetryData::UnknownEvent(Vec::new()),
-                            };
-                            let _ = state.event_tx.try_send(dummy);
-                        }
-                    }
+                    inject_discovery_events(&manager, &state.event_tx, &sensors_list);
                 }
                 Err(e) => {
                     error!("Failed to get sensor list for bridge dongle {}: {}", mac, e);
@@ -207,23 +212,73 @@ async fn handle_bridge_connection(
 
             // Register in engines map and keep exit handle alive
             let mut map = state.engines.lock().await;
-            map.insert(mac, engine);
+            map.insert(mac.clone(), engine);
             drop(map);
             state.engine_exit_handles.lock().await.push(exit_tx);
+            mac
         }
         Ok(Err(e)) => {
             error!("WebSocket bridge handshake failed: {}", e);
+            // exit_tx is dropped here, signaling the engine worker to stop
             return;
         }
         Err(_) => {
             error!("WebSocket bridge handshake timed out");
+            // exit_tx is dropped here, signaling the engine worker to stop
             return;
         }
+    };
+
+    // Wait for the engine's transport to die (WebSocket close / broken pipe).
+    // The reader loop fires disconnect_notify when the transport errors out.
+    {
+        let engines = state.engines.lock().await;
+        let notify = if let Some(eng) = engines.get(&mac) {
+            Arc::clone(&eng.disconnect_notify)
+        } else {
+            // Engine already gone — nothing to wait for
+            return;
+        };
+        drop(engines);
+        notify.notified().await;
+        info!("Bridge dongle {} disconnected, cleaning up", mac);
     }
 
-    // Keep the handler alive while the connection is active.
-    // The engine's reader loop will detect when the WebSocket closes
-    // and will exit via the transport read error.
+    // Remove engine from the shared map
+    {
+        let mut map = state.engines.lock().await;
+        map.remove(&mac);
+    }
+
+    // Cleanup: unassign sensors from disconnected dongle
+    {
+        let mut manager = state.sensor_manager.lock().unwrap();
+        manager.unassign_dongle(&mac);
+        info!("Unassigned sensors from disconnected bridge dongle {}", mac);
+    }
+    let _ = state.broadcast_tx.send(());
+}
+
+/// Injects dummy events for each sensor MAC to trigger initial MQTT discovery & state sync.
+/// Used during both local dongle startup and bridge dongle connection.
+fn inject_discovery_events(
+    manager: &crate::protocol::sensor::SensorManager,
+    event_tx: &tokio::sync::mpsc::Sender<crate::protocol::telemetry::DongleEvent>,
+    sensor_macs: &[String],
+) {
+    for sensor_mac in sensor_macs {
+        if let Some(sensor) = manager.get_sensors().get(sensor_mac) {
+            let dummy = crate::protocol::telemetry::DongleEvent {
+                mac: sensor.mac.clone(),
+                timestamp: std::time::SystemTime::now(),
+                sensor_type: sensor.sensor_type,
+                event_type: 0xFF,
+                data: crate::protocol::telemetry::TelemetryData::UnknownEvent(Vec::new()),
+                dongle_mac: None,
+            };
+            let _ = event_tx.try_send(dummy);
+        }
+    }
 }
 
 // --- GET / serving HTML packed UI ---
@@ -276,6 +331,7 @@ async fn list_dongles(
             .filter(|s| s.dongle_mac.as_deref() == Some(mac.as_str()))
             .map(|s| sensor_info_to_json(s))
             .collect();
+        let sensor_count = sensors.len();
 
         serde_json::json!({
             "mac": mac,
@@ -285,7 +341,7 @@ async fn list_dongles(
             "device_path": engine.device_path,
             "remote_addr": engine.remote_addr,
             "sensors": sensors,
-            "sensor_count": sensors.len(),
+            "sensor_count": sensor_count,
         })
     }).collect();
 
@@ -390,11 +446,14 @@ async fn unpair_sensor(
     Path(mac): Path<String>,
     State(state): State<Arc<WebState>>,
 ) -> impl IntoResponse {
-    let mut engines = state.engines.lock().await;
-    for (_, engine) in engines.iter_mut() {
+    // Clone engines to avoid holding lock across await
+    let engine_clones: Vec<Engine> = {
+        let engines = state.engines.lock().await;
+        engines.values().cloned().collect()
+    };
+    for mut engine in engine_clones {
         let _ = engine.delete_sensor(&mac).await;
     }
-    drop(engines);
     let mut manager = state.sensor_manager.lock().unwrap();
     let _ = manager.delete_and_persist_sensor(&mac);
     let _ = state.broadcast_tx.send(());
@@ -422,23 +481,33 @@ async fn toggle_scan(
     State(state): State<Arc<WebState>>,
     Json(payload): Json<ScanRequest>,
 ) -> impl IntoResponse {
-    let dongle_mac = match payload.dongle_mac {
-        Some(mac) => mac,
-        None => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({ "error": "dongle_mac is required for scan operations" })),
-            ).into_response();
+    let dongle_mac = payload.dongle_mac;
+
+    // Enforce exclusive scan mode: reject if another dongle is already scanning
+    if payload.enable {
+        let engines = state.engines.lock().await;
+        for (mac, engine) in engines.iter() {
+            if mac != &dongle_mac && engine.is_scanning() {
+                return (
+                    StatusCode::CONFLICT,
+                    Json(json!({ "error": format!("Dongle {} is already scanning. Only one dongle may scan at a time.", mac) })),
+                ).into_response();
+            }
         }
-    };
-    let mut engines = state.engines.lock().await;
-    let engine = match engines.get_mut(&dongle_mac) {
-        Some(e) => e,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({ "error": format!("Dongle {} not found", dongle_mac) })),
-            ).into_response();
+        drop(engines);
+    }
+
+    // Clone engine to avoid holding lock across await
+    let mut engine = {
+        let engines = state.engines.lock().await;
+        match engines.get(&dongle_mac) {
+            Some(e) => e.clone(),
+            None => {
+                return (
+                    StatusCode::NOT_FOUND,
+                    Json(json!({ "error": format!("Dongle {} not found", dongle_mac) })),
+                ).into_response();
+            }
         }
     };
     match engine.set_scan(payload.enable).await {
@@ -461,14 +530,17 @@ async fn verify_scanned_sensor(
     State(state): State<Arc<WebState>>,
     Json(payload): Json<VerifyRequest>,
 ) -> impl IntoResponse {
-    let mut engines = state.engines.lock().await;
-    let engine = match engines.get_mut(&payload.dongle_mac) {
-        Some(e) => e,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({ "error": format!("Dongle {} not found", payload.dongle_mac) })),
-            ).into_response();
+    // Clone engine to avoid holding lock across await
+    let mut engine = {
+        let engines = state.engines.lock().await;
+        match engines.get(&payload.dongle_mac) {
+            Some(e) => e.clone(),
+            None => {
+                return (
+                    StatusCode::NOT_FOUND,
+                    Json(json!({ "error": format!("Dongle {} not found", payload.dongle_mac) })),
+                ).into_response();
+            }
         }
     };
     let sensor_type = payload.sensor_type.parse::<SensorType>().unwrap_or(SensorType::Unknown(0x00));
@@ -491,8 +563,12 @@ async fn trigger_chime(
     Path(mac): Path<String>,
     State(state): State<Arc<WebState>>,
 ) -> impl IntoResponse {
-    let mut engines = state.engines.lock().await;
-    for (_, engine) in engines.iter_mut() {
+    // Clone engines to avoid holding lock across await
+    let engine_clones: Vec<Engine> = {
+        let engines = state.engines.lock().await;
+        engines.values().cloned().collect()
+    };
+    for mut engine in engine_clones {
         let _ = engine.play_chime(&mac).await;
     }
     (
@@ -509,11 +585,15 @@ async fn trigger_chime(
 async fn fix_sensors(
     State(state): State<Arc<WebState>>,
 ) -> impl IntoResponse {
-    let mut engines = state.engines.lock().await;
+    // Clone engines to avoid holding lock across await
+    let mut engine_clones: Vec<Engine> = {
+        let engines = state.engines.lock().await;
+        engines.values().cloned().collect()
+    };
     let mut purged = Vec::new();
     let invalid_ghosts = ["00000000", "\0\0\0\0\0\0\0\0"];
     // Fix algorithm: iterate all engines, list sensors, identify invalid MAC patterns, and delete them
-    for (_, engine) in engines.iter_mut() {
+    for engine in engine_clones.iter_mut() {
         match engine.get_sensor_list().await {
             Ok(sensors) => {
                 for mac in sensors {
@@ -532,7 +612,6 @@ async fn fix_sensors(
             }
         }
     }
-    drop(engines);
     if !purged.is_empty() {
         let _ = state.broadcast_tx.send(());
     }
@@ -552,14 +631,17 @@ async fn send_raw_packet(
     State(state): State<Arc<WebState>>,
     Json(payload): Json<RawPacketRequest>,
 ) -> impl IntoResponse {
-    let mut engines = state.engines.lock().await;
-    let engine = match engines.get_mut(&payload.dongle_mac) {
-        Some(e) => e,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                format!("Dongle {} not found", payload.dongle_mac),
-            ).into_response();
+    // Clone engine to avoid holding lock across await
+    let mut engine = {
+        let engines = state.engines.lock().await;
+        match engines.get(&payload.dongle_mac) {
+            Some(e) => e.clone(),
+            None => {
+                return (
+                    StatusCode::NOT_FOUND,
+                    format!("Dongle {} not found", payload.dongle_mac),
+                ).into_response();
+            }
         }
     };
     debug!("Web API sending raw packet bytes: {:?}", payload.bytes);
@@ -584,7 +666,7 @@ async fn send_raw_packet(
 }
 
 // Serving beautiful packed HTML Single-Page UI
-const HTML_CONTENT: &str = r##"
+const HTML_CONTENT: &str = concat!(r##"
 <!DOCTYPE html>
 <html lang="en" class="dark">
 <head>
@@ -612,7 +694,7 @@ const HTML_CONTENT: &str = r##"
             <div class="flex items-center space-x-3">
                 <span class="text-2xl">📡</span>
                 <h1 class="text-xl font-bold tracking-tight text-teal-400">Wyze Sense Bridge</h1>
-                <span class="text-xs text-slate-600 font-mono">v0.1.3</span>
+                <span class="text-xs text-slate-600 font-mono">v"##, env!("CARGO_PKG_VERSION"), r##"</span>
             </div>
             <div class="flex items-center gap-3">
                 <div class="flex items-center space-x-2 bg-slate-800 px-3 py-1.5 rounded-full text-xs font-semibold text-slate-400" id="header-badge">
@@ -926,7 +1008,7 @@ const HTML_CONTENT: &str = r##"
             if (bytes.some(isNaN)) { log("Invalid hex!"); return; }
             log(`===> [${input.toUpperCase()}]`);
             try {
-                const r = await fetch(`${API}/api/raw`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({bytes})});
+                const r = await fetch(`${API}/api/raw`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({bytes, dongle_mac: modalDongle})});
                 if (r.status!==200){log(`Error: ${await r.text()}`);return;}
                 const d = await r.json(); log(`<=== [${d.response_bytes.map(b=>b.toString(16).padStart(2,"0").toUpperCase()).join(",")}]`);
             } catch(e){log("Send failed");}
@@ -947,5 +1029,5 @@ const HTML_CONTENT: &str = r##"
     </script>
 </body>
 </html>
-"##;
+"##);
 

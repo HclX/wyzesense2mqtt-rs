@@ -1,6 +1,6 @@
 # Multi-Dongle Support: Design Document
 
-> **Status:** Implemented (Phase 1–3, partial Phase 4–5)  
+> **Status:** Fully Implemented (Phase 1–5)  
 > **Branch:** `feature/multi-dongle-ws`  
 > **Last updated:** 2026-06-12
 
@@ -137,7 +137,7 @@ Benefits over raw TCP:
 
 ### 4.2 Design: Dumb Bidirectional Byte Pipe
 
-The bridge process (`src/bin/ws_bridge.rs`) is intentionally a **transparent
+The bridge process (`src/bin/dongle_bridge.rs`) is intentionally a **transparent
 relay** — it forwards raw HID report bytes between USB and WebSocket with
 zero packet interpretation:
 
@@ -206,13 +206,20 @@ pub struct WyzeSensor {
    `assign_dongle(dongle_mac, nvram_macs)` sets `dongle_mac` on those sensors.
    New sensors (in NVRAM but not in state) are created with defaults.
 
-3. **Live events** — Telemetry updates flow through the central event bus and
-   update sensor state in the manager.
+3. **Pairing** — When the engine auto-verifies a scanned sensor into NVRAM,
+   it emits a synthetic `TelemetryData::Paired { version }` event with
+   `dongle_mac` set. `SensorManager` auto-discovers and associates the sensor.
 
-4. **Dongle disconnects** — `unassign_dongle(dongle_mac)` clears the
-   `dongle_mac` field on all sensors owned by that dongle.
+4. **Live events** — Telemetry updates flow through the central event bus and
+   update sensor state in the manager. Each `DongleEvent` carries
+   `dongle_mac: Option<String>` for per-dongle tracking.
 
-5. **Persistence** — `save_state_to_disk()` writes the entire sensor list
+5. **Dongle disconnects** — `Engine::disconnect_notify` fires immediately
+   on transport read error. The gateway removes the engine from `EnginesMap`
+   and calls `unassign_dongle(dongle_mac)`, clearing the `dongle_mac` field
+   on all sensors owned by that dongle.
+
+6. **Persistence** — `save_state_to_disk()` writes the entire sensor list
    (including `dongle_mac`) to `state.yaml`.
 
 ### 5.3 State File Format (`state.yaml`)
@@ -272,16 +279,23 @@ Keyed by **dongle MAC address** (obtained during handshake). This means:
 
 ### 6.2 Engine Metadata
 
-Each `Engine` carries transport metadata for the dashboard:
+Each `Engine` carries transport and lifecycle metadata:
 
 ```rust
 pub struct Engine {
     // ... core fields ...
-    pub transport_label: String,   // "local" or "bridge"
-    pub device_path: String,       // e.g., "/dev/hidraw0"
-    pub remote_addr: String,       // e.g., "192.168.1.50:60830"
+    pub transport_label: String,        // "local" or "bridge"
+    pub device_path: String,            // e.g., "/dev/hidraw0"
+    pub remote_addr: String,            // e.g., "192.168.1.50:60830"
+    pub disconnect_notify: Arc<Notify>, // Fires on transport read error
+    pub shared_dongle_mac: Arc<Mutex<Option<String>>>,  // Set during handshake
 }
 ```
+
+The `disconnect_notify` is fired immediately when the transport's read loop
+encounters an error (USB disconnect or WebSocket close). Gateway watchers
+listen on this notify to remove the engine from the map and call
+`unassign_dongle()`.
 
 ---
 
@@ -382,7 +396,7 @@ arrives while another dongle is already scanning, it is rejected.
 ### Phase 3: WebSocket Bridge ✅
 - [x] `bridge.enabled` config option
 - [x] `/ws/bridge` WebSocket upgrade handler with transport metadata
-- [x] `src/bin/ws_bridge.rs` standalone bridge binary
+- [x] `src/bin/dongle_bridge.rs` standalone bridge binary
 - [x] Reconnection logic with retry
 - [x] `usb.dongle: "none"` gateway-only mode
 
@@ -394,18 +408,16 @@ arrives while another dongle is already scanning, it is rejected.
 - [x] `GET /api/dongles` REST endpoint
 - [x] Consistent header/content widths
 
-### Phase 5: Remaining Work
-- [ ] Dongle as HA device (MQTT discovery for dongle entities)
-- [ ] Per-dongle MQTT control topics
-- [ ] Multi-local USB auto-detection (`usb.dongle: ["auto", ...]`)
-- [ ] WebSocket auth for bridge connections
-- [ ] Dongle disconnect detection + auto-cleanup
+### Phase 5: Operational Robustness ✅
+- [x] Dongle as HA device (MQTT discovery for dongle entities)
+- [x] Per-dongle MQTT control topics
+- [x] Multi-local USB auto-detection (`usb.dongle: "auto"` discovers all devices)
+- [x] WebSocket auth for bridge connections (`bridge.auth_token` config)
+- [x] Dongle disconnect detection + auto-cleanup (via `disconnect_notify`)
 
 ---
 
-## 11. Resolved & Open Questions
-
-### Resolved
+## 11. Resolved Questions
 
 | # | Question | Decision | Rationale |
 |---|----------|----------|-----------|
@@ -415,11 +427,59 @@ arrives while another dongle is already scanning, it is rejected.
 | 4 | Sensor-to-dongle affinity? | **Track by dongle MAC** in SensorManager | Transport-agnostic; dongle MAC is stable identity |
 | 5 | Multiple local USB? | **Supported by design**, not prioritized | Falls out naturally from engines registry |
 | 6 | Single vs. per-engine sensor cache? | **Single** — SensorManager is the only source | Engine caches caused ghosting and orphan confusion |
+| 7 | WebSocket auth for bridge connections? | **Token via query param** (`?token=`) | Simple, works with WS clients, config via `bridge.auth_token` |
+| 8 | Dongle disconnect semantics? | **Reset to None** via `unassign_dongle()` | Sensors become "unassociated" until dongle reconnects. `disconnect_notify` fires immediately on transport error. |
+| 9 | Multi-local USB path format? | **Single string `"auto"`** discovers ALL dongles | `discover_all_dongle_devices()` scans sysfs for all matches |
 
-### Open
+---
 
-| # | Question | Notes |
-|---|----------|-------|
-| 7 | WebSocket auth for bridge connections? | Headers/tokens? Or trust-on-connect? |
-| 8 | Dongle disconnect semantics? | Should sensors keep their `dongle_mac` or reset to None? |
-| 9 | Multi-local USB path format? | Array `["auto"]` vs single string `"auto"` — currently single string |
+## 12. Testing Infrastructure
+
+### 12.1 Virtual Dongle
+
+The `VirtualDongle` (`src/transport/virtual_dongle.rs`) provides an in-process
+protocol-level mock that automatically responds to handshake, scan, verify,
+delete, and sensor list commands. It wraps `ReplayTransport` and supports:
+
+- Pre-paired sensor lists via `with_sensors()`
+- Event injection: `inject_scan_event()`, `inject_alarm_event()`, `inject_leak_event()`, `inject_climate_event()`, `inject_heartbeat_event()`
+- Transport disconnect simulation via `disconnect()` (poison flag → BrokenPipe)
+
+### 12.2 Test Harness
+
+The `TestHarness` (`tests/test_harness/mod.rs`) boots the full system stack
+(minus MQTT) for E2E testing:
+
+- Creates engines from `VirtualDongle`s
+- Wires up `SensorManager`, `EnginesMap`, and Axum web server on a random port
+- Provides HTTP convenience methods (`get_dongles()`, `set_scan()`, `verify_sensor()`, etc.)
+- Supports disconnect testing via `await_dongle_disconnect()`
+
+### 12.3 E2E Test Suite
+
+`tests/full_e2e_test.rs` contains **14 comprehensive tests** covering:
+
+| Tests 1–8 | Core sensor lifecycle, multi-dongle isolation, scan API, raw packets, alarm/climate/leak events |
+|-----------|---|
+| Tests 9–14 | Auto-pairing, dongle disconnect cleanup, sensor re-pairing across dongles, leak state transitions, battery level propagation, three-dongle full lifecycle |
+
+### 12.3 Standalone Virtual Dongle Binary
+
+The `virtual_dongle` binary (`src/bin/virtual_dongle.rs`) provides a standalone
+process that simulates a USB dongle over WebSocket. Configure with YAML:
+
+```yaml
+gateway: "ws://localhost:8080/ws/bridge"
+mac: "LIVROOM1"
+version: "V2.3.9"
+sensors:
+  - mac: FRONTDOR
+    sensor_type: contact
+    battery: 95
+    rssi: 55
+    state: closed
+```
+
+Run: `./virtual_dongle --config dongle.yaml`
+
+Interactive CLI commands: `alarm`, `leak`, `climate`, `heartbeat`, `scan`, `pair`.
