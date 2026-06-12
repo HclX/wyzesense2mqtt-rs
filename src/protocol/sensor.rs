@@ -226,8 +226,8 @@ impl WyzeSensor {
                 (Some(*battery), Some(*rssi), Some(*die_temperature_c), Some(*event_sequence)),
             TelemetryData::AlarmData { rssi, .. } =>
                 (None, Some(*rssi), None, None),
-            TelemetryData::Climate { battery, rssi, .. } =>
-                (Some(*battery), Some(*rssi), None, None),
+            TelemetryData::Climate { battery, rssi, die_temperature_c, event_sequence, .. } =>
+                (Some(*battery), Some(*rssi), Some(*die_temperature_c), Some(*event_sequence)),
             TelemetryData::Leak { battery, rssi, .. } =>
                 (Some(*battery), Some(*rssi), None, None),
             TelemetryData::Scanned { .. } => (Some(100), Some(0), None, None),
@@ -911,7 +911,7 @@ mod tests {
             timestamp: SystemTime::now(),
             sensor_type: SensorType::Unknown(0),
             event_type: DongleEvent::EVENT_TYPE_CLIMATE,
-            data: TelemetryData::Climate { battery: 95, rssi: -50, temperature: temp, humidity: hum },
+            data: TelemetryData::Climate { battery: 95, rssi: -50, temperature: temp, humidity: hum, die_temperature_c: 22, event_sequence: 0 },
         }
     }
 

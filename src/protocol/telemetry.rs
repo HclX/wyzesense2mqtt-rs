@@ -121,6 +121,10 @@ pub enum TelemetryData {
         rssi: i8,
         temperature: f32,
         humidity: u8,
+        /// On-chip die temperature in °C (same source as Heartbeat/Alarm).
+        die_temperature_c: i8,
+        /// Monotonic event sequence counter (16-bit BE).
+        event_sequence: u16,
     },
     Leak {
         battery: u8,
@@ -196,6 +200,21 @@ impl DongleEvent {
         let timestamp = SystemTime::UNIX_EPOCH + Duration::from_millis(timestamp_ms);
         let remaining = &payload[18..];
 
+        // Common `remaining` byte layout pattern shared by 0xA1, 0xA2, and 0xE8:
+        //
+        //   Prefix (2 bytes):
+        //     [0] = die temperature °C  (AON_BATMON:TEMP, battery-compensated, §6.4)
+        //     [1] = battery raw byte    (AON_BATMON:BAT >> 3, voltage ≈ byte/32.0)
+        //
+        //   Middle (event-type-specific):
+        //     [2..3]  = flags/marker    (varies per type; 0xA1/0xA2: flags + 0x01, 0xE8: 0x00 + 0x03)
+        //     [4..N-3] = type-specific  (0xA1: state, 0xA2: state, 0xE8: temp_hi + temp_lo + humidity)
+        //
+        //   Suffix (3 bytes, always at the tail):
+        //     [N-3..N-1] = event sequence counter (16-bit BE, monotonic +1 per event, §6.6)
+        //     [N-1]      = RSSI (dongle-appended, negate for dBm; NOT sensor-transmitted)
+        //
+        // 0xAB (AlarmData) and 0xEA (Leak) do NOT follow this pattern.
         let data = match event_type {
             Self::EVENT_TYPE_HEARTBEAT => {
                 // 0xA1 Status Report — AES-encrypted, 32B (2 blocks)
@@ -253,10 +272,12 @@ impl DongleEvent {
                 if remaining.len() < 10 {
                     return Err("Climate payload too short");
                 }
+                let die_temperature_c = remaining[0] as i8;
                 let battery = remaining[1];
                 let temp_hi = remaining[4] as i8;
                 let temp_lo = remaining[5];
                 let humidity = remaining[6];
+                let event_sequence = u16::from_be_bytes([remaining[7], remaining[8]]);
                 // RSSI is the last byte, dongle-appended
                 let rssi = (remaining[9] as i8).saturating_neg();
                 let temperature = (temp_hi as f32) + ((temp_lo as f32) / 100.0);
@@ -265,6 +286,8 @@ impl DongleEvent {
                     rssi,
                     temperature,
                     humidity,
+                    die_temperature_c,
+                    event_sequence,
                 }
             }
             Self::EVENT_TYPE_EXTENDED_DATA | Self::EVENT_TYPE_EXTENDED_EVENT
