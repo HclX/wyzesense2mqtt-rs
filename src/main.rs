@@ -212,6 +212,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     // 5. Default Mode: Start the Unified Daemon
     info!("Initializing Wyze Sense to MQTT Bridge (Rust) Daemon mode...");
+
+    if config.usb.dongle.to_lowercase() == "none" {
+        info!("  USB Device: DISABLED (bridge-only mode)");
+        info!("  Web Console: http://localhost:{}", config.web.port);
+        return run_daemon(None, config).await;
+    }
+
     info!("  USB Device: {}", config.usb.dongle);
     info!("  Web Console: http://localhost:{}", config.web.port);
 
@@ -224,11 +231,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
     };
 
-    return run_daemon(GatewayTransport::Hidraw(transport), config).await;
+    return run_daemon(Some(GatewayTransport::Hidraw(transport)), config).await;
 }
 
 async fn run_daemon(
-    transport: GatewayTransport,
+    transport: Option<GatewayTransport>,
     config: AppConfig,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
@@ -253,64 +260,69 @@ async fn run_daemon(
         state_path.to_string(),
     )));
 
-    // --- Local USB Dongle Engine ---
-    let mut engine = Engine::new(transport, event_tx.clone(), Some(state_path.to_string()));
+    // --- Local USB Dongle Engine (optional) ---
+    if let Some(transport) = transport {
+        let mut engine = Engine::new(transport, event_tx.clone(), Some(state_path.to_string()));
 
-    // Start background worker loop
-    let _exit_tx = engine.start();
+        // Start background worker loop
+        let _exit_tx = engine.start();
 
-    // Perform dongle unlock handshake
-    match tokio::time::timeout(Duration::from_secs(8), engine.initialize_handshake()).await {
-        Ok(Ok(_)) => {
-            info!("Dongle successfully unlocked and authenticated!");
-            engine.set_auto_verify(true);
+        // Perform dongle unlock handshake
+        match tokio::time::timeout(Duration::from_secs(8), engine.initialize_handshake()).await {
+            Ok(Ok(_)) => {
+                info!("Dongle successfully unlocked and authenticated!");
+                engine.set_auto_verify(true);
 
-            // Register engine in the engines map by its MAC
-            let dongle_mac = engine.dongle_mac().unwrap_or("unknown").to_string();
-            info!("Registering dongle {} in engines registry", dongle_mac);
+                // Register engine in the engines map by its MAC
+                let dongle_mac = engine.dongle_mac().unwrap_or("unknown").to_string();
+                info!("Registering dongle {} in engines registry", dongle_mac);
 
-            // Warm up paired sensors cache from NVRAM and merge with saved configs
-            info!("Warming up paired sensors cache from NVRAM...");
-            match engine.get_sensor_list().await {
-                Ok(sensors_list) => {
-                    let mut manager = sensor_manager.lock().unwrap();
-                    if let Err(e) = manager.load_sensors(&sensors_list) {
-                        error!("Failed to load/bootstrap sensors: {}", e);
-                    } else {
-                        info!("Sensors memory cache successfully warmed up!");
-                        
-                        // Inject dummy events for each cached sensor to trigger initial MQTT discovery & state sync
-                        for sensor in manager.get_sensors().values() {
-                            let dummy = DongleEvent {
-                                mac: sensor.mac.clone(),
-                                timestamp: std::time::SystemTime::now(),
-                                sensor_type: sensor.sensor_type,
-                                event_type: 0xFF,
-                                data: TelemetryData::UnknownEvent(Vec::new()),
-                            };
-                            let _ = event_tx.try_send(dummy);
+                // Warm up paired sensors cache from NVRAM and merge with saved configs
+                info!("Warming up paired sensors cache from NVRAM...");
+                match engine.get_sensor_list().await {
+                    Ok(sensors_list) => {
+                        let mut manager = sensor_manager.lock().unwrap();
+                        if let Err(e) = manager.load_sensors(&sensors_list) {
+                            error!("Failed to load/bootstrap sensors: {}", e);
+                        } else {
+                            info!("Sensors memory cache successfully warmed up!");
+                            
+                            // Inject dummy events for each cached sensor to trigger initial MQTT discovery & state sync
+                            for sensor in manager.get_sensors().values() {
+                                let dummy = DongleEvent {
+                                    mac: sensor.mac.clone(),
+                                    timestamp: std::time::SystemTime::now(),
+                                    sensor_type: sensor.sensor_type,
+                                    event_type: 0xFF,
+                                    data: TelemetryData::UnknownEvent(Vec::new()),
+                                };
+                                let _ = event_tx.try_send(dummy);
+                            }
                         }
                     }
+                    Err(e) => {
+                        warn!("Failed to warm up sensors cache on startup: {}", e);
+                    }
                 }
-                Err(e) => {
-                    warn!("Failed to warm up sensors cache on startup: {}", e);
-                }
-            }
 
-            // Insert into registry
-            {
-                let mut map = engines.lock().await;
-                map.insert(dongle_mac, engine);
+                // Insert into registry
+                {
+                    let mut map = engines.lock().await;
+                    map.insert(dongle_mac, engine);
+                }
+            }
+            Ok(Err(e)) => {
+                error!("Failed during dongle handshake: {}", e);
+                return Err(e.into());
+            }
+            Err(_) => {
+                error!("Dongle handshake timed out! Make sure USB device is connected.");
+                return Err("Handshake timeout".into());
             }
         }
-        Ok(Err(e)) => {
-            error!("Failed during dongle handshake: {}", e);
-            return Err(e.into());
-        }
-        Err(_) => {
-        error!("Dongle handshake timed out! Make sure USB device is connected.");
-            return Err("Handshake timeout".into());
-        }
+    } else {
+        info!("No local USB dongle configured. Running in bridge-only mode.");
+        info!("Waiting for remote dongles to connect via WebSocket at /ws/bridge");
     }
 
     // Start dynamic Availability Monitor in the background
