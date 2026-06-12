@@ -723,7 +723,7 @@ const HTML_CONTENT: &str = r##"
                     case "Contact": stateBadge = sensor.state.is_open ? `<span class="text-rose-400 font-bold">Open</span>` : `<span class="text-emerald-400 font-bold">Closed</span>`; break;
                     case "Motion": stateBadge = sensor.state.is_active ? `<span class="text-rose-400 font-bold">Active</span>` : `<span class="text-emerald-400 font-bold">Clear</span>`; break;
                     case "Leak": stateBadge = sensor.state.is_wet ? `<span class="text-blue-400 font-bold">Wet</span>` : `<span class="text-emerald-400 font-bold">Dry</span>`; break;
-                    case "Climate": stateBadge = `<span class="text-cyan-400 font-mono text-xs">${sensor.state.temperature}°C / ${sensor.state.humidity}%</span>`; break;
+                    case "Climate": stateBadge = `<span class="text-cyan-400 font-mono text-xs">${parseFloat(sensor.state.temperature).toFixed(1)}°C / ${sensor.state.humidity}%</span>`; break;
                 }
             }
 
