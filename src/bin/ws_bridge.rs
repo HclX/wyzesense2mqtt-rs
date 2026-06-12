@@ -102,7 +102,8 @@ async fn run_bridge(
 
     // 2. Connect to gateway WebSocket
     info!("Connecting to gateway: {}", gateway_url);
-    let (ws_stream, _response) = connect_async(gateway_url).await?;
+    let ws_url = format!("{}?device={}", gateway_url, device_path.replace('/', "%2F"));
+    let (ws_stream, _response) = connect_async(&ws_url).await?;
     info!("WebSocket connection established");
 
     let (mut ws_writer, mut ws_reader) = ws_stream.split();

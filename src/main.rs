@@ -260,9 +260,20 @@ async fn run_daemon(
         state_path.to_string(),
     )));
 
+    // Pre-load ALL sensors from state.yaml — the single source of truth
+    {
+        let mut mgr = sensor_manager.lock().unwrap();
+        match mgr.load_all_from_state() {
+            Ok(n) => info!("Loaded {} sensors from state.yaml", n),
+            Err(e) => warn!("Failed to load sensors from state: {}", e),
+        }
+    }
+
     // --- Local USB Dongle Engine (optional) ---
     if let Some(transport) = transport {
         let mut engine = Engine::new(transport, event_tx.clone(), Some(state_path.to_string()));
+        engine.transport_label = "local".to_string();
+        engine.device_path = Some(config.usb.dongle.clone());
 
         // Start background worker loop
         let _exit_tx = engine.start();

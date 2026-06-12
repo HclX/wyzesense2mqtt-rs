@@ -31,6 +31,10 @@ pub struct Engine {
     sensor_list_tx: Arc<Mutex<Option<mpsc::Sender<String>>>>,
     is_scanning: Arc<AtomicBool>,
     state_path: Option<String>,
+    // Transport metadata for dashboard display
+    pub transport_label: String,     // "local" or "bridge"
+    pub device_path: Option<String>, // e.g. /dev/hidraw0
+    pub remote_addr: Option<String>, // e.g. 192.168.1.5:43210
 }
 
 impl Engine {
@@ -55,6 +59,9 @@ impl Engine {
             sensor_list_tx: Arc::clone(&sensor_list_tx),
             is_scanning: Arc::clone(&is_scanning),
             state_path: state_path.clone(),
+            transport_label: "local".to_string(),
+            device_path: None,
+            remote_addr: None,
         };
 
         let mut engine_clone = Self {
@@ -70,6 +77,9 @@ impl Engine {
             sensor_list_tx: Arc::clone(&sensor_list_tx),
             is_scanning: Arc::clone(&is_scanning),
             state_path: state_path.clone(),
+            transport_label: String::new(),
+            device_path: None,
+            remote_addr: None,
         };
 
         tokio::spawn(async move {
@@ -132,6 +142,7 @@ impl Engine {
             battery: Some(100),
             signal: -60,
             state: crate::protocol::sensor::SensorState::Unknown,
+            dongle_mac: None,
         });
     }
 
@@ -643,6 +654,7 @@ impl Engine {
                 battery: Some(100),
                 signal: -60,
                 state: crate::protocol::sensor::SensorState::Unknown,
+                dongle_mac: None,
             });
         }
     }
@@ -663,6 +675,9 @@ impl Clone for Engine {
             sensor_list_tx: Arc::clone(&self.sensor_list_tx),
             is_scanning: Arc::clone(&self.is_scanning),
             state_path: self.state_path.clone(),
+            transport_label: self.transport_label.clone(),
+            device_path: self.device_path.clone(),
+            remote_addr: self.remote_addr.clone(),
         }
     }
 }

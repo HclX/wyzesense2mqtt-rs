@@ -124,21 +124,30 @@ pub async fn start_web_server(
     let listener = tokio::net::TcpListener::bind(addr).await?;
     info!("Web interface successfully started. Listening on http://{}", addr);
     
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await?;
     Ok(())
 }
 
 // --- GET /ws/bridge ---
 async fn ws_bridge_handler(
     ws: WebSocketUpgrade,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+    axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<SocketAddr>,
     State(state): State<Arc<WebState>>,
 ) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| handle_bridge_connection(socket, state))
+    let remote_addr = addr.to_string();
+    let device_path = params.get("device").cloned();
+    ws.on_upgrade(move |socket| handle_bridge_connection(socket, state, remote_addr, device_path))
 }
 
-async fn handle_bridge_connection(socket: axum::extract::ws::WebSocket, state: Arc<WebState>) {
+async fn handle_bridge_connection(
+    socket: axum::extract::ws::WebSocket,
+    state: Arc<WebState>,
+    remote_addr: String,
+    device_path: Option<String>,
+) {
     use futures_util::StreamExt;
-    info!("New WebSocket bridge connection established");
+    info!("New WebSocket bridge connection from {} (device: {:?})", remote_addr, device_path);
 
     let (writer, reader) = socket.split();
     let transport = GatewayTransport::WebSocket {
@@ -151,6 +160,9 @@ async fn handle_bridge_connection(socket: axum::extract::ws::WebSocket, state: A
         state.event_tx.clone(),
         None, // No local state path for remote dongles
     );
+    engine.transport_label = "bridge".to_string();
+    engine.device_path = device_path;
+    engine.remote_addr = Some(remote_addr);
     let exit_tx = engine.start();
 
     // Run handshake with timeout
@@ -170,12 +182,13 @@ async fn handle_bridge_connection(socket: axum::extract::ws::WebSocket, state: A
             match engine.get_sensor_list().await {
                 Ok(sensors_list) => {
                     let mut manager = state.sensor_manager.lock().unwrap();
-                    if let Err(e) = manager.load_sensors(&sensors_list) {
-                        error!("Failed to load sensors for bridge dongle {}: {}", mac, e);
-                    } else {
-                        info!("Sensors cache warmed for bridge dongle {} ({} sensors)", mac, sensors_list.len());
-                        // Inject dummy events to trigger MQTT discovery for existing sensors
-                        for sensor in manager.get_sensors().values() {
+                    // Assign NVRAM sensors to this dongle in the single source of truth
+                    manager.assign_dongle(&mac, &sensors_list);
+                    info!("Assigned {} NVRAM sensors to bridge dongle {}", sensors_list.len(), mac);
+
+                    // Inject dummy events to trigger MQTT discovery for assigned sensors
+                    for sensor_mac in &sensors_list {
+                        if let Some(sensor) = manager.get_sensors().get(sensor_mac) {
                             let dummy = crate::protocol::telemetry::DongleEvent {
                                 mac: sensor.mac.clone(),
                                 timestamp: std::time::SystemTime::now(),
@@ -188,7 +201,7 @@ async fn handle_bridge_connection(socket: axum::extract::ws::WebSocket, state: A
                     }
                 }
                 Err(e) => {
-                    error!("Failed to warm up sensors for bridge dongle {}: {}", mac, e);
+                    error!("Failed to get sensor list for bridge dongle {}: {}", mac, e);
                 }
             }
 
@@ -256,42 +269,29 @@ async fn list_dongles(
 ) -> impl IntoResponse {
     let engines = state.engines.lock().await;
     let manager = state.sensor_manager.lock().unwrap();
-    let mut all_engine_sensor_macs = std::collections::HashSet::new();
 
+    // Group sensors by dongle_mac from the single source of truth (SensorManager)
     let dongles: Vec<serde_json::Value> = engines.iter().map(|(mac, engine)| {
-        let sensors: Vec<serde_json::Value> = engine.get_rich_sensors().iter().map(|s| {
-            all_engine_sensor_macs.insert(s.mac.clone());
-            sensor_to_json(s)
-        }).collect();
-
-        // Also check sensor_manager for sensors associated with this dongle
-        // that may not be in engine's internal cache
-        let manager_sensors: Vec<serde_json::Value> = manager.get_sensors().values()
-            .filter(|s| !all_engine_sensor_macs.contains(&s.mac))
+        let sensors: Vec<serde_json::Value> = manager.get_sensors().values()
+            .filter(|s| s.dongle_mac.as_deref() == Some(mac.as_str()))
             .map(|s| sensor_info_to_json(s))
             .collect();
-        // Track MACs from manager sensors
-        for s in manager.get_sensors().values() {
-            if !all_engine_sensor_macs.contains(&s.mac) {
-                all_engine_sensor_macs.insert(s.mac.clone());
-            }
-        }
-
-        let mut all_sensors = sensors;
-        all_sensors.extend(manager_sensors);
 
         serde_json::json!({
             "mac": mac,
             "version": engine.dongle_version(),
             "scanning": engine.is_scanning(),
-            "sensors": all_sensors,
-            "sensor_count": all_sensors.len(),
+            "transport": engine.transport_label,
+            "device_path": engine.device_path,
+            "remote_addr": engine.remote_addr,
+            "sensors": sensors,
+            "sensor_count": sensors.len(),
         })
     }).collect();
 
-    // Unassociated sensors: in sensor_manager but not in any engine
+    // Unassociated sensors: dongle_mac is None
     let unassociated: Vec<serde_json::Value> = manager.get_sensors().values()
-        .filter(|s| !all_engine_sensor_macs.contains(&s.mac))
+        .filter(|s| s.dongle_mac.is_none())
         .map(|s| sensor_info_to_json(s))
         .collect();
 
@@ -299,17 +299,6 @@ async fn list_dongles(
         "dongles": dongles,
         "unassociated_sensors": unassociated,
     }))
-}
-
-fn sensor_to_json(s: &crate::config::state::PersistedSensorState) -> serde_json::Value {
-    serde_json::json!({
-        "mac": s.mac,
-        "sensor_type": s.sensor_type,
-        "last_seen": s.last_seen,
-        "battery": s.battery,
-        "signal": s.signal,
-        "state": s.state,
-    })
 }
 
 fn sensor_info_to_json(s: &crate::protocol::sensor::WyzeSensor) -> serde_json::Value {
@@ -352,6 +341,7 @@ async fn list_sensors(
                 battery: sensor.battery_pct,
                 signal: sensor.rssi_dbm,
                 state: sensor.state.clone(),
+                dongle_mac: sensor.dongle_mac.clone(),
             });
         } else {
             sensors.push(rich.clone());
@@ -367,6 +357,7 @@ async fn list_sensors(
                 battery: sensor.battery_pct,
                 signal: sensor.rssi_dbm,
                 state: sensor.state.clone(),
+                dongle_mac: sensor.dongle_mac.clone(),
             });
         }
     }
@@ -387,6 +378,7 @@ async fn list_cached_sensors(
             battery: sensor.battery_pct,
             signal: sensor.rssi_dbm,
             state: sensor.state.clone(),
+            dongle_mac: sensor.dongle_mac.clone(),
         }
     }).collect();
     sensors.sort_by_key(|s| s.mac.clone());
@@ -598,29 +590,32 @@ const HTML_CONTENT: &str = r##"
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Wyze Sense to MQTT Bridge (Rust) Control Panel</title>
+    <title>Wyze Sense Bridge — Control Panel</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
         body { font-family: 'Inter', sans-serif; }
-        .dongle-section { transition: all 0.3s ease; }
-        .sensor-rows { transition: max-height 0.3s ease, opacity 0.2s ease; overflow: hidden; }
+        .sensor-rows { transition: max-height 0.35s ease, opacity 0.2s ease; overflow: hidden; }
         .sensor-rows.collapsed { max-height: 0; opacity: 0; }
-        .chevron { transition: transform 0.2s ease; }
+        .chevron { transition: transform 0.2s ease; display: inline-block; }
         .chevron.open { transform: rotate(90deg); }
-        @keyframes pulse-glow { 0%, 100% { box-shadow: 0 0 0 0 rgba(45, 212, 191, 0.2); } 50% { box-shadow: 0 0 12px 4px rgba(45, 212, 191, 0.1); } }
+        .dongle-card { transition: border-color 0.2s ease; }
         .dongle-card:hover { border-color: rgba(45, 212, 191, 0.3); }
+        .tag { display: inline-flex; align-items: center; gap: 4px; font-size: 0.65rem; padding: 2px 8px; border-radius: 9999px; font-weight: 600; }
+        .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.6); backdrop-filter: blur(4px); z-index: 100; display: flex; align-items: center; justify-content: center; }
+        .modal-panel { background: #0f172a; border: 1px solid #1e293b; border-radius: 1rem; width: 90%; max-width: 560px; max-height: 85vh; overflow-y: auto; box-shadow: 0 25px 50px rgba(0,0,0,0.5); }
     </style>
 </head>
 <body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col">
     <header class="border-b border-slate-800 bg-slate-900/50 backdrop-blur sticky top-0 z-50">
-        <div class="max-w-[1400px] w-full mx-auto px-6 py-4 flex items-center justify-between">
+        <div class="max-w-5xl w-full mx-auto px-6 py-3 flex items-center justify-between">
             <div class="flex items-center space-x-3">
                 <span class="text-2xl">📡</span>
                 <h1 class="text-xl font-bold tracking-tight text-teal-400">Wyze Sense Bridge</h1>
+                <span class="text-xs text-slate-600 font-mono">v0.1.3</span>
             </div>
-            <div id="header-badges" class="flex items-center gap-3">
-                <div class="flex items-center space-x-2 bg-slate-800 px-3 py-1.5 rounded-full text-xs font-semibold text-slate-400">
+            <div class="flex items-center gap-3">
+                <div class="flex items-center space-x-2 bg-slate-800 px-3 py-1.5 rounded-full text-xs font-semibold text-slate-400" id="header-badge">
                     <span class="w-2 h-2 rounded-full bg-slate-600" id="status-dot"></span>
                     <span id="status-text">Connecting...</span>
                 </div>
@@ -628,394 +623,329 @@ const HTML_CONTENT: &str = r##"
         </div>
     </header>
 
-    <main class="flex-1 max-w-[1400px] w-full mx-auto p-6 grid grid-cols-1 lg:grid-cols-4 gap-6">
-        <!-- Left Column: Controls -->
-        <div class="lg:col-span-1 flex flex-col gap-6">
-            <!-- Pairing Control Card -->
-            <div class="bg-slate-900 rounded-2xl border border-slate-800 p-6 shadow-xl">
-                <h2 class="text-lg font-bold text-teal-400 mb-4 flex items-center"><span class="mr-2">🤝</span> Pairing Center</h2>
-                <p class="text-xs text-slate-400 mb-3">Select a dongle to scan for new sensors. Only one dongle can scan at a time.</p>
-                <select id="scan-dongle-select" class="w-full mb-3 bg-slate-950 border border-slate-800 text-sm rounded-xl px-4 py-2.5 focus:outline-none focus:border-teal-500 transition text-slate-300">
-                    <option value="">No dongles connected</option>
-                </select>
-                <button id="btn-scan" onclick="toggleScan()" class="w-full py-2.5 px-4 bg-teal-600 hover:bg-teal-500 font-semibold text-sm rounded-xl transition shadow-lg shadow-teal-600/25 flex items-center justify-center">
-                    Start Pairing Scan
-                </button>
-            </div>
-
-            <!-- Maintenance -->
-            <div class="bg-slate-900 rounded-2xl border border-slate-800 p-6 shadow-xl">
-                <h2 class="text-lg font-bold text-teal-400 mb-4 flex items-center"><span class="mr-2">🛠️</span> Maintenance</h2>
-                <button onclick="runFix()" class="w-full py-2.5 px-4 border border-slate-700 bg-slate-800 hover:bg-slate-700 font-semibold text-sm rounded-xl transition">
-                    Purge Ghost Sensors
-                </button>
-            </div>
-
-            <!-- Hex Diagnostics -->
-            <div class="bg-slate-900 rounded-2xl border border-slate-800 p-6 shadow-xl">
-                <h2 class="text-lg font-bold text-teal-400 mb-4 flex items-center"><span class="mr-2">💻</span> Hex Console</h2>
-                <div class="flex gap-2 mb-3">
-                    <input id="hex-input" type="text" placeholder="AA,55,43..." class="flex-1 bg-slate-950 border border-slate-800 text-sm rounded-xl px-3 py-2 font-mono focus:outline-none focus:border-teal-500 transition">
-                    <button onclick="sendRawBytes()" class="py-2 px-4 bg-slate-800 hover:bg-slate-700 font-semibold text-xs rounded-xl border border-slate-700 transition">Send</button>
-                </div>
-                <div class="rounded-xl border border-slate-800 bg-slate-950 p-3 font-mono text-xs text-emerald-400 min-h-[80px] max-h-[150px] overflow-y-auto space-y-1 flex flex-col justify-end" id="console-log">
-                    <div class="text-slate-500 italic">[Console ready]</div>
-                </div>
-            </div>
+    <main class="flex-1 max-w-5xl w-full mx-auto px-6 py-6 flex flex-col gap-5">
+        <div class="flex items-center justify-between">
+            <h2 class="text-lg font-bold text-teal-400 flex items-center"><span class="mr-2">🔋</span> Devices</h2>
+            <button onclick="loadDongles()" class="text-xs text-teal-400 hover:underline">Refresh</button>
         </div>
-
-        <!-- Right Column: Dongle-Grouped Device List -->
-        <div class="lg:col-span-3 flex flex-col gap-4" id="dongle-list">
-            <div class="flex items-center justify-between">
-                <h2 class="text-lg font-bold text-teal-400 flex items-center"><span class="mr-2">🔋</span> Devices</h2>
-                <button onclick="loadDongles()" class="text-xs text-teal-400 hover:underline">Refresh</button>
-            </div>
-            <div id="dongles-container" class="space-y-4">
-                <div class="text-center text-sm text-slate-500 py-12">Loading devices...</div>
-            </div>
+        <div id="dongles-container" class="space-y-4">
+            <div class="text-center text-sm text-slate-500 py-12">Loading devices...</div>
         </div>
     </main>
 
-    <footer class="border-t border-slate-800 bg-slate-900/20 py-4 text-center text-xs text-slate-500">
-        Wyze Sense to MQTT Bridge (Rust) v0.1.3 — Multi-Dongle WebSocket Architecture
+    <footer class="border-t border-slate-800 bg-slate-900/20 py-3">
+        <div class="max-w-5xl w-full mx-auto px-6 text-center text-xs text-slate-500">
+            Wyze Sense to MQTT Bridge (Rust) — Multi-Dongle WebSocket Architecture
+        </div>
     </footer>
 
+    <!-- Modal container -->
+    <div id="modal-root"></div>
+
     <script>
-        const API_BASE = "";
-        let scanActive = false;
+        const API = "";
         let donglesData = { dongles: [], unassociated_sensors: [] };
+        let scanState = {};
+        let modalDongle = null;
 
-        // ===== Sensor Row HTML Builder =====
-        function buildSensorRow(sensor) {
-            let batteryBadge;
-            if (sensor.battery === null || sensor.battery === undefined) {
-                batteryBadge = `<span class="px-2 py-0.5 rounded-full text-xs font-semibold border text-slate-400 bg-slate-950/30 border-slate-900/30">N/A</span>`;
-            } else {
-                let bc = "text-emerald-400 bg-emerald-950/30 border-emerald-900/30";
-                if (sensor.battery < 40) bc = "text-rose-400 bg-rose-950/30 border-rose-900/30";
-                else if (sensor.battery < 80) bc = "text-amber-400 bg-amber-950/30 border-amber-900/30";
-                batteryBadge = `<span class="px-2 py-0.5 rounded-full text-xs font-semibold border ${bc}">${sensor.battery}%</span>`;
+        // ===== Sensor Row =====
+        function sensorRow(s) {
+            let batt;
+            if (s.battery == null) batt = `<span class="tag border border-slate-800 text-slate-500">N/A</span>`;
+            else {
+                let c = "text-emerald-400 bg-emerald-950/30 border-emerald-900/30";
+                if (s.battery < 20) c = "text-rose-400 bg-rose-950/30 border-rose-900/30";
+                else if (s.battery < 50) c = "text-amber-400 bg-amber-950/30 border-amber-900/30";
+                batt = `<span class="tag border ${c}">${s.battery}%</span>`;
+            }
+            let sig = "text-slate-400";
+            if (s.signal > -50) sig = "text-teal-400 font-semibold";
+            else if (s.signal < -80) sig = "text-rose-400 font-semibold";
+
+            let seen = "Never";
+            if (s.last_seen > 0) {
+                const d = Math.floor(Date.now()/1000) - s.last_seen;
+                if (d < 60) seen = "Just now"; else if (d < 3600) seen = `${Math.floor(d/60)}m ago`;
+                else if (d < 86400) seen = `${Math.floor(d/3600)}h ago`; else seen = `${Math.floor(d/86400)}d ago`;
             }
 
-            let signalColor = "text-slate-400";
-            if (sensor.signal > -50) signalColor = "text-teal-400 font-semibold";
-            else if (sensor.signal < -80) signalColor = "text-rose-400 font-semibold";
+            const t = (s.sensor_type||"").toLowerCase();
+            let tt;
+            if (t.includes("contact")||t.includes("switch")) tt = `<span class="tag border border-cyan-900 bg-cyan-950/20 text-cyan-400">🚪 Contact</span>`;
+            else if (t.includes("motion")) tt = `<span class="tag border border-purple-900 bg-purple-950/20 text-purple-400">🏃 Motion</span>`;
+            else if (t.includes("climate")) tt = `<span class="tag border border-sky-900 bg-sky-950/20 text-sky-400">🌡️ Climate</span>`;
+            else if (t.includes("leak")) tt = `<span class="tag border border-blue-900 bg-blue-950/20 text-blue-400">💧 Leak</span>`;
+            else tt = `<span class="tag border border-slate-800 bg-slate-900 text-slate-300">${s.sensor_type}</span>`;
 
-            let lastSeenText = "Never";
-            if (sensor.last_seen > 0) {
-                const diff = Math.floor(Date.now() / 1000) - sensor.last_seen;
-                if (diff < 60) lastSeenText = "Just now";
-                else if (diff < 3600) lastSeenText = `${Math.floor(diff / 60)}m ago`;
-                else if (diff < 86400) lastSeenText = `${Math.floor(diff / 3600)}h ago`;
-                else lastSeenText = `${Math.floor(diff / 86400)}d ago`;
+            let st = `<span class="text-slate-500 italic text-xs">—</span>`;
+            if (s.state) switch (s.state.kind) {
+                case "Contact": st = s.state.is_open ? `<span class="text-rose-400 font-bold text-xs">Open</span>` : `<span class="text-emerald-400 font-bold text-xs">Closed</span>`; break;
+                case "Motion": st = s.state.is_active ? `<span class="text-rose-400 font-bold text-xs">Active</span>` : `<span class="text-emerald-400 font-bold text-xs">Clear</span>`; break;
+                case "Leak": st = s.state.is_wet ? `<span class="text-blue-400 font-bold text-xs">Wet</span>` : `<span class="text-emerald-400 font-bold text-xs">Dry</span>`; break;
+                case "Climate": st = `<span class="text-cyan-400 font-mono text-xs">${parseFloat(s.state.temperature).toFixed(1)}°C / ${s.state.humidity}%</span>`; break;
             }
 
-            let typeBadge = `<span class="px-2 py-0.5 rounded-full text-xs font-semibold border border-slate-800 bg-slate-900 text-slate-300 capitalize">${sensor.sensor_type}</span>`;
-            const st = sensor.sensor_type?.toLowerCase() || "";
-            if (st.includes("contact")) typeBadge = `<span class="px-2 py-0.5 rounded-full text-xs font-semibold border border-cyan-950 bg-cyan-950/20 text-cyan-400">🚪 Contact</span>`;
-            else if (st.includes("motion")) typeBadge = `<span class="px-2 py-0.5 rounded-full text-xs font-semibold border border-purple-950 bg-purple-950/20 text-purple-400">🏃 Motion</span>`;
-            else if (st.includes("climate")) typeBadge = `<span class="px-2 py-0.5 rounded-full text-xs font-semibold border border-sky-950 bg-sky-950/20 text-sky-400">🌡️ Climate</span>`;
-            else if (st.includes("leak")) typeBadge = `<span class="px-2 py-0.5 rounded-full text-xs font-semibold border border-blue-950 bg-blue-950/20 text-blue-400">💧 Leak</span>`;
-
-            let stateBadge = `<span class="text-slate-500 italic">Unknown</span>`;
-            if (sensor.state) {
-                switch (sensor.state.kind) {
-                    case "Contact": stateBadge = sensor.state.is_open ? `<span class="text-rose-400 font-bold">Open</span>` : `<span class="text-emerald-400 font-bold">Closed</span>`; break;
-                    case "Motion": stateBadge = sensor.state.is_active ? `<span class="text-rose-400 font-bold">Active</span>` : `<span class="text-emerald-400 font-bold">Clear</span>`; break;
-                    case "Leak": stateBadge = sensor.state.is_wet ? `<span class="text-blue-400 font-bold">Wet</span>` : `<span class="text-emerald-400 font-bold">Dry</span>`; break;
-                    case "Climate": stateBadge = `<span class="text-cyan-400 font-mono text-xs">${parseFloat(sensor.state.temperature).toFixed(1)}°C / ${sensor.state.humidity}%</span>`; break;
-                }
-            }
-
-            let actions = `<button onclick="unpairSensor('${sensor.mac}')" class="text-xs py-1 px-2.5 rounded-lg bg-rose-950 hover:bg-rose-900 text-rose-400 transition">Unpair</button>`;
-            if (st.includes("chime")) {
-                actions = `<button onclick="testChime('${sensor.mac}')" class="text-xs py-1 px-2.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-teal-400 transition mr-1">Chime</button>` + actions;
-            }
-
-            return `<tr class="hover:bg-slate-800/30 transition">
-                <td class="py-2.5 px-4 font-mono font-semibold text-teal-400 text-xs">${sensor.mac}</td>
-                <td class="py-2.5 px-4">${typeBadge}</td>
-                <td class="py-2.5 px-4">${stateBadge}</td>
-                <td class="py-2.5 px-4">${batteryBadge}</td>
-                <td class="py-2.5 px-4"><span class="font-mono text-xs ${signalColor}">${sensor.signal} dBm</span></td>
-                <td class="py-2.5 px-4 text-xs text-slate-400">${lastSeenText}</td>
-                <td class="py-2.5 px-4 text-right">${actions}</td>
+            return `<tr class="hover:bg-slate-800/30 transition text-xs">
+                <td class="py-2 px-3 font-mono font-semibold text-teal-400">${s.mac}</td>
+                <td class="py-2 px-3">${tt}</td><td class="py-2 px-3">${st}</td>
+                <td class="py-2 px-3">${batt}</td>
+                <td class="py-2 px-3"><span class="font-mono ${sig}">${s.signal} dBm</span></td>
+                <td class="py-2 px-3 text-slate-400">${seen}</td>
             </tr>`;
         }
 
-        function buildSensorTable(sensors) {
-            if (!sensors || sensors.length === 0) {
-                return `<div class="text-center text-xs text-slate-500 py-4 italic">No sensors paired to this dongle</div>`;
+        function sensorTable(sensors) {
+            if (!sensors || !sensors.length) return `<div class="text-center text-xs text-slate-500 py-3 italic">No sensors</div>`;
+            return `<table class="w-full text-left text-slate-300">
+                <thead class="text-slate-500 text-xs uppercase"><tr>
+                    <th class="py-1.5 px-3">MAC</th><th class="py-1.5 px-3">Type</th><th class="py-1.5 px-3">State</th>
+                    <th class="py-1.5 px-3">Battery</th><th class="py-1.5 px-3">Signal</th><th class="py-1.5 px-3">Seen</th>
+                </tr></thead>
+                <tbody class="divide-y divide-slate-800/50">${sensors.map(sensorRow).join("")}</tbody></table>`;
+        }
+
+        // ===== Dongle Card =====
+        function dongleCard(d, i) {
+            const n = d.sensors?.length || 0;
+            const dot = `<span class="w-2.5 h-2.5 rounded-full ${d.scanning ? 'bg-amber-400 animate-pulse' : 'bg-teal-400'}"></span>`;
+            let tr;
+            if (d.transport === "bridge") {
+                const ip = d.remote_addr ? d.remote_addr.split(':')[0] : '?';
+                tr = `<span class="tag border border-violet-900 bg-violet-950/20 text-violet-400">🌐 Bridge</span>
+                      <span class="text-xs text-slate-500 font-mono ml-1">${ip} · ${d.device_path||'?'}</span>`;
+            } else {
+                tr = `<span class="tag border border-teal-900 bg-teal-950/20 text-teal-400">🔌 Local</span>
+                      <span class="text-xs text-slate-500 font-mono ml-1">${d.device_path||'?'}</span>`;
             }
-            return `<table class="w-full text-left text-sm text-slate-300">
-                <thead class="text-slate-500 text-xs font-medium uppercase">
-                    <tr>
-                        <th class="py-2 px-4">MAC</th>
-                        <th class="py-2 px-4">Type</th>
-                        <th class="py-2 px-4">State</th>
-                        <th class="py-2 px-4">Battery</th>
-                        <th class="py-2 px-4">Signal</th>
-                        <th class="py-2 px-4">Last Seen</th>
-                        <th class="py-2 px-4 text-right">Actions</th>
-                    </tr>
-                </thead>
-                <tbody class="divide-y divide-slate-800/50">
-                    ${sensors.map(s => buildSensorRow(s)).join("")}
-                </tbody>
-            </table>`;
-        }
-
-        // ===== Build Dongle Card =====
-        function buildDongleCard(dongle, index) {
-            const isScanning = dongle.scanning;
-            const statusDot = `<span class="w-2.5 h-2.5 rounded-full ${isScanning ? 'bg-amber-400 animate-pulse' : 'bg-teal-400'}"></span>`;
-            const scanLabel = isScanning ? '<span class="text-amber-400 text-xs font-semibold ml-2">SCANNING</span>' : '';
-            const sensorCount = dongle.sensors?.length || 0;
-
-            return `<div class="dongle-card bg-slate-900 rounded-2xl border border-slate-800 shadow-xl overflow-hidden transition-all" id="dongle-${index}">
-                <div class="px-5 py-4 flex items-center justify-between cursor-pointer select-none hover:bg-slate-800/30 transition" onclick="toggleDongleSection(${index})">
-                    <div class="flex items-center gap-3">
-                        <span class="chevron open text-slate-500 text-sm" id="chevron-${index}">▶</span>
-                        ${statusDot}
-                        <div>
-                            <div class="flex items-center gap-2">
-                                <span class="font-bold text-sm text-slate-100">🕹️ Dongle ${dongle.mac}</span>
-                                ${scanLabel}
+            return `<div class="dongle-card bg-slate-900 rounded-2xl border border-slate-800 shadow-xl overflow-hidden">
+                <div class="px-5 py-3.5 flex items-center justify-between">
+                    <div class="flex items-center gap-3 cursor-pointer select-none flex-1" onclick="toggleSec(${i})">
+                        <span class="chevron open text-slate-500 text-xs" id="chev-${i}">▶</span>
+                        ${dot}
+                        <div class="min-w-0">
+                            <div class="flex items-center gap-2 flex-wrap">
+                                <span class="font-bold text-sm">🕹️ ${d.mac}</span>
+                                ${d.scanning?'<span class="tag border border-amber-900 bg-amber-950/20 text-amber-400">SCANNING</span>':''}
+                                <span class="tag border border-slate-800 text-slate-400">${n} sensor${n!==1?'s':''}</span>
                             </div>
-                            <div class="text-xs text-slate-500 font-mono mt-0.5">${dongle.version || 'Unknown firmware'}</div>
+                            <div class="flex items-center gap-2 mt-0.5 flex-wrap">
+                                <span class="text-xs text-slate-500 font-mono">${d.version||'Unknown firmware'}</span>
+                                <span class="text-slate-700">·</span> ${tr}
+                            </div>
                         </div>
                     </div>
-                    <div class="flex items-center gap-3">
-                        <span class="text-xs text-slate-400 bg-slate-800 px-2.5 py-1 rounded-full">${sensorCount} sensor${sensorCount !== 1 ? 's' : ''}</span>
-                    </div>
+                    <button onclick="openModal('${d.mac}')" class="ml-3 shrink-0 py-1.5 px-4 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-lg border border-slate-700 transition flex items-center gap-1.5">
+                        <span>⚙️</span> Actions
+                    </button>
                 </div>
-                <div class="sensor-rows border-t border-slate-800/50" id="sensors-${index}">
-                    <div class="px-2 py-1">
-                        ${buildSensorTable(dongle.sensors)}
-                    </div>
+                <div class="sensor-rows border-t border-slate-800/50" id="rows-${i}">
+                    <div class="px-2 py-1">${sensorTable(d.sensors)}</div>
                 </div>
             </div>`;
         }
 
-        function buildUnassociatedCard(sensors) {
-            if (!sensors || sensors.length === 0) return '';
-            return `<div class="dongle-card bg-slate-900/60 rounded-2xl border border-dashed border-slate-700 shadow-xl overflow-hidden">
-                <div class="px-5 py-4 flex items-center justify-between cursor-pointer select-none hover:bg-slate-800/30 transition" onclick="toggleDongleSection('orphan')">
-                    <div class="flex items-center gap-3">
-                        <span class="chevron open text-slate-500 text-sm" id="chevron-orphan">▶</span>
-                        <span class="w-2.5 h-2.5 rounded-full bg-slate-600"></span>
+        function orphanCard(sensors) {
+            if (!sensors?.length) return '';
+            return `<div class="dongle-card bg-slate-900/50 rounded-2xl border border-dashed border-slate-700 shadow-xl overflow-hidden">
+                <div class="px-5 py-3.5 flex items-center gap-3 cursor-pointer select-none" onclick="toggleSec('orph')">
+                    <span class="chevron open text-slate-500 text-xs" id="chev-orph">▶</span>
+                    <span class="w-2.5 h-2.5 rounded-full bg-slate-600"></span>
+                    <div><span class="font-bold text-sm text-slate-400">📦 Unassociated Sensors</span>
+                        <div class="text-xs text-slate-600">Restored from state — no active dongle</div></div>
+                    <span class="tag border border-slate-700 text-slate-500 ml-auto">${sensors.length}</span>
+                </div>
+                <div class="sensor-rows border-t border-slate-800/50" id="rows-orph">
+                    <div class="px-2 py-1">${sensorTable(sensors)}</div>
+                </div>
+            </div>`;
+        }
+
+        function toggleSec(id) {
+            document.getElementById(`rows-${id}`)?.classList.toggle("collapsed");
+            document.getElementById(`chev-${id}`)?.classList.toggle("open");
+        }
+
+        // ===== Modal =====
+        function openModal(mac) {
+            modalDongle = mac;
+            renderModal();
+        }
+        function closeModal() {
+            // Stop any active scan when closing
+            if (modalDongle && scanState[modalDongle]?.active) forceStopScan(modalDongle);
+            modalDongle = null;
+            document.getElementById("modal-root").innerHTML = '';
+        }
+
+        function renderModal() {
+            if (!modalDongle) return;
+            const d = donglesData.dongles.find(x => x.mac === modalDongle);
+            if (!d) { closeModal(); return; }
+            const ss = scanState[modalDongle] || {};
+            const scanning = ss.active || false;
+
+            const scanBtn = scanning
+                ? `<button onclick="toggleScan('${d.mac}')" class="w-full py-2.5 bg-rose-700 hover:bg-rose-600 text-white text-sm font-semibold rounded-xl transition">⏹ Stop Scan (${ss.secondsLeft||0}s)</button>`
+                : `<button onclick="toggleScan('${d.mac}')" class="w-full py-2.5 bg-teal-600 hover:bg-teal-500 text-white text-sm font-semibold rounded-xl transition">📡 Pair New Sensor</button>`;
+
+            document.getElementById("modal-root").innerHTML = `
+            <div class="modal-backdrop" onclick="if(event.target===this)closeModal()">
+                <div class="modal-panel">
+                    <div class="px-6 py-4 border-b border-slate-800 flex items-center justify-between">
                         <div>
-                            <span class="font-bold text-sm text-slate-400">📦 Unassociated Sensors</span>
-                            <div class="text-xs text-slate-600 mt-0.5">Restored from saved state — no active dongle connection</div>
+                            <div class="font-bold text-base text-teal-400">⚙️ Dongle ${d.mac}</div>
+                            <div class="text-xs text-slate-500 mt-0.5">${d.transport === 'bridge' ? '🌐 Bridge' : '🔌 Local'} · ${d.device_path||'?'}${d.remote_addr ? ' · '+d.remote_addr.split(':')[0] : ''}</div>
                         </div>
+                        <button onclick="closeModal()" class="text-slate-500 hover:text-slate-300 text-xl leading-none px-1">✕</button>
                     </div>
-                    <span class="text-xs text-slate-500 bg-slate-800 px-2.5 py-1 rounded-full">${sensors.length} sensor${sensors.length !== 1 ? 's' : ''}</span>
-                </div>
-                <div class="sensor-rows border-t border-slate-800/50" id="sensors-orphan">
-                    <div class="px-2 py-1">
-                        ${buildSensorTable(sensors)}
+                    <div class="p-6 space-y-5">
+                        <!-- Pairing Center -->
+                        <div>
+                            <h3 class="text-sm font-semibold text-slate-300 mb-2">📡 Pairing Center</h3>
+                            <p class="text-xs text-slate-500 mb-3">Put the sensor in pairing mode, then start scanning. Scan auto-stops after 60 seconds.</p>
+                            ${scanBtn}
+                        </div>
+
+                        <hr class="border-slate-800">
+
+                        <!-- Maintenance -->
+                        <div>
+                            <h3 class="text-sm font-semibold text-slate-300 mb-2">🧹 Maintenance</h3>
+                            <button onclick="runFix('${d.mac}')" class="w-full py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-sm font-semibold rounded-xl border border-slate-700 transition">Purge Ghost Sensors</button>
+                        </div>
+
+                        <hr class="border-slate-800">
+
+                        <!-- Hex Console -->
+                        <div>
+                            <h3 class="text-sm font-semibold text-slate-300 mb-2">💻 Hex Console</h3>
+                            <div class="flex gap-2 mb-2">
+                                <input id="hex-input" type="text" placeholder="AA,55,43..." class="flex-1 bg-slate-950 border border-slate-800 text-sm rounded-xl px-3 py-2 font-mono focus:outline-none focus:border-teal-500 transition">
+                                <button onclick="sendRaw()" class="py-2 px-4 bg-slate-800 hover:bg-slate-700 font-semibold text-xs rounded-xl border border-slate-700 transition">Send</button>
+                            </div>
+                            <div class="rounded-xl border border-slate-800 bg-slate-950 p-3 font-mono text-xs text-emerald-400 min-h-[60px] max-h-[120px] overflow-y-auto space-y-1 flex flex-col justify-end" id="console-log">
+                                <div class="text-slate-500 italic">[Console ready]</div>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>`;
         }
 
-        function toggleDongleSection(id) {
-            const rows = document.getElementById(`sensors-${id}`);
-            const chevron = document.getElementById(`chevron-${id}`);
-            rows.classList.toggle("collapsed");
-            chevron.classList.toggle("open");
-        }
-
-        // ===== Data Loading =====
+        // ===== Data =====
         async function loadDongles() {
             try {
-                const res = await fetch(`${API_BASE}/api/dongles`);
-                donglesData = await res.json();
-                renderDongles();
-                updateHeaderBadges();
-                updateScanSelect();
-            } catch (e) {
-                document.getElementById("dongles-container").innerHTML =
-                    `<div class="text-center text-sm text-rose-500 py-12">Failed to load devices</div>`;
+                const r = await fetch(`${API}/api/dongles`);
+                donglesData = await r.json();
+                render(); updateHeader();
+                if (modalDongle) renderModal();
+            } catch(e) {
+                document.getElementById("dongles-container").innerHTML = `<div class="text-center text-sm text-rose-500 py-12">Failed to load</div>`;
             }
         }
 
-        function renderDongles() {
-            const container = document.getElementById("dongles-container");
-            if (donglesData.dongles.length === 0 && (!donglesData.unassociated_sensors || donglesData.unassociated_sensors.length === 0)) {
-                container.innerHTML = `<div class="text-center py-16">
-                    <div class="text-4xl mb-3">📡</div>
+        function render() {
+            const c = document.getElementById("dongles-container");
+            if (!donglesData.dongles.length && !(donglesData.unassociated_sensors||[]).length) {
+                c.innerHTML = `<div class="text-center py-16"><div class="text-4xl mb-3">📡</div>
                     <div class="text-slate-400 text-sm">No dongles connected</div>
-                    <div class="text-slate-600 text-xs mt-1">Connect a USB dongle or start a WebSocket bridge</div>
-                </div>`;
+                    <div class="text-slate-600 text-xs mt-1">Connect a USB dongle or start a WebSocket bridge</div></div>`;
                 return;
             }
-            let html = donglesData.dongles.map((d, i) => buildDongleCard(d, i)).join("");
-            html += buildUnassociatedCard(donglesData.unassociated_sensors);
-            container.innerHTML = html;
+            c.innerHTML = donglesData.dongles.map((d,i) => dongleCard(d,i)).join("") + orphanCard(donglesData.unassociated_sensors);
         }
 
-        function updateHeaderBadges() {
-            const dot = document.getElementById("status-dot");
-            const text = document.getElementById("status-text");
-            const count = donglesData.dongles.length;
-            if (count > 0) {
+        function updateHeader() {
+            const dot = document.getElementById("status-dot"), txt = document.getElementById("status-text");
+            const badge = document.getElementById("header-badge");
+            const n = donglesData.dongles.length;
+            if (n > 0) {
                 dot.className = "w-2 h-2 rounded-full bg-teal-400";
-                text.innerText = `${count} dongle${count > 1 ? 's' : ''} online`;
-                text.parentElement.classList.remove("text-slate-400");
-                text.parentElement.classList.add("text-teal-400", "bg-teal-900/20", "border", "border-teal-800/30");
+                txt.innerText = `${n} dongle${n>1?'s':''} online`;
+                badge.className = "flex items-center space-x-2 bg-teal-900/20 border border-teal-800/30 px-3 py-1.5 rounded-full text-xs font-semibold text-teal-400";
             } else {
                 dot.className = "w-2 h-2 rounded-full bg-rose-500 animate-pulse";
-                text.innerText = "No dongles";
+                txt.innerText = "No dongles";
+                badge.className = "flex items-center space-x-2 bg-slate-800 px-3 py-1.5 rounded-full text-xs font-semibold text-slate-400";
             }
-        }
-
-        function updateScanSelect() {
-            const select = document.getElementById("scan-dongle-select");
-            select.innerHTML = "";
-            if (donglesData.dongles.length === 0) {
-                select.innerHTML = `<option value="">No dongles connected</option>`;
-                return;
-            }
-            donglesData.dongles.forEach(d => {
-                const opt = document.createElement("option");
-                opt.value = d.mac;
-                opt.textContent = `🕹️ ${d.mac} (${d.sensors?.length || 0} sensors)`;
-                select.appendChild(opt);
-            });
         }
 
         // ===== Scan =====
-        let scanTimer = null, pairingPollTimer = null, scanSecondsLeft = 60;
-
-        async function toggleScan() {
-            const btn = document.getElementById("btn-scan");
-            const select = document.getElementById("scan-dongle-select");
-            const dongleMac = select.value;
-            if (!dongleMac) { logToConsole("No dongle selected for scanning!"); return; }
-
-            const nextState = !scanActive;
+        async function toggleScan(mac) {
+            const ss = scanState[mac] || { active: false };
             try {
-                const res = await fetch(`${API_BASE}/api/scan`, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ enable: nextState, dongle_mac: dongleMac })
+                const r = await fetch(`${API}/api/scan`, {
+                    method:"POST", headers:{"Content-Type":"application/json"},
+                    body: JSON.stringify({ enable: !ss.active, dongle_mac: mac })
                 });
-                const data = await res.json();
-                scanActive = data.scan_active;
-                if (scanActive) {
-                    clearInterval(scanTimer); clearInterval(pairingPollTimer);
-                    scanSecondsLeft = 60;
-                    btn.innerText = `Stop Scan (${scanSecondsLeft}s)`;
-                    btn.className = "w-full py-2.5 px-4 bg-rose-700 hover:bg-rose-600 font-semibold text-sm rounded-xl transition shadow-lg shadow-rose-700/25 flex items-center justify-center";
-                    logToConsole(`Scanning on dongle ${dongleMac}...`);
-                    scanTimer = setInterval(async () => {
-                        scanSecondsLeft--;
-                        if (scanSecondsLeft <= 0) { clearInterval(scanTimer); clearInterval(pairingPollTimer); await forceDisableScan(dongleMac); }
-                        else btn.innerText = `Stop Scan (${scanSecondsLeft}s)`;
+                const data = await r.json();
+                if (data.scan_active) {
+                    scanState[mac] = { active: true, secondsLeft: 60 };
+                    clearInterval(scanState[mac].timer); clearInterval(scanState[mac].poll);
+                    scanState[mac].timer = setInterval(() => {
+                        scanState[mac].secondsLeft--;
+                        if (scanState[mac].secondsLeft <= 0) forceStopScan(mac);
+                        else renderModal();
                     }, 1000);
-                    pairingPollTimer = setInterval(async () => {
-                        const still = await checkScanStatus();
-                        if (!still) {
-                            clearInterval(scanTimer); clearInterval(pairingPollTimer);
-                            scanActive = false;
-                            logToConsole(`🎉 Sensor paired on dongle ${dongleMac}!`);
-                            btn.innerText = "Start Pairing Scan";
-                            btn.className = "w-full py-2.5 px-4 bg-teal-600 hover:bg-teal-500 font-semibold text-sm rounded-xl transition shadow-lg shadow-teal-600/25 flex items-center justify-center";
-                            await loadDongles();
-                        }
+                    scanState[mac].poll = setInterval(async () => {
+                        try {
+                            const r2 = await fetch(`${API}/api/scan`); const d2 = await r2.json();
+                            if (!d2.scan_active) { clearScanTimers(mac); scanState[mac].active=false; log(`🎉 Sensor paired!`); await loadDongles(); }
+                        } catch(e){}
                     }, 1500);
+                    log(`Scanning on dongle ${mac}...`);
                 } else {
-                    clearInterval(scanTimer); clearInterval(pairingPollTimer);
-                    btn.innerText = "Start Pairing Scan";
-                    btn.className = "w-full py-2.5 px-4 bg-teal-600 hover:bg-teal-500 font-semibold text-sm rounded-xl transition shadow-lg shadow-teal-600/25 flex items-center justify-center";
-                    logToConsole("Scan stopped.");
-                    await loadDongles();
+                    clearScanTimers(mac); scanState[mac] = { active:false };
+                    log("Scan stopped.");
                 }
-            } catch (e) { logToConsole("Failed to toggle scan!"); }
+                renderModal();
+            } catch(e) { log("Scan toggle failed!"); }
         }
 
-        async function forceDisableScan(dongleMac) {
-            try {
-                await fetch(`${API_BASE}/api/scan`, {
-                    method: "POST", headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ enable: false, dongle_mac: dongleMac })
-                });
-            } catch(e) {}
-            scanActive = false;
-            const btn = document.getElementById("btn-scan");
-            btn.innerText = "Start Pairing Scan";
-            btn.className = "w-full py-2.5 px-4 bg-teal-600 hover:bg-teal-500 font-semibold text-sm rounded-xl transition shadow-lg shadow-teal-600/25 flex items-center justify-center";
-            logToConsole("Scan timeout.");
-            await loadDongles();
+        function clearScanTimers(mac) {
+            const s = scanState[mac]; if (!s) return;
+            clearInterval(s.timer); clearInterval(s.poll);
         }
 
-        async function checkScanStatus() {
-            try { const r = await fetch(`${API_BASE}/api/scan`); const d = await r.json(); return d.scan_active; }
-            catch(e) { return false; }
+        async function forceStopScan(mac) {
+            try { await fetch(`${API}/api/scan`, {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({enable:false,dongle_mac:mac})}); } catch(e){}
+            clearScanTimers(mac); scanState[mac] = { active:false };
+            log("Scan timeout."); renderModal(); loadDongles();
         }
 
         // ===== Actions =====
-        async function unpairSensor(mac) {
-            if (!confirm(`Unpair sensor ${mac}?`)) return;
+        async function runFix(mac) {
+            log(`Purging ghosts on ${mac}...`);
+            try { const r = await fetch(`${API}/api/fix`,{method:"POST"}); const d = await r.json(); log(`Purged ${d.purged_count}: [${d.purged_macs.join(", ")}]`); loadDongles(); } catch(e){log("Fix failed!");}
+        }
+
+        async function sendRaw() {
+            const input = document.getElementById("hex-input")?.value;
+            if (!input) return;
+            const bytes = input.split(",").map(s=>s.trim()).filter(s=>s.length>0).map(s=>parseInt(s,16));
+            if (bytes.some(isNaN)) { log("Invalid hex!"); return; }
+            log(`===> [${input.toUpperCase()}]`);
             try {
-                const res = await fetch(`${API_BASE}/api/sensors/${mac}`, { method: "DELETE" });
-                const data = await res.json();
-                if (data.success) { logToConsole(`Unpaired: ${mac}`); loadDongles(); }
-            } catch(e) { logToConsole(`Failed to unpair ${mac}`); }
+                const r = await fetch(`${API}/api/raw`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({bytes})});
+                if (r.status!==200){log(`Error: ${await r.text()}`);return;}
+                const d = await r.json(); log(`<=== [${d.response_bytes.map(b=>b.toString(16).padStart(2,"0").toUpperCase()).join(",")}]`);
+            } catch(e){log("Send failed");}
         }
 
-        async function testChime(mac) {
-            try {
-                const res = await fetch(`${API_BASE}/api/chime/${mac}`, { method: "POST" });
-                const data = await res.json();
-                if (data.success) logToConsole(`Chime triggered: ${mac}`);
-            } catch(e) { logToConsole(`Chime failed: ${mac}`); }
+        function log(msg) {
+            const el = document.getElementById("console-log");
+            if (!el) return;
+            const d = document.createElement("div");
+            d.innerText = `[${new Date().toLocaleTimeString()}] ${msg}`;
+            el.appendChild(d); el.scrollTop = el.scrollHeight;
         }
 
-        async function runFix() {
-            try {
-                logToConsole("Purging ghost sensors...");
-                const res = await fetch(`${API_BASE}/api/fix`, { method: "POST" });
-                const data = await res.json();
-                logToConsole(`Purged ${data.purged_count} ghosts: [${data.purged_macs.join(", ")}]`);
-                loadDongles();
-            } catch(e) { logToConsole("Fix failed!"); }
-        }
-
-        async function sendRawBytes() {
-            const input = document.getElementById("hex-input").value;
-            const bytes = input.split(",").map(s => s.trim()).filter(s => s.length > 0).map(s => parseInt(s, 16));
-            if (bytes.some(isNaN)) { logToConsole("Invalid hex!"); return; }
-            logToConsole(`===> [${input.toUpperCase()}]`);
-            try {
-                const res = await fetch(`${API_BASE}/api/raw`, {
-                    method: "POST", headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ bytes })
-                });
-                if (res.status !== 200) { logToConsole(`Error: ${await res.text()}`); return; }
-                const data = await res.json();
-                logToConsole(`<=== [${data.response_bytes.map(b => b.toString(16).padStart(2, "0").toUpperCase()).join(",")}]`);
-            } catch(e) { logToConsole("Send failed"); }
-        }
-
-        function logToConsole(msg) {
-            const log = document.getElementById("console-log");
-            const item = document.createElement("div");
-            item.innerText = `[${new Date().toLocaleTimeString()}] ${msg}`;
-            log.appendChild(item);
-            log.scrollTop = log.scrollHeight;
-        }
-
-        // ===== Startup =====
+        // ===== Init =====
         loadDongles();
-
-        // SSE for real-time updates
-        const evtSource = new EventSource(`${API_BASE}/api/events`);
-        evtSource.onmessage = (event) => {
-            if (event.data === "update") loadDongles();
-        };
+        const es = new EventSource(`${API}/api/events`);
+        es.onmessage = (e) => { if (e.data === "update") loadDongles(); };
     </script>
 </body>
 </html>
 "##;
+

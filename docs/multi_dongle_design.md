@@ -1,7 +1,7 @@
 # Multi-Dongle Support: Design Document
 
-> **Status:** Draft  
-> **Branch:** `feature/multi-dongle-tcp` (to be re-implemented on current `main`)  
+> **Status:** Implemented (Phase 1–3, partial Phase 4–5)  
+> **Branch:** `feature/multi-dongle-ws`  
 > **Last updated:** 2026-06-12
 
 ---
@@ -50,8 +50,8 @@ dashboard.
                        │                                   │       │  │  │            │
                        │                                   │       ▼  ▼  ▼            │
                        │                                   │  ┌─────────────────────┐ │
-                       │                                   │  │ Central Event Bus   │ │
-                       │                                   │  │ mpsc<DongleEvent>   │ │
+                       │                                   │  │ SensorManager (SoT) │ │
+                       │                                   │  │ HashMap<MAC,Sensor>  │ │
                        │                                   │  └────────┬────────────┘ │
                        │                                   │           │              │
                        │                                   │     ┌─────┴──────┐       │
@@ -66,12 +66,7 @@ dashboard.
 
 ## 3. Transport Abstraction
 
-### 3.1 The Problem
-
-`Engine` currently takes a concrete `HidrawTransport`. To support TCP-bridged
-dongles, the Engine must be generic over the transport layer.
-
-### 3.2 Design: `AsyncTransport` Trait + `GatewayTransport` Enum
+### 3.1 Design: `AsyncTransport` Trait + `GatewayTransport` Enum
 
 ```rust
 /// Core transport abstraction — read/write raw HID frames.
@@ -96,30 +91,23 @@ pub enum GatewayTransport {
 }
 ```
 
-### 3.3 Why an Enum Instead of `dyn AsyncTransport`?
+### 3.2 Why an Enum Instead of `dyn AsyncTransport`?
 
 - **Clone-ability** — Engine clones the transport for its background reader
-  task. Trait objects (`Box<dyn ...>`) don't support `Clone` without a custom
+  task. Trait objects (`Box<dyn ..>`) don't support `Clone` without a custom
   `CloneBox` pattern. An enum is simpler.
 - **No heap allocation** — Enum dispatch is zero-cost compared to vtable
   indirection.
 - **Exhaustive matching** — New transport backends (e.g., serial)
   require updating the enum, which the compiler enforces.
 
-### 3.4 Open Question: Should Engine Be Generic or Concrete?
+### 3.3 Decision: Concrete Engine
 
-Two approaches:
-
-| Approach | Pros | Cons |
-|----------|------|------|
-| `Engine<T: AsyncTransport>` | Clean generics, zero-cost dispatch | Monomorphization bloat, complex type signatures everywhere |
-| `Engine` with `GatewayTransport` field | Simple, one concrete type | Slightly less "pure" |
-
-**Leaning toward:** concrete `Engine` with `GatewayTransport` field. The
-generic approach proved unwieldy in the first attempt — type parameters
-propagated through `WebState`, MQTT gateway, and every function that touched
-an engine. Since `GatewayTransport` already encapsulates the polymorphism, the
-generic parameter adds complexity without benefit.
+`Engine` uses a `GatewayTransport` field directly (not generic `Engine<T>`).
+The generic approach proved unwieldy — type parameters propagated through
+`WebState`, MQTT gateway, and every function that touched an engine. Since
+`GatewayTransport` already encapsulates the polymorphism, the generic
+parameter adds complexity without benefit.
 
 ---
 
@@ -127,9 +115,8 @@ generic parameter adds complexity without benefit.
 
 ### 4.1 Why WebSocket Instead of Raw TCP?
 
-The previous iteration used a dedicated TCP listener on a separate port
-(8095). Since we already have an Axum web server on `:8080`, we can use a
-**WebSocket endpoint** instead:
+Since we already have an Axum web server on `:8080`, we use a **WebSocket
+endpoint** instead of a dedicated TCP port:
 
 ```
   [Remote USB Dongle] ◄──USB──► [ws-bridge] ◄──WebSocket──► [Gateway :8080/ws/bridge]
@@ -148,13 +135,11 @@ Benefits over raw TCP:
 - **Built-in ping/pong** — WebSocket keepalive is handled at the protocol
   level, simplifying disconnect detection
 
-Axum has first-class WebSocket support via `axum::extract::ws`, so the server
-side is ~20 lines of code.
-
 ### 4.2 Design: Dumb Bidirectional Byte Pipe
 
-The bridge process is intentionally a **transparent relay** — it forwards raw
-HID report bytes between USB and WebSocket with zero packet interpretation:
+The bridge process (`src/bin/ws_bridge.rs`) is intentionally a **transparent
+relay** — it forwards raw HID report bytes between USB and WebSocket with
+zero packet interpretation:
 
 - The gateway's `Engine` code is identical for local and remote dongles
 - No protocol versioning needed between bridge and gateway
@@ -170,11 +155,18 @@ The WebSocket framing guarantees message boundaries are preserved.
 .route("/ws/bridge", get(ws_bridge_handler))
 ```
 
-The handler upgrades the HTTP connection to WebSocket, wraps the split
-stream into a `GatewayTransport::WebSocket`, creates a new Engine, runs
-the handshake, and registers the dongle in the engines map.
+The handler upgrades HTTP to WebSocket, wraps the split stream into a
+`GatewayTransport::WebSocket`, creates a new Engine, runs the handshake,
+and registers the dongle in the engines map.
 
-### 4.4 Reconnection Strategy
+**Transport metadata** is captured during the upgrade:
+- `transport_label` — `"local"` or `"bridge"`
+- `device_path` — USB device path (e.g., `/dev/hidraw0`), sent as a query
+  parameter by the bridge client
+- `remote_addr` — IP:port of the connecting bridge, extracted via Axum's
+  `ConnectInfo`
+
+### 4.4 Reconnection Strategy (Bridge Side)
 
 ```
 ws-bridge:
@@ -188,9 +180,86 @@ ws-bridge:
 
 ---
 
-## 5. Engines Registry
+## 5. Sensor Management: Single Source of Truth
 
-### 5.1 Data Structure
+### 5.1 Architecture
+
+`SensorManager` is the **single source of truth** for all sensors. It holds
+a `HashMap<String, WyzeSensor>` with every known sensor, regardless of which
+dongle (if any) owns it.
+
+```rust
+pub struct WyzeSensor {
+    pub mac: String,
+    pub sensor_type: SensorType,
+    pub dongle_mac: Option<String>,  // Which dongle owns this sensor (None = unassociated)
+    // ... telemetry fields ...
+}
+```
+
+### 5.2 Lifecycle
+
+1. **Startup** — `load_all_from_state()` loads ALL sensors from `state.yaml`
+   into the manager, including their persisted `dongle_mac` affinity.
+
+2. **Dongle connects** — When a dongle reports its NVRAM sensor list,
+   `assign_dongle(dongle_mac, nvram_macs)` sets `dongle_mac` on those sensors.
+   New sensors (in NVRAM but not in state) are created with defaults.
+
+3. **Live events** — Telemetry updates flow through the central event bus and
+   update sensor state in the manager.
+
+4. **Dongle disconnects** — `unassign_dongle(dongle_mac)` clears the
+   `dongle_mac` field on all sensors owned by that dongle.
+
+5. **Persistence** — `save_state_to_disk()` writes the entire sensor list
+   (including `dongle_mac`) to `state.yaml`.
+
+### 5.3 State File Format (`state.yaml`)
+
+```yaml
+sensors:
+  77A8C793:
+    mac: 77A8C793
+    sensor_type: motion
+    last_seen: 1781245974
+    battery: 100
+    signal: -60
+    state:
+      kind: Motion
+      is_active: false
+    dongle_mac: 77A85A36   # Optional — omitted if unassociated
+```
+
+The `dongle_mac` field uses `#[serde(default, skip_serializing_if = "Option::is_none")]`
+for backward compatibility with older state files that lack this field.
+
+### 5.4 API Grouping
+
+`GET /api/dongles` groups sensors from the SensorManager by their `dongle_mac`
+field:
+
+```json
+{
+  "dongles": [
+    {
+      "mac": "77A85A36",
+      "transport": "bridge",
+      "device_path": "/dev/hidraw0",
+      "remote_addr": "192.168.1.50:60830",
+      "sensors": [ /* sensors with dongle_mac == "77A85A36" */ ],
+      "sensor_count": 2
+    }
+  ],
+  "unassociated_sensors": [ /* sensors with dongle_mac == null */ ]
+}
+```
+
+---
+
+## 6. Engines Registry
+
+### 6.1 Data Structure
 
 ```rust
 type EnginesMap = Arc<tokio::sync::Mutex<HashMap<String, Engine>>>;
@@ -201,233 +270,140 @@ Keyed by **dongle MAC address** (obtained during handshake). This means:
 - Web API can target specific dongles by MAC
 - Disconnect cleanup is straightforward: remove the MAC entry
 
-### 5.2 Lifecycle
+### 6.2 Engine Metadata
 
+Each `Engine` carries transport metadata for the dashboard:
+
+```rust
+pub struct Engine {
+    // ... core fields ...
+    pub transport_label: String,   // "local" or "bridge"
+    pub device_path: String,       // e.g., "/dev/hidraw0"
+    pub remote_addr: String,       // e.g., "192.168.1.50:60830"
+}
 ```
-  1. Transport connected (USB open or TCP accept)
-  2. Engine created with shared event_tx channel
-  3. Engine.start() spawns background reader loop
-  4. Handshake executed (8s timeout)
-  5. On success: engine registered in HashMap[dongle_mac]
-  6. On reader EOF/error: engine emits disconnect event → removed from map
-```
-
-### 5.3 Open Question: Dongle Identity Before Handshake
-
-The dongle's MAC is only known after the handshake completes (step 3 of 5:
-GET_MAC). During handshake, the engine doesn't have a registry key yet. This
-means:
-
-- If handshake fails, there's nothing to clean up in the map (good)
-- But the engine's reader loop is already running (started in step 3) and
-  consuming the shared `event_tx` channel
-- A failed handshake should cleanly stop the reader loop
-
-**Need to verify:** Does the current Engine cleanly shut down its reader loop
-when the handshake times out?
 
 ---
 
-## 6. Configuration
+## 7. Configuration
 
-### 6.1 Config Schema
+### 7.1 Config Schema
 
 ```yaml
 usb:
-  dongles: ["auto"]       # List of local USB dongle paths.
-                          # "auto" = auto-detect /dev/hidraw*
-                          # "none" or [] = disable local USB (WebSocket-only mode)
-                          # ["/dev/hidraw0", "/dev/hidraw1"] = explicit multi-dongle
+  dongle: "auto"         # Local USB dongle path.
+                         # "auto" = auto-detect /dev/hidraw*
+                         # "none" = disable local USB (WebSocket-only mode)
+                         # "/dev/hidraw0" = explicit path
 
 bridge:
-  enabled: false          # Enable WebSocket bridge endpoint at /ws/bridge
-                          # (no extra port needed — uses the web server port)
+  enabled: false         # Enable WebSocket bridge endpoint at /ws/bridge
 ```
 
-### 6.2 Deployment Modes
+### 7.2 Deployment Modes
 
-| Mode | `usb.dongles` | `bridge.enabled` | Use case |
-|------|--------------|-------------------|----------|
-| **Local only** | `["auto"]` | `false` | Single dongle on same machine (current default) |
-| **Multi-local** | `["/dev/hidraw0", "/dev/hidraw1"]` | `false` | Multiple USB dongles on same machine |
-| **Local + remote** | `["auto"]` | `true` | Mixed: local dongle + remote bridges |
-| **Remote only** | `[]` | `true` | Gateway runs on a server, all dongles are remote |
-
-### 6.3 Multiple Local USB Dongles
-
-Supporting multiple local USB dongles falls out naturally from the engines
-registry design. When `usb.dongles` is a list, the startup code iterates
-each path, opens a `HidrawTransport`, creates an Engine, runs the handshake,
-and registers it in the map. Each dongle gets its own MAC-keyed entry.
-
-`"auto"` mode scans `/dev/hidraw*` for Wyze Sense dongles (using the USB
-VID/PID or the handshake inquiry response to identify valid dongles).
-
-> **Priority:** Supported by design, not actively prioritized. The common
-> use case is 1 local + N remote. Multi-local is a bonus.
-
-### 6.4 CLI Mode with Multi-Dongle
-
-The current CLI fallback opens `/dev/hidraw0` directly when the daemon isn't
-running. With multi-dongle, the CLI should **always talk to the daemon via
-HTTP** (require daemon to be running). Direct HID access is a legacy escape
-hatch for single-dongle mode only.
+| Mode | `usb.dongle` | `bridge.enabled` | Use case |
+|------|-------------|-------------------|----------|
+| **Local only** | `"auto"` | `false` | Single dongle on same machine (default) |
+| **Local + remote** | `"auto"` | `true` | Mixed: local dongle + remote bridges |
+| **Remote only** | `"none"` | `true` | Gateway runs on a server, all dongles are remote |
 
 ---
 
-## 7. API Changes
+## 8. Web Dashboard
 
-### 7.1 Web REST API
+### 8.1 Dongle-Centric Layout
 
-New endpoints:
+The dashboard uses a **dongle-focused** design where each connected dongle
+appears as a card with:
+
+- Dongle MAC, firmware version, transport type (local/bridge), connection info
+- Collapsible sensor table showing all sensors assigned to that dongle
+- An **⚙️ Actions** button that opens a per-dongle modal dialog
+
+An **Unassociated Sensors** card (dashed border) shows sensors restored from
+`state.yaml` whose dongle is not currently online.
+
+### 8.2 Actions Modal
+
+Clicking **⚙️ Actions** on a dongle opens a modal dialog with:
+
+| Section | Description |
+|---------|-------------|
+| **📡 Pairing Center** | Start/stop sensor scan (60s auto-timeout) |
+| **🧹 Maintenance** | Purge ghost sensors from dongle NVRAM |
+| **💻 Hex Console** | Send/receive raw HID packets for debugging |
+
+Only one modal can be open at a time, preventing concurrent scan conflicts
+across dongles. The scan auto-stops when the modal is closed.
+
+---
+
+## 9. API Reference
+
+### 9.1 Endpoints
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/api/dongles` | List all connected dongles (MAC, version, scan status) |
-| `GET` | `/ws/bridge` | WebSocket upgrade — bridge connection endpoint |
+| `GET` | `/api/dongles` | List all dongles with grouped sensors |
+| `GET` | `/ws/bridge` | WebSocket upgrade — bridge connection |
+| `POST` | `/api/scan` | Start/stop scan (`dongle_mac` required) |
+| `DELETE` | `/api/sensors/:mac` | Unpair sensor from its dongle |
+| `POST` | `/api/raw` | Send raw HID bytes to a dongle |
+| `POST` | `/api/fix` | Purge ghost sensors |
+| `GET` | `/api/events` | SSE stream for live updates |
 
-Modified endpoints — add optional `dongle_mac` parameter:
-
-| Method | Path | Change |
-|--------|------|--------|
-| `POST` | `/api/scan` | **Requires** `dongle_mac` — only one dongle may scan at a time (see §7.5) |
-| `DELETE` | `/api/sensors/:mac` | Routes to owning dongle via affinity |
-| `POST` | `/api/verify` | Requires `dongle_mac` (must target specific dongle) |
-| `POST` | `/api/raw` | Requires `dongle_mac` (must target specific dongle) |
-
-### 7.2 Dongles as Home Assistant Devices
-
-Each dongle should appear as its own **device** in Home Assistant via MQTT
-auto-discovery. This gives users operational visibility and control in the
-HA dashboard.
-
-**Discovery entities per dongle:**
-
-| Entity | Type | Description |
-|--------|------|-------------|
-| Dongle Status | `binary_sensor` (connectivity) | Online/offline availability |
-| Firmware Version | `sensor` (diagnostic) | Dongle firmware version string |
-| Connected Sensors | `sensor` (diagnostic) | Count of sensors in NVRAM |
-| Scan Mode | `switch` | Toggle scan mode on/off |
-| Disconnect | `button` | Gracefully remove dongle from registry |
-
-**MQTT topic layout:**
-
-```
-wyzesense2mqtt/dongle/{dongle_mac}/status     → "online" / "offline"
-wyzesense2mqtt/dongle/{dongle_mac}/state      → JSON state payload
-wyzesense2mqtt/dongle/{dongle_mac}/scan/set   → "ON" / "OFF" (command)
-wyzesense2mqtt/dongle/{dongle_mac}/disconnect → trigger (command)
-homeassistant/*/wyzesense_dongle_{mac}/*/config → discovery configs
-```
-
-The "Disconnect" button makes sense for planned maintenance scenarios:
-physically moving a dongle to a different location, or replacing a failing
-dongle. It gracefully removes the dongle from the registry and marks its
-sensors as unavailable, without crashing the whole system.
-
-### 7.3 Per-Dongle MQTT Control Topics
-
-Per-dongle control topics (scan requires targeting a specific dongle):
-
-```
-wyzesense2mqtt/dongle/{dongle_mac}/scan     → target specific dongle
-wyzesense2mqtt/dongle/{dongle_mac}/remove   → target specific dongle
-```
-
-Legacy broadcast topics (scan broadcast is NOT supported):
-
-```
-wyzesense2mqtt/remove   → all dongles
-```
-
-### 7.4 Exclusive Scan Mode
+### 9.2 Exclusive Scan Mode
 
 **Constraint: Only one dongle may be in scan mode at any given time.**
 
-Allowing multiple dongles to scan simultaneously creates problems:
-
-- A newly powered-on sensor broadcasts its pairing advertisement to all
-  dongles in range. If two dongles are scanning, both would discover the
-  sensor, leading to a race condition during `verify_sensor`.
-- The user has no control over which dongle "wins" the pairing.
-- Duplicate discovery events in the UI create confusion.
-
-**Enforcement:** The scan command **requires** a `dongle_mac` target. The
-engines registry tracks which dongle (if any) is currently scanning. If a
-scan request arrives while another dongle is already scanning, the system
-should either:
-
-1. **Reject** the request with an error ("dongle X is already scanning"), or
-2. **Transfer** — automatically stop the current scanner and start the new one.
-
-> **Leaning toward:** Option 1 (reject) for safety. The UI can show which
-> dongle is currently scanning and offer a "stop" button.
-
-### 7.5 Sensor-to-Dongle Affinity
-
-**Decision: Track affinity by dongle MAC.**
-
-SensorManager records `dongle_mac: Option<String>` per sensor. The affinity
-is keyed on the **dongle MAC**, NOT the transport type. This means:
-
-- A dongle connected via HidrawTransport and later reconnected via WebSocket
-  has the same MAC — its sensors seamlessly re-associate.
-- The transport is just plumbing; the dongle identity is what matters.
-- Commands (delete, verify) are automatically routed to the owning dongle.
-
-**Edge cases:**
-
-- **Sensor in range of multiple dongles:** Each dongle has its own NVRAM
-  sensor list. A sensor is only paired to one dongle. Events from that
-  sensor will only arrive via the owning dongle.
-- **Dongle offline:** Sensors affiliated with that dongle are marked
-  unavailable. If the dongle reconnects (same MAC, any transport), the
-  sensors come back online automatically.
-- **Re-pairing:** If a sensor is unpaired from dongle A and re-paired to
-  dongle B, the affinity updates to dongle B's MAC.
+The scan command **requires** a `dongle_mac` target. If a scan request
+arrives while another dongle is already scanning, it is rejected.
 
 ---
 
-## 8. Implementation Plan
+## 10. Implementation Status
 
-### Phase 1: Transport Abstraction (foundation)
-- [ ] Define `AsyncTransport` trait in `src/transport/mod.rs`
-- [ ] Define `GatewayTransport` enum (Hidraw, WebSocket, Replay)
-- [ ] Make `Engine` use `GatewayTransport` (concrete, not generic)
-- [ ] Fix `ReplayTransport` with `tokio::sync::Notify`
-- [ ] Update all tests to use `GatewayTransport::Replay(..)`
+### Phase 1: Transport Abstraction ✅
+- [x] `AsyncTransport` trait
+- [x] `GatewayTransport` enum (Hidraw, WebSocket, Replay)
+- [x] `Engine` uses `GatewayTransport` (concrete, not generic)
+- [x] `ReplayTransport` with `tokio::sync::Notify`
 
-### Phase 2: Multi-Engine Registry
-- [ ] Introduce `EnginesMap` type alias
-- [ ] Refactor `main.rs` startup: USB engine creation → registry insertion
-- [ ] Central event bus: fan-in from all engines
-- [ ] Event router: disconnect detection + MQTT forwarding
-- [ ] Update web server to accept `EnginesMap`
-- [ ] Update all web handlers for multi-engine iteration
-- [ ] Add `dongle_mac: Option<String>` to SensorManager per sensor
+### Phase 2: Multi-Engine Registry ✅
+- [x] `EnginesMap` type alias
+- [x] `main.rs` startup: USB engine creation → registry insertion
+- [x] Central event bus: fan-in from all engines
+- [x] `SensorManager` as single source of truth with `dongle_mac` per sensor
+- [x] `load_all_from_state()` — loads entire state at startup
+- [x] `assign_dongle()` / `unassign_dongle()` — dongle ownership
+- [x] `save_state_to_disk()` persists `dongle_mac` affinity
 
-### Phase 3: WebSocket Bridge
-- [ ] Add `bridge.enabled` to `app_config.rs`
-- [ ] Implement `/ws/bridge` WebSocket upgrade handler in web server
-- [ ] Create `src/bin/ws_bridge.rs` standalone binary
-- [ ] Reconnection logic with backoff
+### Phase 3: WebSocket Bridge ✅
+- [x] `bridge.enabled` config option
+- [x] `/ws/bridge` WebSocket upgrade handler with transport metadata
+- [x] `src/bin/ws_bridge.rs` standalone bridge binary
+- [x] Reconnection logic with retry
+- [x] `usb.dongle: "none"` gateway-only mode
 
-### Phase 4: Dongle as HA Device
-- [ ] MQTT discovery for each dongle (connectivity, firmware, sensor count)
-- [ ] Scan mode switch entity
-- [ ] Disconnect button entity
-- [ ] `GET /api/dongles` REST endpoint
+### Phase 4: Dashboard UX ✅
+- [x] Dongle-centric layout with per-dongle sensor grouping
+- [x] Unassociated sensors section for orphaned sensors
+- [x] Actions modal (Pair, Purge, Hex Console)
+- [x] Transport metadata display (local/bridge, device path, remote IP)
+- [x] `GET /api/dongles` REST endpoint
+- [x] Consistent header/content widths
 
-### Phase 5: UX Polish
+### Phase 5: Remaining Work
+- [ ] Dongle as HA device (MQTT discovery for dongle entities)
 - [ ] Per-dongle MQTT control topics
-- [ ] Web dashboard: dongle panel with status + controls
-- [ ] Multi-local USB auto-detection (`usb.dongles: ["auto"]`)
-- [ ] Update documentation
+- [ ] Multi-local USB auto-detection (`usb.dongle: ["auto", ...]`)
+- [ ] WebSocket auth for bridge connections
+- [ ] Dongle disconnect detection + auto-cleanup
 
 ---
 
-## 9. Resolved & Open Questions
+## 11. Resolved & Open Questions
 
 ### Resolved
 
@@ -436,13 +412,14 @@ is keyed on the **dongle MAC**, NOT the transport type. This means:
 | 1 | Generic `Engine<T>` vs concrete? | **Concrete** with `GatewayTransport` enum | Generics propagated everywhere; enum is simpler |
 | 2 | Transport protocol? | **WebSocket** over existing :8080 | One less port, free framing, proxy-friendly |
 | 3 | CLI mode with multi-dongle? | **Daemon-only** (always via HTTP) | Direct HID is a single-dongle escape hatch |
-| 4 | Sensor-to-dongle affinity? | **Track by dongle MAC** | Transport-agnostic; dongle MAC is stable identity |
+| 4 | Sensor-to-dongle affinity? | **Track by dongle MAC** in SensorManager | Transport-agnostic; dongle MAC is stable identity |
 | 5 | Multiple local USB? | **Supported by design**, not prioritized | Falls out naturally from engines registry |
+| 6 | Single vs. per-engine sensor cache? | **Single** — SensorManager is the only source | Engine caches caused ghosting and orphan confusion |
 
 ### Open
 
 | # | Question | Notes |
 |---|----------|-------|
-| 6 | Clean shutdown on handshake timeout? | Verify engine reader loop stops cleanly |
 | 7 | WebSocket auth for bridge connections? | Headers/tokens? Or trust-on-connect? |
-| 8 | Dongle disconnect button semantics? | Graceful removal vs. full unpair of all sensors? |
+| 8 | Dongle disconnect semantics? | Should sensors keep their `dongle_mac` or reset to None? |
+| 9 | Multi-local USB path format? | Array `["auto"]` vs single string `"auto"` — currently single string |

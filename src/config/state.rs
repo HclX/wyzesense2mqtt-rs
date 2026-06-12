@@ -16,6 +16,8 @@ pub struct PersistedSensorState {
     pub signal: i8,          // RSSI dBm
     #[serde(default)]
     pub state: SensorState,  // Type-specific state (persisted)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dongle_mac: Option<String>, // Which dongle owns this sensor (None = unassociated)
 }
 
 fn default_battery() -> Option<u8> {

@@ -69,6 +69,9 @@ pub struct WyzeSensor {
 
     // --- Type-specific state (the polymorphic part) ---
     pub state: SensorState,
+
+    // --- Dongle assignment ---
+    pub dongle_mac: Option<String>, // Which dongle owns this sensor (None = unassociated)
 }
 
 // Helper to build standard Home Assistant discovery device metadata
@@ -181,6 +184,7 @@ impl WyzeSensor {
                 .unwrap_or_default()
                 .as_secs(),
             state,
+            dongle_mac: None,
         }
     }
 
@@ -614,6 +618,78 @@ impl SensorManager {
         &mut self.sensors
     }
 
+    /// Load ALL sensors from state.yaml at startup. This is the single source of truth.
+    /// Sensors are loaded with their persisted dongle_mac (if any).
+    pub fn load_all_from_state(&mut self) -> Result<usize, Box<dyn std::error::Error>> {
+        let system_state = SystemState::load_from_yaml(&self.state_path).unwrap_or_default();
+        let sensors_config = SensorsConfig::load_from_yaml(&self.config_path).unwrap_or_else(|_| SensorsConfig {
+            sensors: HashMap::new(),
+        });
+        let mut count = 0;
+
+        for (mac, cached) in &system_state.sensors {
+            let metadata = sensors_config.sensors.get(mac);
+            let friendly_name = metadata
+                .map(|m| m.name.clone())
+                .unwrap_or_else(|| format!("Wyze Sense {}", mac));
+
+            match WyzeSensor::from_type_str(mac.clone(), &cached.sensor_type, friendly_name) {
+                Ok(mut sensor) => {
+                    if let Some(b) = cached.battery {
+                        sensor.battery_pct = Some(b);
+                    }
+                    sensor.rssi_dbm = cached.signal;
+                    sensor.last_seen = cached.last_seen;
+                    sensor.state = cached.state.clone();
+                    sensor.dongle_mac = cached.dongle_mac.clone();
+                    // Load custom timeout if it exists
+                    if let Some(m) = metadata {
+                        if let Some(t) = m.timeout_sec {
+                            sensor.timeout_sec = t;
+                        }
+                        if let Some(ref v) = m.sw_version {
+                            sensor.sw_version = v.clone();
+                        }
+                    }
+                    self.sensors.insert(mac.clone(), sensor);
+                    count += 1;
+                }
+                Err(e) => {
+                    warn!("Failed to load sensor {} from state: {}", mac, e);
+                }
+            }
+        }
+        Ok(count)
+    }
+
+    /// Assign sensors to a dongle by MAC. Called when a dongle reports its NVRAM sensor list.
+    /// Sensors already in the manager get their dongle_mac updated.
+    /// New sensors (in NVRAM but not in state) are created with minimal defaults.
+    pub fn assign_dongle(&mut self, dongle_mac: &str, nvram_macs: &[String]) {
+        for sensor_mac in nvram_macs {
+            if let Some(sensor) = self.sensors.get_mut(sensor_mac) {
+                // Sensor exists — just assign the dongle
+                sensor.dongle_mac = Some(dongle_mac.to_string());
+            } else {
+                // New sensor from NVRAM — create with defaults
+                let friendly_name = format!("Wyze Sense {}", sensor_mac);
+                if let Ok(mut sensor) = WyzeSensor::from_type_str(sensor_mac.clone(), "unknown", friendly_name) {
+                    sensor.dongle_mac = Some(dongle_mac.to_string());
+                    self.sensors.insert(sensor_mac.clone(), sensor);
+                }
+            }
+        }
+    }
+
+    /// Unassign all sensors from a specific dongle (e.g., when dongle disconnects).
+    pub fn unassign_dongle(&mut self, dongle_mac: &str) {
+        for sensor in self.sensors.values_mut() {
+            if sensor.dongle_mac.as_deref() == Some(dongle_mac) {
+                sensor.dongle_mac = None;
+            }
+        }
+    }
+
     /// Load all sensors by merging the user config, the dynamic state config, and the NVRAM MAC list.
     pub fn load_sensors(&mut self, nvram_macs: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         // 1. Load user config (config/sensors.yaml)
@@ -701,6 +777,36 @@ impl SensorManager {
         Ok(())
     }
 
+    /// Loads sensors from state.yaml that are NOT already in the manager.
+    /// These represent sensors persisted from previous sessions whose dongle
+    /// is currently offline — they show as "unassociated" in the dashboard.
+    pub fn load_state_orphans(&mut self) -> Result<usize, Box<dyn std::error::Error>> {
+        let system_state = SystemState::load_from_yaml(&self.state_path).unwrap_or_default();
+        let mut count = 0;
+        for (mac, cached) in &system_state.sensors {
+            if self.sensors.contains_key(mac) {
+                continue; // already claimed by a dongle
+            }
+            let friendly_name = format!("Wyze Sense {}", mac);
+            match WyzeSensor::from_type_str(mac.clone(), &cached.sensor_type, friendly_name) {
+                Ok(mut sensor) => {
+                    if let Some(b) = cached.battery {
+                        sensor.battery_pct = Some(b);
+                    }
+                    sensor.rssi_dbm = cached.signal;
+                    sensor.last_seen = cached.last_seen;
+                    sensor.state = cached.state.clone();
+                    self.sensors.insert(mac.clone(), sensor);
+                    count += 1;
+                }
+                Err(e) => {
+                    warn!("Failed to load orphan sensor {} from state: {}", mac, e);
+                }
+            }
+        }
+        Ok(count)
+    }
+
     /// Saves the dynamic in-memory sensor state back to config/state.yaml
     pub fn save_state_to_disk(&self) -> Result<(), Box<dyn std::error::Error>> {
         let mut system_state = SystemState::default();
@@ -711,7 +817,8 @@ impl SensorManager {
                 last_seen: sensor.last_seen,
                 battery: sensor.battery_pct,
                 signal: sensor.rssi_dbm,
-                state: sensor.state.clone(), // Type-specific state persisted!
+                state: sensor.state.clone(),
+                dongle_mac: sensor.dongle_mac.clone(),
             });
         }
         system_state.save_to_yaml_atomic(&self.state_path)?;
