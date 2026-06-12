@@ -1,6 +1,6 @@
 use crate::engine::Engine;
 use crate::protocol::packet::Packet;
-use crate::transport::AsyncTransport;
+
 use crate::protocol::telemetry::SensorType;
 use serde_json::json;
 
@@ -23,8 +23,8 @@ use tracing::{info, debug};
 
 use crate::protocol::sensor::SensorManager;
 
-pub struct WebState<T: AsyncTransport> {
-    pub engine: Arc<Mutex<Engine<T>>>,
+pub struct WebState {
+    pub engine: Arc<Mutex<Engine>>,
     pub sensor_manager: Arc<std::sync::Mutex<SensorManager>>,
     pub broadcast_tx: tokio::sync::broadcast::Sender<()>,
 }
@@ -74,8 +74,8 @@ pub struct RawPacketResponse {
 }
 
 /// Starts the Axum web server binding to the given port and sharing Engine/SensorManager handles.
-pub async fn start_web_server<T: AsyncTransport + Clone + 'static>(
-    engine: Engine<T>,
+pub async fn start_web_server(
+    engine: Engine,
     sensor_manager: Arc<std::sync::Mutex<SensorManager>>,
     broadcast_tx: tokio::sync::broadcast::Sender<()>,
     port: u16,
@@ -93,16 +93,16 @@ pub async fn start_web_server<T: AsyncTransport + Clone + 'static>(
 
     let app = Router::new()
         .route("/", get(serve_dashboard))
-        .route("/api/dongle", get(get_dongle_state::<T>))
-        .route("/api/sensors", get(list_sensors::<T>))
-        .route("/api/sensors/cached", get(list_cached_sensors::<T>))
-        .route("/api/sensors/:mac", delete(unpair_sensor::<T>))
-        .route("/api/scan", get(get_scan_status::<T>).post(toggle_scan::<T>))
-        .route("/api/verify", post(verify_scanned_sensor::<T>))
-        .route("/api/chime/:mac", post(trigger_chime::<T>))
-        .route("/api/fix", post(fix_sensors::<T>))
-        .route("/api/raw", post(send_raw_packet::<T>))
-        .route("/api/events", get(sse_handler::<T>))
+        .route("/api/dongle", get(get_dongle_state))
+        .route("/api/sensors", get(list_sensors))
+        .route("/api/sensors/cached", get(list_cached_sensors))
+        .route("/api/sensors/:mac", delete(unpair_sensor))
+        .route("/api/scan", get(get_scan_status).post(toggle_scan))
+        .route("/api/verify", post(verify_scanned_sensor))
+        .route("/api/chime/:mac", post(trigger_chime))
+        .route("/api/fix", post(fix_sensors))
+        .route("/api/raw", post(send_raw_packet))
+        .route("/api/events", get(sse_handler))
         .layer(cors)
         .with_state(shared_state);
 
@@ -120,8 +120,8 @@ async fn serve_dashboard() -> impl IntoResponse {
 }
 
 // --- GET /api/events ---
-async fn sse_handler<T: AsyncTransport + Clone + 'static>(
-    State(state): State<Arc<WebState<T>>>,
+async fn sse_handler(
+    State(state): State<Arc<WebState>>,
 ) -> Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>> {
     let rx = state.broadcast_tx.subscribe();
     let stream = BroadcastStream::new(rx).filter_map(|res| match res {
@@ -132,8 +132,8 @@ async fn sse_handler<T: AsyncTransport + Clone + 'static>(
 }
 
 // --- GET /api/dongle ---
-async fn get_dongle_state<T: AsyncTransport + Clone + 'static>(
-    State(state): State<Arc<WebState<T>>>,
+async fn get_dongle_state(
+    State(state): State<Arc<WebState>>,
 ) -> impl IntoResponse {
     let engine = state.engine.lock().await;
     Json(DongleStateResponse {
@@ -144,8 +144,8 @@ async fn get_dongle_state<T: AsyncTransport + Clone + 'static>(
 }
 
 // --- GET /api/sensors ---
-async fn list_sensors<T: AsyncTransport + Clone + 'static>(
-    State(state): State<Arc<WebState<T>>>,
+async fn list_sensors(
+    State(state): State<Arc<WebState>>,
 ) -> impl IntoResponse {
     let mut engine = state.engine.lock().await;
     match engine.get_sensor_list().await {
@@ -181,8 +181,8 @@ async fn list_sensors<T: AsyncTransport + Clone + 'static>(
 }
 
 // --- GET /api/sensors/cached ---
-async fn list_cached_sensors<T: AsyncTransport + Clone + 'static>(
-    State(state): State<Arc<WebState<T>>>,
+async fn list_cached_sensors(
+    State(state): State<Arc<WebState>>,
 ) -> impl IntoResponse {
     let manager = state.sensor_manager.lock().unwrap();
     let mut sensors: Vec<crate::config::state::PersistedSensorState> = manager.get_sensors().values().map(|sensor| {
@@ -200,9 +200,9 @@ async fn list_cached_sensors<T: AsyncTransport + Clone + 'static>(
 }
 
 // --- DELETE /api/sensors/:mac ---
-async fn unpair_sensor<T: AsyncTransport + Clone + 'static>(
+async fn unpair_sensor(
     Path(mac): Path<String>,
-    State(state): State<Arc<WebState<T>>>,
+    State(state): State<Arc<WebState>>,
 ) -> impl IntoResponse {
     let mut engine = state.engine.lock().await;
     match engine.delete_sensor(&mac).await {
@@ -224,16 +224,16 @@ async fn unpair_sensor<T: AsyncTransport + Clone + 'static>(
 }
 
 // --- GET /api/scan ---
-async fn get_scan_status<T: AsyncTransport + Clone + 'static>(
-    State(state): State<Arc<WebState<T>>>,
+async fn get_scan_status(
+    State(state): State<Arc<WebState>>,
 ) -> impl IntoResponse {
     let engine = state.engine.lock().await;
     (StatusCode::OK, Json(ScanResponse { scan_active: engine.is_scanning() })).into_response()
 }
 
 // --- POST /api/scan ---
-async fn toggle_scan<T: AsyncTransport + Clone + 'static>(
-    State(state): State<Arc<WebState<T>>>,
+async fn toggle_scan(
+    State(state): State<Arc<WebState>>,
     Json(payload): Json<ScanRequest>,
 ) -> impl IntoResponse {
     let mut engine = state.engine.lock().await;
@@ -253,8 +253,8 @@ async fn toggle_scan<T: AsyncTransport + Clone + 'static>(
 }
 
 // --- POST /api/verify ---
-async fn verify_scanned_sensor<T: AsyncTransport + Clone + 'static>(
-    State(state): State<Arc<WebState<T>>>,
+async fn verify_scanned_sensor(
+    State(state): State<Arc<WebState>>,
     Json(payload): Json<VerifyRequest>,
 ) -> impl IntoResponse {
     let mut engine = state.engine.lock().await;
@@ -274,9 +274,9 @@ async fn verify_scanned_sensor<T: AsyncTransport + Clone + 'static>(
 }
 
 // --- POST /api/chime/:mac ---
-async fn trigger_chime<T: AsyncTransport + Clone + 'static>(
+async fn trigger_chime(
     Path(mac): Path<String>,
-    State(state): State<Arc<WebState<T>>>,
+    State(state): State<Arc<WebState>>,
 ) -> impl IntoResponse {
     let mut engine = state.engine.lock().await;
     match engine.play_chime(&mac).await {
@@ -293,8 +293,8 @@ async fn trigger_chime<T: AsyncTransport + Clone + 'static>(
 }
 
 // --- POST /api/fix ---
-async fn fix_sensors<T: AsyncTransport + Clone + 'static>(
-    State(state): State<Arc<WebState<T>>>,
+async fn fix_sensors(
+    State(state): State<Arc<WebState>>,
 ) -> impl IntoResponse {
     let mut engine = state.engine.lock().await;
     // Fix algorithm: lists sensors, identifies invalid MAC patterns, and deletes them
@@ -330,8 +330,8 @@ async fn fix_sensors<T: AsyncTransport + Clone + 'static>(
 }
 
 // --- POST /api/raw ---
-async fn send_raw_packet<T: AsyncTransport + Clone + 'static>(
-    State(state): State<Arc<WebState<T>>>,
+async fn send_raw_packet(
+    State(state): State<Arc<WebState>>,
     Json(payload): Json<RawPacketRequest>,
 ) -> impl IntoResponse {
     let mut engine = state.engine.lock().await;

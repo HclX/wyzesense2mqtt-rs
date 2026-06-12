@@ -4,6 +4,7 @@ use std::io::Result;
 use std::collections::{VecDeque, HashMap};
 use std::sync::{Arc, Mutex};
 use crate::protocol::packet::Packet;
+use tokio::sync::Notify;
 
 #[derive(Clone)]
 pub struct ReplayTransport {
@@ -13,6 +14,8 @@ pub struct ReplayTransport {
     written_data: Arc<Mutex<Vec<u8>>>,
     // Automatic responses: Command ID -> Queue of response bytes
     responses: Arc<Mutex<HashMap<u16, VecDeque<Vec<u8>>>>>,
+    // Notify waiters when new data is enqueued for reading
+    notify: Arc<Notify>,
 }
 
 impl ReplayTransport {
@@ -21,6 +24,7 @@ impl ReplayTransport {
             read_queue: Arc::new(Mutex::new(VecDeque::new())),
             written_data: Arc::new(Mutex::new(Vec::new())),
             responses: Arc::new(Mutex::new(HashMap::new())),
+            notify: Arc::new(Notify::new()),
         }
     }
 
@@ -35,6 +39,9 @@ impl ReplayTransport {
     pub fn enqueue_read(&self, data: &[u8]) {
         let mut queue = self.read_queue.lock().unwrap();
         queue.extend(data.iter().copied());
+        drop(queue);
+        // Wake any blocked reader
+        self.notify.notify_waiters();
     }
 
     /// Retrieve all bytes written by the host.
@@ -59,19 +66,24 @@ impl ReplayTransport {
 #[async_trait]
 impl AsyncTransport for ReplayTransport {
     async fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
-        let mut queue = self.read_queue.lock().unwrap();
-        if queue.is_empty() {
-            return Ok(0);
+        loop {
+            {
+                let mut queue = self.read_queue.lock().unwrap();
+                if !queue.is_empty() {
+                    let to_read = std::cmp::min(buf.len(), queue.len());
+                    for i in 0..to_read {
+                        buf[i] = queue.pop_front().unwrap();
+                    }
+                    if to_read > 0 && tracing::enabled!(tracing::Level::TRACE) {
+                        let hex_str = buf[..to_read].iter().map(|b| format!("{:02X}", b)).collect::<Vec<String>>().join(",");
+                        tracing::trace!("WIRE READ (MOCK) ({} bytes): [{}]", to_read, hex_str);
+                    }
+                    return Ok(to_read);
+                }
+            }
+            // Queue is empty — block until enqueue_read() or write() adds data
+            self.notify.notified().await;
         }
-        let to_read = std::cmp::min(buf.len(), queue.len());
-        for i in 0..to_read {
-            buf[i] = queue.pop_front().unwrap();
-        }
-        if to_read > 0 && tracing::enabled!(tracing::Level::TRACE) {
-            let hex_str = buf[..to_read].iter().map(|b| format!("{:02X}", b)).collect::<Vec<String>>().join(",");
-            tracing::trace!("WIRE READ (MOCK) ({} bytes): [{}]", to_read, hex_str);
-        }
-        Ok(to_read)
     }
 
     async fn write(&mut self, buf: &[u8]) -> Result<()> {

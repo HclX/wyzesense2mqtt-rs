@@ -1,5 +1,6 @@
 use wyzesense2mqtt_rs::engine::Engine;
 use wyzesense2mqtt_rs::transport::hidraw::HidrawTransport;
+use wyzesense2mqtt_rs::transport::GatewayTransport;
 use wyzesense2mqtt_rs::web::start_web_server;
 use wyzesense2mqtt_rs::protocol::telemetry::DongleEvent;
 use wyzesense2mqtt_rs::protocol::sensor::SensorManager;
@@ -68,7 +69,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (broadcast_tx, _broadcast_rx) = tokio::sync::broadcast::channel::<()>(16);
 
     // 5. Instantiate the engine and SensorManager
-    let mut engine = Engine::new(transport, event_tx, None);
+    let mut engine = Engine::new(GatewayTransport::Hidraw(transport), event_tx, None);
     let sensor_manager = Arc::new(std::sync::Mutex::new(SensorManager::new(
         "config/sensors.yaml".to_string(),
         "config/state.yaml".to_string(),

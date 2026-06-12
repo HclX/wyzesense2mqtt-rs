@@ -1,5 +1,6 @@
 use wyzesense2mqtt_rs::engine::Engine;
 use wyzesense2mqtt_rs::transport::replay::ReplayTransport;
+use wyzesense2mqtt_rs::transport::GatewayTransport;
 use wyzesense2mqtt_rs::protocol::telemetry::{DongleEvent, SensorType, TelemetryData};
 use wyzesense2mqtt_rs::protocol::packet::commands;
 use wyzesense2mqtt_rs::protocol::sensor::WyzeSensor;
@@ -50,7 +51,7 @@ async fn test_sensor_lifecycle_e2e() {
 
     // --- Setup Engine ---
     let (event_tx, mut event_rx) = mpsc::channel::<DongleEvent>(32);
-    let mut engine = Engine::new(replay_transport.clone(), event_tx, None);
+    let mut engine = Engine::new(GatewayTransport::Replay(replay_transport.clone()), event_tx, None);
     let exit_tx = engine.start();
 
     // 1. Execute Handshake

@@ -1,6 +1,6 @@
 use wyzesense2mqtt_rs::engine::Engine;
 use wyzesense2mqtt_rs::transport::hidraw::HidrawTransport;
-use wyzesense2mqtt_rs::transport::AsyncTransport;
+use wyzesense2mqtt_rs::transport::{AsyncTransport, GatewayTransport};
 use wyzesense2mqtt_rs::protocol::telemetry::{TelemetryData, DongleEvent, SensorType};
 use wyzesense2mqtt_rs::web::start_web_server;
 use wyzesense2mqtt_rs::config::app_config::AppConfig;
@@ -224,11 +224,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
     };
 
-    return run_daemon(transport, config).await;
+    return run_daemon(GatewayTransport::Hidraw(transport), config).await;
 }
 
-async fn run_daemon<T: wyzesense2mqtt_rs::transport::AsyncTransport + Clone + 'static>(
-    transport: T,
+async fn run_daemon(
+    transport: GatewayTransport,
     config: AppConfig,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
@@ -575,11 +575,11 @@ async fn run_cli_via_hid(
 
     // Open transport and run engine command
     let transport = HidrawTransport::open(device_path).await?;
-    run_hid_command(transport, cmd, args).await
+    run_hid_command(GatewayTransport::Hidraw(transport), cmd, args).await
 }
 
-async fn run_hid_command<T: AsyncTransport + Clone + 'static>(
-    transport: T,
+async fn run_hid_command(
+    transport: GatewayTransport,
     cmd: &str,
     args: &[String],
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {

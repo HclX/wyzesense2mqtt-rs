@@ -1,5 +1,6 @@
 use crate::protocol::packet::{Packet, CommandType, PacketPayload, commands};
 use crate::protocol::telemetry::{DongleEvent, SensorType, TelemetryData};
+use crate::transport::GatewayTransport;
 use crate::transport::AsyncTransport;
 
 use std::collections::HashMap;
@@ -12,8 +13,8 @@ use tracing::{debug, error, info, warn};
 
 type PendingRequests = Arc<Mutex<HashMap<u16, oneshot::Sender<Packet>>>>;
 
-pub struct Engine<T: AsyncTransport> {
-    transport: T,
+pub struct Engine {
+    transport: GatewayTransport,
     pending_requests: PendingRequests,
     event_tx: mpsc::Sender<DongleEvent>,
     dongle_mac: Option<String>,
@@ -28,8 +29,8 @@ pub struct Engine<T: AsyncTransport> {
     state_path: Option<String>,
 }
 
-impl<T: AsyncTransport + Clone + 'static> Engine<T> {
-    pub fn new(transport: T, event_tx: mpsc::Sender<DongleEvent>, state_path: Option<String>) -> Self {
+impl Engine {
+    pub fn new(transport: GatewayTransport, event_tx: mpsc::Sender<DongleEvent>, state_path: Option<String>) -> Self {
         let pending_requests = Arc::new(Mutex::new(HashMap::new()));
         let sensors = Arc::new(Mutex::new(HashMap::new()));
         let (auto_verify_tx, mut auto_verify_rx) = mpsc::channel::<(String, SensorType, u8)>(32);
@@ -238,7 +239,7 @@ impl<T: AsyncTransport + Clone + 'static> Engine<T> {
         pkt: Packet,
         pending: &PendingRequests,
         event_tx: &mpsc::Sender<DongleEvent>,
-        transport: &mut T,
+        transport: &mut GatewayTransport,
         _sensors: &Arc<Mutex<HashMap<String, crate::config::state::PersistedSensorState>>>,
         auto_verify_tx: &mpsc::Sender<(String, SensorType, u8)>,
         sensor_list_tx: &Arc<Mutex<Option<mpsc::Sender<String>>>>,
@@ -643,7 +644,7 @@ impl<T: AsyncTransport + Clone + 'static> Engine<T> {
     }
 }
 
-impl<T: AsyncTransport + Clone> Clone for Engine<T> {
+impl Clone for Engine {
     fn clone(&self) -> Self {
         Self {
             transport: self.transport.clone(),
