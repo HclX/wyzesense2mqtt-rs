@@ -232,7 +232,7 @@ async fn run_daemon(
     config: AppConfig,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
-    // Setup central events channel
+    // Setup central events channel (shared across all engines)
     let (event_tx, event_rx) = mpsc::channel::<DongleEvent>(128);
 
     // Setup mpsc channels for MQTT gateway command callbacks
@@ -241,16 +241,20 @@ async fn run_daemon(
     // Setup broadcast channel for Web UI SSE (Server-Sent Events)
     let (broadcast_tx, _broadcast_rx) = tokio::sync::broadcast::channel::<()>(16);
 
-    // Instantiate the core engine
-    let state_path = "state/state.yaml";
-    let config_path = "config/sensors.yaml";
-    let mut engine = Engine::new(transport, event_tx.clone(), Some(state_path.to_string()));
+    // Central engines registry — keyed by dongle MAC address
+    let engines: wyzesense2mqtt_rs::engine::EnginesMap =
+        Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
 
     // Instantiate the SensorManager
+    let state_path = "state/state.yaml";
+    let config_path = "config/sensors.yaml";
     let sensor_manager = Arc::new(Mutex::new(SensorManager::new(
         config_path.to_string(),
         state_path.to_string(),
     )));
+
+    // --- Local USB Dongle Engine ---
+    let mut engine = Engine::new(transport, event_tx.clone(), Some(state_path.to_string()));
 
     // Start background worker loop
     let _exit_tx = engine.start();
@@ -260,6 +264,10 @@ async fn run_daemon(
         Ok(Ok(_)) => {
             info!("Dongle successfully unlocked and authenticated!");
             engine.set_auto_verify(true);
+
+            // Register engine in the engines map by its MAC
+            let dongle_mac = engine.dongle_mac().unwrap_or("unknown").to_string();
+            info!("Registering dongle {} in engines registry", dongle_mac);
 
             // Warm up paired sensors cache from NVRAM and merge with saved configs
             info!("Warming up paired sensors cache from NVRAM...");
@@ -287,6 +295,12 @@ async fn run_daemon(
                 Err(e) => {
                     warn!("Failed to warm up sensors cache on startup: {}", e);
                 }
+            }
+
+            // Insert into registry
+            {
+                let mut map = engines.lock().await;
+                map.insert(dongle_mac, engine);
             }
         }
         Ok(Err(e)) => {
@@ -410,19 +424,35 @@ async fn run_daemon(
         });
     }
 
-    // Spawn gateway callback command listener task
-    let mut engine_tx = engine.clone();
+    // Spawn gateway callback command listener task (multi-engine aware)
+    let engines_cmd = Arc::clone(&engines);
     let sensor_manager_cmd_clone = Arc::clone(&sensor_manager);
     tokio::spawn(async move {
         while let Some(cmd) = gateway_cmd_rx.recv().await {
             match cmd {
-                GatewayCommand::Scan(enable) => {
-                    let _ = engine_tx.set_scan(enable).await;
+                GatewayCommand::Scan { enable, dongle_mac } => {
+                    let mut map = engines_cmd.lock().await;
+                    if let Some(engine) = map.get_mut(&dongle_mac) {
+                        let _ = engine.set_scan(enable).await;
+                    } else {
+                        warn!("Scan command for unknown dongle: {}", dongle_mac);
+                    }
                 }
-                GatewayCommand::Delete(mac) => {
-                    let _ = engine_tx.delete_sensor(&mac).await;
+                GatewayCommand::Delete { sensor_mac, dongle_mac } => {
+                    let mut map = engines_cmd.lock().await;
+                    if let Some(target_mac) = dongle_mac {
+                        // Targeted delete
+                        if let Some(engine) = map.get_mut(&target_mac) {
+                            let _ = engine.delete_sensor(&sensor_mac).await;
+                        }
+                    } else {
+                        // Broadcast delete to all engines
+                        for (_, engine) in map.iter_mut() {
+                            let _ = engine.delete_sensor(&sensor_mac).await;
+                        }
+                    }
                     let mut manager = sensor_manager_cmd_clone.lock().unwrap();
-                    let _ = manager.delete_and_persist_sensor(&mac);
+                    let _ = manager.delete_and_persist_sensor(&sensor_mac);
                 }
                 GatewayCommand::Reload => {
                     info!("Reload command received via gateway.");
@@ -433,7 +463,7 @@ async fn run_daemon(
 
     // Route B: Web REST Control Server (if enabled)
     if config.web.enabled {
-        start_web_server(engine, Arc::clone(&sensor_manager), broadcast_tx.clone(), config.web.port).await?;
+        start_web_server(Arc::clone(&engines), Arc::clone(&sensor_manager), broadcast_tx.clone(), config.web.port).await?;
     } else {
         info!("Web Panel is disabled. Running in headless daemon mode.");
         if let Some(handle) = mqtt_gateway_handle {

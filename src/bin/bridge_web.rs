@@ -106,8 +106,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
     }
 
-    // 7. Start HTTP REST Web UI blocking thread
-    start_web_server(engine, sensor_manager, broadcast_tx, port).await?;
+    // 7. Register engine in the engines registry
+    let dongle_mac = engine.dongle_mac().unwrap_or("unknown").to_string();
+    let engines: wyzesense2mqtt_rs::engine::EnginesMap =
+        Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
+    {
+        let mut map = engines.lock().await;
+        map.insert(dongle_mac, engine);
+    }
+
+    // 8. Start HTTP REST Web UI blocking thread
+    start_web_server(engines, sensor_manager, broadcast_tx, port).await?;
 
     Ok(())
 }

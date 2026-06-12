@@ -1,4 +1,4 @@
-use crate::engine::Engine;
+use crate::engine::EnginesMap;
 use crate::protocol::packet::Packet;
 
 use crate::protocol::telemetry::SensorType;
@@ -17,14 +17,14 @@ use tokio_stream::StreamExt;
 use std::convert::Infallible;
 use std::sync::Arc;
 use std::net::SocketAddr;
-use tokio::sync::Mutex;
+
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{info, debug};
 
 use crate::protocol::sensor::SensorManager;
 
 pub struct WebState {
-    pub engine: Arc<Mutex<Engine>>,
+    pub engines: EnginesMap,
     pub sensor_manager: Arc<std::sync::Mutex<SensorManager>>,
     pub broadcast_tx: tokio::sync::broadcast::Sender<()>,
 }
@@ -50,6 +50,7 @@ pub struct SuccessResponse {
 #[derive(Serialize, Deserialize)]
 pub struct ScanRequest {
     pub enable: bool,
+    pub dongle_mac: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -61,11 +62,13 @@ pub struct ScanResponse {
 pub struct VerifyRequest {
     pub mac: String,
     pub sensor_type: String,
+    pub dongle_mac: String,
 }
 
 #[derive(Serialize, Deserialize)]
 pub struct RawPacketRequest {
     pub bytes: Vec<u8>,
+    pub dongle_mac: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -75,13 +78,13 @@ pub struct RawPacketResponse {
 
 /// Starts the Axum web server binding to the given port and sharing Engine/SensorManager handles.
 pub async fn start_web_server(
-    engine: Engine,
+    engines: EnginesMap,
     sensor_manager: Arc<std::sync::Mutex<SensorManager>>,
     broadcast_tx: tokio::sync::broadcast::Sender<()>,
     port: u16,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let shared_state = Arc::new(WebState {
-        engine: Arc::new(Mutex::new(engine)),
+        engines,
         sensor_manager,
         broadcast_tx,
     });
@@ -94,6 +97,7 @@ pub async fn start_web_server(
     let app = Router::new()
         .route("/", get(serve_dashboard))
         .route("/api/dongle", get(get_dongle_state))
+        .route("/api/dongles", get(list_dongles))
         .route("/api/sensors", get(list_sensors))
         .route("/api/sensors/cached", get(list_cached_sensors))
         .route("/api/sensors/:mac", delete(unpair_sensor))
@@ -135,49 +139,73 @@ async fn sse_handler(
 async fn get_dongle_state(
     State(state): State<Arc<WebState>>,
 ) -> impl IntoResponse {
-    let engine = state.engine.lock().await;
-    Json(DongleStateResponse {
-        connected: engine.dongle_mac().is_some(),
-        mac: engine.dongle_mac().map(|s| s.to_string()),
-        version: engine.dongle_version().map(|s| s.to_string()),
-    })
+    let engines = state.engines.lock().await;
+    if let Some((_mac, engine)) = engines.iter().next() {
+        Json(DongleStateResponse {
+            connected: true,
+            mac: engine.dongle_mac().map(|s| s.to_string()),
+            version: engine.dongle_version().map(|s| s.to_string()),
+        })
+    } else {
+        Json(DongleStateResponse {
+            connected: false,
+            mac: None,
+            version: None,
+        })
+    }
+}
+
+// --- GET /api/dongles ---
+async fn list_dongles(
+    State(state): State<Arc<WebState>>,
+) -> impl IntoResponse {
+    let engines = state.engines.lock().await;
+    let dongles: Vec<serde_json::Value> = engines.iter().map(|(mac, engine)| {
+        serde_json::json!({
+            "mac": mac,
+            "version": engine.dongle_version(),
+            "scanning": engine.is_scanning(),
+        })
+    }).collect();
+    Json(json!({ "dongles": dongles }))
 }
 
 // --- GET /api/sensors ---
 async fn list_sensors(
     State(state): State<Arc<WebState>>,
 ) -> impl IntoResponse {
-    let mut engine = state.engine.lock().await;
-    match engine.get_sensor_list().await {
-        Ok(mut mac_list) => {
-            mac_list.sort();
-            let mut sensors = Vec::new();
-            let manager = state.sensor_manager.lock().unwrap();
-            for mac in mac_list {
-                if let Some(sensor) = manager.get_sensors().get(&mac) {
-                    sensors.push(crate::config::state::PersistedSensorState {
-                        mac: sensor.mac.clone(),
-                        sensor_type: sensor.sensor_type.as_str().to_string(),
-                        last_seen: sensor.last_seen,
-                        battery: sensor.battery_pct,
-                        signal: sensor.rssi_dbm,
-                        state: sensor.state.clone(),
-                    });
-                } else {
-                    sensors.push(crate::config::state::PersistedSensorState {
-                        mac: mac.clone(),
-                        sensor_type: "unknown".to_string(),
-                        last_seen: 0,
-                        battery: Some(100),
-                        signal: -60,
-                        state: crate::protocol::sensor::SensorState::Unknown,
-                    });
-                }
-            }
-            (StatusCode::OK, Json(SensorsListResponse { sensors })).into_response()
-        }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    let engines = state.engines.lock().await;
+    let mut all_sensors = Vec::new();
+    for (_, engine) in engines.iter() {
+        all_sensors.extend(engine.get_rich_sensors());
     }
+    drop(engines);
+
+    // Merge with sensor_manager data
+    let manager = state.sensor_manager.lock().unwrap();
+    let mut sensors = Vec::new();
+    // Deduplicate by MAC, preferring sensor_manager data
+    let mut seen_macs = std::collections::HashSet::new();
+    for rich in &all_sensors {
+        if seen_macs.contains(&rich.mac) {
+            continue;
+        }
+        seen_macs.insert(rich.mac.clone());
+        if let Some(sensor) = manager.get_sensors().get(&rich.mac) {
+            sensors.push(crate::config::state::PersistedSensorState {
+                mac: sensor.mac.clone(),
+                sensor_type: sensor.sensor_type.as_str().to_string(),
+                last_seen: sensor.last_seen,
+                battery: sensor.battery_pct,
+                signal: sensor.rssi_dbm,
+                state: sensor.state.clone(),
+            });
+        } else {
+            sensors.push(rich.clone());
+        }
+    }
+    sensors.sort_by_key(|s| s.mac.clone());
+    (StatusCode::OK, Json(SensorsListResponse { sensors })).into_response()
 }
 
 // --- GET /api/sensors/cached ---
@@ -204,31 +232,31 @@ async fn unpair_sensor(
     Path(mac): Path<String>,
     State(state): State<Arc<WebState>>,
 ) -> impl IntoResponse {
-    let mut engine = state.engine.lock().await;
-    match engine.delete_sensor(&mac).await {
-        Ok(_) => {
-            let mut manager = state.sensor_manager.lock().unwrap();
-            let _ = manager.delete_and_persist_sensor(&mac);
-            let _ = state.broadcast_tx.send(());
-            (
-                StatusCode::OK,
-                Json(SuccessResponse {
-                    success: true,
-                    message: format!("Sensor {} successfully unlinked", mac),
-                }),
-            )
-                .into_response()
-        }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    let mut engines = state.engines.lock().await;
+    for (_, engine) in engines.iter_mut() {
+        let _ = engine.delete_sensor(&mac).await;
     }
+    drop(engines);
+    let mut manager = state.sensor_manager.lock().unwrap();
+    let _ = manager.delete_and_persist_sensor(&mac);
+    let _ = state.broadcast_tx.send(());
+    (
+        StatusCode::OK,
+        Json(SuccessResponse {
+            success: true,
+            message: format!("Sensor {} successfully unlinked", mac),
+        }),
+    )
+        .into_response()
 }
 
 // --- GET /api/scan ---
 async fn get_scan_status(
     State(state): State<Arc<WebState>>,
 ) -> impl IntoResponse {
-    let engine = state.engine.lock().await;
-    (StatusCode::OK, Json(ScanResponse { scan_active: engine.is_scanning() })).into_response()
+    let engines = state.engines.lock().await;
+    let scanning = engines.values().any(|e| e.is_scanning());
+    (StatusCode::OK, Json(ScanResponse { scan_active: scanning })).into_response()
 }
 
 // --- POST /api/scan ---
@@ -236,7 +264,25 @@ async fn toggle_scan(
     State(state): State<Arc<WebState>>,
     Json(payload): Json<ScanRequest>,
 ) -> impl IntoResponse {
-    let mut engine = state.engine.lock().await;
+    let dongle_mac = match payload.dongle_mac {
+        Some(mac) => mac,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "dongle_mac is required for scan operations" })),
+            ).into_response();
+        }
+    };
+    let mut engines = state.engines.lock().await;
+    let engine = match engines.get_mut(&dongle_mac) {
+        Some(e) => e,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": format!("Dongle {} not found", dongle_mac) })),
+            ).into_response();
+        }
+    };
     match engine.set_scan(payload.enable).await {
         Ok(_) => {
             let _ = state.broadcast_tx.send(());
@@ -257,7 +303,16 @@ async fn verify_scanned_sensor(
     State(state): State<Arc<WebState>>,
     Json(payload): Json<VerifyRequest>,
 ) -> impl IntoResponse {
-    let mut engine = state.engine.lock().await;
+    let mut engines = state.engines.lock().await;
+    let engine = match engines.get_mut(&payload.dongle_mac) {
+        Some(e) => e,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": format!("Dongle {} not found", payload.dongle_mac) })),
+            ).into_response();
+        }
+    };
     let sensor_type = payload.sensor_type.parse::<SensorType>().unwrap_or(SensorType::Unknown(0x00));
 
     match engine.verify_sensor(&payload.mac, sensor_type).await {
@@ -278,55 +333,60 @@ async fn trigger_chime(
     Path(mac): Path<String>,
     State(state): State<Arc<WebState>>,
 ) -> impl IntoResponse {
-    let mut engine = state.engine.lock().await;
-    match engine.play_chime(&mac).await {
-        Ok(_) => (
-            StatusCode::OK,
-            Json(SuccessResponse {
-                success: true,
-                message: format!("Chime triggered on {}", mac),
-            }),
-        )
-            .into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    let mut engines = state.engines.lock().await;
+    for (_, engine) in engines.iter_mut() {
+        let _ = engine.play_chime(&mac).await;
     }
+    (
+        StatusCode::OK,
+        Json(SuccessResponse {
+            success: true,
+            message: format!("Chime triggered on {}", mac),
+        }),
+    )
+        .into_response()
 }
 
 // --- POST /api/fix ---
 async fn fix_sensors(
     State(state): State<Arc<WebState>>,
 ) -> impl IntoResponse {
-    let mut engine = state.engine.lock().await;
-    // Fix algorithm: lists sensors, identifies invalid MAC patterns, and deletes them
-    match engine.get_sensor_list().await {
-        Ok(sensors) => {
-            let mut purged = Vec::new();
-            let invalid_ghosts = ["00000000", "\0\0\0\0\0\0\0\0"];
-            for mac in sensors {
-                let is_invalid = mac.chars().any(|c| !c.is_alphanumeric()) || invalid_ghosts.contains(&mac.as_str());
-                if is_invalid {
-                    if let Ok(_) = engine.delete_sensor(&mac).await {
-                        purged.push(mac.clone());
-                        let mut manager = state.sensor_manager.lock().unwrap();
-                        let _ = manager.delete_and_persist_sensor(&mac);
+    let mut engines = state.engines.lock().await;
+    let mut purged = Vec::new();
+    let invalid_ghosts = ["00000000", "\0\0\0\0\0\0\0\0"];
+    // Fix algorithm: iterate all engines, list sensors, identify invalid MAC patterns, and delete them
+    for (_, engine) in engines.iter_mut() {
+        match engine.get_sensor_list().await {
+            Ok(sensors) => {
+                for mac in sensors {
+                    let is_invalid = mac.chars().any(|c| !c.is_alphanumeric()) || invalid_ghosts.contains(&mac.as_str());
+                    if is_invalid {
+                        if let Ok(_) = engine.delete_sensor(&mac).await {
+                            purged.push(mac.clone());
+                            let mut manager = state.sensor_manager.lock().unwrap();
+                            let _ = manager.delete_and_persist_sensor(&mac);
+                        }
                     }
                 }
             }
-            if !purged.is_empty() {
-                let _ = state.broadcast_tx.send(());
+            Err(e) => {
+                debug!("Failed to get sensor list from engine during fix: {}", e);
             }
-            (
-                StatusCode::OK,
-                Json(json!({
-                    "success": true,
-                    "purged_count": purged.len(),
-                    "purged_macs": purged
-                })),
-            )
-                .into_response()
         }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
+    drop(engines);
+    if !purged.is_empty() {
+        let _ = state.broadcast_tx.send(());
+    }
+    (
+        StatusCode::OK,
+        Json(json!({
+            "success": true,
+            "purged_count": purged.len(),
+            "purged_macs": purged
+        })),
+    )
+        .into_response()
 }
 
 // --- POST /api/raw ---
@@ -334,7 +394,16 @@ async fn send_raw_packet(
     State(state): State<Arc<WebState>>,
     Json(payload): Json<RawPacketRequest>,
 ) -> impl IntoResponse {
-    let mut engine = state.engine.lock().await;
+    let mut engines = state.engines.lock().await;
+    let engine = match engines.get_mut(&payload.dongle_mac) {
+        Some(e) => e,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                format!("Dongle {} not found", payload.dongle_mac),
+            ).into_response();
+        }
+    };
     debug!("Web API sending raw packet bytes: {:?}", payload.bytes);
 
     // Attempt to parse the raw packet to identify what response packet ID we should wait for

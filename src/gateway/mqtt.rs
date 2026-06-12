@@ -3,14 +3,14 @@ use rumqttc::v5::mqttbytes::{QoS, v5::Packet as MqttPacket};
 use tokio::sync::mpsc;
 use crate::protocol::telemetry::{DongleEvent, TelemetryData};
 use crate::protocol::sensor::SensorManager;
-use tracing::{info, error, debug};
+use tracing::{info, error, debug, warn};
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum GatewayCommand {
-    Scan(bool),
-    Delete(String), // MAC
+    Scan { enable: bool, dongle_mac: String },
+    Delete { sensor_mac: String, dongle_mac: Option<String> },
     Reload,
 }
 
@@ -92,11 +92,13 @@ impl MqttGateway {
 
                             if topic == control_topic_scan {
                                 let enable = payload == "1" || payload.eq_ignore_ascii_case("ON") || payload.eq_ignore_ascii_case("true");
-                                info!("Received scan command: {}", enable);
-                                let _ = cmd_tx.send(GatewayCommand::Scan(enable)).await;
+                                warn!("Legacy scan topic used without dongle_mac target. Ignoring. Use dongle/{{mac}}/scan instead.");
+                                // Legacy broadcast scan is not supported per exclusive scan design.
+                                // Per-dongle scan topics will be added in Phase 4.
+                                let _ = enable;
                             } else if topic == control_topic_remove {
                                 info!("Received remove command for MAC: {}", payload);
-                                let _ = cmd_tx.send(GatewayCommand::Delete(payload)).await;
+                                let _ = cmd_tx.send(GatewayCommand::Delete { sensor_mac: payload, dongle_mac: None }).await;
                             } else if topic == control_topic_reload {
                                 info!("Received reload command");
                                 let _ = cmd_tx.send(GatewayCommand::Reload).await;

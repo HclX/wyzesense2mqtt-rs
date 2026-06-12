@@ -11,6 +11,10 @@ use std::time::SystemTime;
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, error, info, warn};
 
+/// Central registry of all connected dongle engines, keyed by dongle MAC address.
+/// Shared across the web server, gateway command router, and event router.
+pub type EnginesMap = std::sync::Arc<tokio::sync::Mutex<std::collections::HashMap<String, Engine>>>;
+
 type PendingRequests = Arc<Mutex<HashMap<u16, oneshot::Sender<Packet>>>>;
 
 pub struct Engine {

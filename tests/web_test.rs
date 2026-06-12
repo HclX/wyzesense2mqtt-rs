@@ -6,6 +6,7 @@ use wyzesense2mqtt_rs::protocol::packet::commands;
 use wyzesense2mqtt_rs::web::start_web_server;
 
 use std::time::Duration;
+use std::sync::Arc;
 use tokio::sync::mpsc;
 use serde_json::Value;
 
@@ -47,7 +48,16 @@ async fn test_web_endpoints_integration() {
     let _exit_tx = engine.start();
     engine.initialize_handshake().await.unwrap();
 
-    // 3. Find free port dynamically and spawn Axum Web Server in background
+    // 3. Register engine in EnginesMap by its MAC
+    let dongle_mac = engine.dongle_mac().unwrap_or("unknown").to_string();
+    let engines: wyzesense2mqtt_rs::engine::EnginesMap =
+        Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
+    {
+        let mut map = engines.lock().await;
+        map.insert(dongle_mac.clone(), engine);
+    }
+
+    // 4. Find free port dynamically and spawn Axum Web Server in background
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let local_addr = listener.local_addr().unwrap();
     let port = local_addr.port();
@@ -56,7 +66,6 @@ async fn test_web_endpoints_integration() {
     // So we extract the port, drop the listener, and let start_web_server bind to it!
     drop(listener);
 
-    let server_engine = engine; // Transfer ownership
     let sensor_manager = std::sync::Arc::new(std::sync::Mutex::new(
         wyzesense2mqtt_rs::protocol::sensor::SensorManager::new(
             "config/sensors.yaml".to_string(),
@@ -64,8 +73,9 @@ async fn test_web_endpoints_integration() {
         )
     ));
     let (broadcast_tx, _) = tokio::sync::broadcast::channel::<()>(16);
+    let engines_server = Arc::clone(&engines);
     tokio::spawn(async move {
-        if let Err(e) = start_web_server(server_engine, sensor_manager, broadcast_tx, port).await {
+        if let Err(e) = start_web_server(engines_server, sensor_manager, broadcast_tx, port).await {
             panic!("Web server failed to run: {}", e);
         }
     });
@@ -84,6 +94,14 @@ async fn test_web_endpoints_integration() {
     assert_eq!(body["mac"], "MACADDR1");
     assert_eq!(body["version"], "V1.0.0");
 
+    // --- TEST 1b: GET /api/dongles (new multi-dongle endpoint) ---
+    let resp = client.get(&format!("{}/api/dongles", base_url)).send().await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: Value = resp.json().await.unwrap();
+    let dongles = body["dongles"].as_array().unwrap();
+    assert_eq!(dongles.len(), 1);
+    assert_eq!(dongles[0]["mac"], "MACADDR1");
+
     // --- TEST 2: POST /api/raw (Diagnostic HEX Packet) ---
     // We want to send a raw packet representing the GetMAC command.
     // Command bytes: [170, 85, 67, 3, 4, 1, 73] (checksum 0x0149)
@@ -94,7 +112,8 @@ async fn test_web_endpoints_integration() {
     );
 
     let raw_req = serde_json::json!({
-        "bytes": vec![170, 85, 67, 3, 4, 1, 73]
+        "bytes": vec![170, 85, 67, 3, 4, 1, 73],
+        "dongle_mac": dongle_mac
     });
     let resp = client.post(&format!("{}/api/raw", base_url))
         .json(&raw_req)
