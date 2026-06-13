@@ -368,7 +368,7 @@ impl WyzeSensor {
         }
         // Include raw battery voltage for diagnostics (V = raw / 32.0)
         if let Some(raw) = self.battery_raw {
-            payload["battery_voltage"] = json!(format!("{:.2}", raw as f32 / 32.0));
+            payload["battery_voltage"] = json!(raw as f32 / 32.0);
         }
         // Merge type-specific fields
         match &self.state {
