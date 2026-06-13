@@ -697,6 +697,15 @@ impl SensorManager {
                         if let Some(b) = cached.battery {
                             sensor.battery_pct = Some(b);
                         }
+                        if let Some(b_raw) = cached.battery_raw {
+                            sensor.battery_raw = Some(b_raw);
+                        }
+                        if let Some(dt) = cached.die_temperature_c {
+                            sensor.die_temperature_c = Some(dt);
+                        }
+                        if let Some(seq) = cached.event_sequence {
+                            sensor.event_sequence = Some(seq);
+                        }
                         sensor.rssi_dbm = cached.signal;
                         sensor.last_seen = cached.last_seen;
                         sensor.state = cached.state.clone(); // Full type-specific state restored!
@@ -729,7 +738,10 @@ impl SensorManager {
                 sensor_type: sensor.sensor_type.as_str().to_string(),
                 last_seen: sensor.last_seen,
                 battery: sensor.battery_pct,
+                battery_raw: sensor.battery_raw,
                 signal: sensor.rssi_dbm,
+                die_temperature_c: sensor.die_temperature_c,
+                event_sequence: sensor.event_sequence,
                 state: sensor.state.clone(), // Type-specific state persisted!
             });
         }

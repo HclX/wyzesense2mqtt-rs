@@ -160,7 +160,10 @@ async fn list_sensors<T: AsyncTransport + Clone + 'static>(
                         sensor_type: sensor.sensor_type.as_str().to_string(),
                         last_seen: sensor.last_seen,
                         battery: sensor.battery_pct,
+                        battery_raw: sensor.battery_raw,
                         signal: sensor.rssi_dbm,
+                        die_temperature_c: sensor.die_temperature_c,
+                        event_sequence: sensor.event_sequence,
                         state: sensor.state.clone(),
                     });
                 } else {
@@ -169,7 +172,10 @@ async fn list_sensors<T: AsyncTransport + Clone + 'static>(
                         sensor_type: "unknown".to_string(),
                         last_seen: 0,
                         battery: Some(100),
+                        battery_raw: None,
                         signal: -60,
+                        die_temperature_c: None,
+                        event_sequence: None,
                         state: crate::protocol::sensor::SensorState::Unknown,
                     });
                 }
@@ -191,7 +197,10 @@ async fn list_cached_sensors<T: AsyncTransport + Clone + 'static>(
             sensor_type: sensor.sensor_type.as_str().to_string(),
             last_seen: sensor.last_seen,
             battery: sensor.battery_pct,
+            battery_raw: sensor.battery_raw,
             signal: sensor.rssi_dbm,
+            die_temperature_c: sensor.die_temperature_c,
+            event_sequence: sensor.event_sequence,
             state: sensor.state.clone(),
         }
     }).collect();

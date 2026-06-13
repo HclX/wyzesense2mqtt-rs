@@ -13,7 +13,13 @@ pub struct PersistedSensorState {
     pub last_seen: u64,      // Epoch seconds
     #[serde(default = "default_battery")]
     pub battery: Option<u8>, // 0..100, None for mains-powered devices (e.g., Chime)
+    #[serde(default)]
+    pub battery_raw: Option<u8>,
     pub signal: i8,          // RSSI dBm
+    #[serde(default)]
+    pub die_temperature_c: Option<i8>,
+    #[serde(default)]
+    pub event_sequence: Option<u16>,
     #[serde(default)]
     pub state: SensorState,  // Type-specific state (persisted)
 }

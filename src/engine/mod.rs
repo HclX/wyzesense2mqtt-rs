@@ -125,7 +125,10 @@ impl<T: AsyncTransport + Clone + 'static> Engine<T> {
             sensor_type: s_type.to_string(),
             last_seen: SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs(),
             battery: Some(100),
+            battery_raw: None,
             signal: -60,
+            die_temperature_c: None,
+            event_sequence: None,
             state: crate::protocol::sensor::SensorState::Unknown,
         });
     }
@@ -636,7 +639,10 @@ impl<T: AsyncTransport + Clone + 'static> Engine<T> {
                 sensor_type: sensor_type.as_str().to_string(),
                 last_seen: SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs(),
                 battery: Some(100),
+                battery_raw: None,
                 signal: -60,
+                die_temperature_c: None,
+                event_sequence: None,
                 state: crate::protocol::sensor::SensorState::Unknown,
             });
         }
