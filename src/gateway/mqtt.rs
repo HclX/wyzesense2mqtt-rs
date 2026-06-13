@@ -212,7 +212,7 @@ mod tests {
             "Wyze Sense ABC12345".to_string(),
         );
         let payloads = sensor.get_discovery_payloads("wyzesense");
-        assert_eq!(payloads.len(), 4); // battery + battery_voltage + signal + state
+        assert_eq!(payloads.len(), 5); // battery + battery_voltage + die_temperature + signal + state
         
         let contact_topic = "homeassistant/binary_sensor/wyzesense_ABC12345/state/config";
         let contact_payload = payloads.iter().find(|(t, _)| t == contact_topic).unwrap().1.clone();
@@ -238,7 +238,7 @@ mod tests {
             "Wyze Sense ABC12345".to_string()
         );
         let payloads = sensor.get_discovery_payloads("wyzesense");
-        assert_eq!(payloads.len(), 5); // battery + battery_voltage + signal + temp + humidity
+        assert_eq!(payloads.len(), 6); // battery + battery_voltage + die_temperature + signal + temp + humidity
         
         let temp_topic = "homeassistant/sensor/wyzesense_ABC12345/temperature/config";
         let temp_payload = payloads.iter().find(|(t, _)| t == temp_topic).unwrap().1.clone();
@@ -263,7 +263,7 @@ mod tests {
             "Wyze Sense ABC12345".to_string(),
         );
         let payloads = sensor.get_discovery_payloads("wyzesense");
-        assert_eq!(payloads.len(), 6); // battery + battery_voltage + signal + main moisture + probe available + probe moisture
+        assert_eq!(payloads.len(), 7); // battery + battery_voltage + die_temperature + signal + main moisture + probe available + probe moisture
 
         let leak_topic = "homeassistant/binary_sensor/wyzesense_ABC12345/state/config";
         let leak_payload = payloads.iter().find(|(t, _)| t == leak_topic).unwrap().1.clone();

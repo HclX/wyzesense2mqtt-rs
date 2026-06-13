@@ -62,8 +62,9 @@ async fn test_web_endpoints_integration() {
             "config/state.yaml".to_string(),
         )
     ));
+    let (broadcast_tx, _) = tokio::sync::broadcast::channel(16);
     tokio::spawn(async move {
-        if let Err(e) = start_web_server(server_engine, sensor_manager, port).await {
+        if let Err(e) = start_web_server(server_engine, sensor_manager, broadcast_tx, port).await {
             panic!("Web server failed to run: {}", e);
         }
     });

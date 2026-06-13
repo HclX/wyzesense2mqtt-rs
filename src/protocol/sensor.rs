@@ -128,9 +128,28 @@ fn push_common_discovery_payloads(
                 "device_class": "voltage",
                 "unit_of_measurement": "V",
                 "state_class": "measurement",
+                "suggested_display_precision": 2,
                 "unique_id": format!("{}_battery_voltage", device_id),
-                "device": device,
-                "availability": availability,
+                "device": device.clone(),
+                "availability": availability.clone(),
+                "availability_mode": "all",
+                "entity_category": "diagnostic",
+            })
+        ));
+
+        // Die temperature diagnostic entity
+        payloads.push((
+            format!("homeassistant/sensor/{}/die_temperature/config", device_id),
+            json!({
+                "name": "Die Temperature",
+                "state_topic": state_topic,
+                "value_template": "{{ value_json.die_temperature }}",
+                "device_class": "temperature",
+                "unit_of_measurement": "°C",
+                "state_class": "measurement",
+                "unique_id": format!("{}_die_temperature", device_id),
+                "device": device.clone(),
+                "availability": availability.clone(),
                 "availability_mode": "all",
                 "entity_category": "diagnostic",
             })
@@ -349,8 +368,7 @@ impl WyzeSensor {
         }
         // Include raw battery voltage for diagnostics (V = raw / 32.0)
         if let Some(raw) = self.battery_raw {
-            let voltage = (raw as f32 / 32.0 * 100.0).round() / 100.0;
-            payload["battery_voltage"] = json!(voltage);
+            payload["battery_voltage"] = json!(format!("{:.2}", raw as f32 / 32.0));
         }
         // Merge type-specific fields
         match &self.state {
