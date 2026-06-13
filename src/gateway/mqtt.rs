@@ -63,25 +63,14 @@ impl MqttGateway {
         let control_topic_remove = format!("{}/remove", topic_root);
         let control_topic_reload = format!("{}/reload", topic_root);
 
+        let control_topic_scan_loop = control_topic_scan.clone();
+        let control_topic_remove_loop = control_topic_remove.clone();
+        let control_topic_reload_loop = control_topic_reload.clone();
+
+        // 1. DEDICATED EVENT LOOP TASK
+        // This task's ONLY job is to keep the MQTT connection alive and process incoming packets.
+        // It must never be blocked by queue backpressure.
         tokio::spawn(async move {
-            let status_topic = format!("{}/status", topic_root);
-            if let Err(e) = client.publish(&status_topic, QoS::AtLeastOnce, true, "online").await {
-                error!("Failed to publish main bridge status online: {}", e);
-            } else {
-                info!("Published main bridge status: online");
-            }
-
-            if let Err(e) = client.subscribe(&control_topic_scan, QoS::AtLeastOnce).await {
-                error!("Failed to subscribe to scan topic: {}", e);
-            }
-            if let Err(e) = client.subscribe(&control_topic_remove, QoS::AtLeastOnce).await {
-                error!("Failed to subscribe to remove topic: {}", e);
-            }
-            if let Err(e) = client.subscribe(&control_topic_reload, QoS::AtLeastOnce).await {
-                error!("Failed to subscribe to reload topic: {}", e);
-            }
-            info!("Subscribed to MQTT control topics.");
-
             loop {
                 match event_loop.poll().await {
                     Ok(notification) => {
@@ -90,14 +79,14 @@ impl MqttGateway {
                             let payload = String::from_utf8_lossy(&publish.payload).trim().to_string();
                             debug!("Received MQTT message on {}: {}", topic, payload);
 
-                            if topic == control_topic_scan {
+                            if topic == control_topic_scan_loop {
                                 let enable = payload == "1" || payload.eq_ignore_ascii_case("ON") || payload.eq_ignore_ascii_case("true");
                                 info!("Received scan command: {}", enable);
                                 let _ = cmd_tx.send(GatewayCommand::Scan(enable)).await;
-                            } else if topic == control_topic_remove {
+                            } else if topic == control_topic_remove_loop {
                                 info!("Received remove command for MAC: {}", payload);
                                 let _ = cmd_tx.send(GatewayCommand::Delete(payload)).await;
-                            } else if topic == control_topic_reload {
+                            } else if topic == control_topic_reload_loop {
                                 info!("Received reload command");
                                 let _ = cmd_tx.send(GatewayCommand::Reload).await;
                             }
@@ -109,6 +98,31 @@ impl MqttGateway {
                     }
                 }
             }
+        });
+
+        // 2. INITIAL SETUP TASK
+        // This task publishes the initial bridge status and subscribes to control topics.
+        // It is perfectly safe for this task to block if the queue fills up, because the event 
+        // loop task is running concurrently to drain it.
+        let client_setup = client.clone();
+        tokio::spawn(async move {
+            let status_topic = format!("{}/status", topic_root);
+            if let Err(e) = client_setup.publish(&status_topic, QoS::AtLeastOnce, true, "online").await {
+                error!("Failed to publish main bridge status online: {}", e);
+            } else {
+                info!("Published main bridge status: online");
+            }
+
+            if let Err(e) = client_setup.subscribe(&control_topic_scan, QoS::AtLeastOnce).await {
+                error!("Failed to subscribe to scan topic: {}", e);
+            }
+            if let Err(e) = client_setup.subscribe(&control_topic_remove, QoS::AtLeastOnce).await {
+                error!("Failed to subscribe to remove topic: {}", e);
+            }
+            if let Err(e) = client_setup.subscribe(&control_topic_reload, QoS::AtLeastOnce).await {
+                error!("Failed to subscribe to reload topic: {}", e);
+            }
+            info!("Subscribed to MQTT control topics.");
         });
 
         let mut event_rx = self.event_rx;

@@ -2588,3 +2588,535 @@
 2026-06-13T05:00:35.808897Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
 2026-06-13T05:00:35.809394Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Gateway received event for MAC: 77C685E4
 2026-06-13T05:00:35.818340Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Publishing state to wyzesense2mqtt/77C685E4: {"battery":90,"battery_voltage":3.0,"die_temperature":17,"event_sequence":4,"mac":"77C685E4","name":"Wyze LEAK 85E4","online":true,"probe_available":false,"probe_state":"dry","sensor_type":"leak","signal_strength":-68,"state":"dry","sw_version":"unknown","timestamp":1781326828.0}
+2026-06-13T05:01:10.146221Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[21,55,AA,53,1D,19,00,00,01,9E,BF,5A,D4,CE,A2,37,37,41,38,43,37,39,33,02,16,66,00,01,00,00,3A,4B,08,55,07,B0,01,01,06,FB,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=33 bytes:[55,AA,53,1D,19,00,00,01,9E,BF,5A,D4,CE,A2,37,37,41,38,43,37,39,33,02,16,66,00,01,00,00,3A,4B,08,55]
+2026-06-13T05:01:10.146257Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,bf,5a,d4,ce,a2,37,37,41,38,43,37,39,33,02,16,66,00,01,00,00,3a,4b]
+2026-06-13T05:01:10.146280Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5319
+2026-06-13T05:01:10.146290Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+2026-06-13T05:01:10.146795Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Gateway received event for MAC: 77A8C793
+2026-06-13T05:01:10.155316Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Publishing state to wyzesense2mqtt/77A8C793: {"battery":100,"battery_voltage":3.190000057220459,"die_temperature":22,"event_sequence":58,"mac":"77A8C793","name":"Wyze MOTION C793","online":true,"sensor_type":"motion","signal_strength":-75,"state":"inactive","sw_version":"unknown","timestamp":1781326861.0}
+2026-06-13T05:02:40.618330Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[21,55,AA,53,1D,19,00,00,01,9E,BF,5C,25,D2,A2,37,37,41,38,43,37,39,33,02,17,66,00,01,01,00,3B,4B,07,AF,07,B0,01,01,06,FB,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=33 bytes:[55,AA,53,1D,19,00,00,01,9E,BF,5C,25,D2,A2,37,37,41,38,43,37,39,33,02,17,66,00,01,01,00,3B,4B,07,AF]
+2026-06-13T05:02:40.618367Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,bf,5c,25,d2,a2,37,37,41,38,43,37,39,33,02,17,66,00,01,01,00,3b,4b]
+2026-06-13T05:02:40.618390Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5319
+2026-06-13T05:02:40.618401Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+2026-06-13T05:02:40.618845Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Gateway received event for MAC: 77A8C793
+2026-06-13T05:02:40.628995Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Publishing state to wyzesense2mqtt/77A8C793: {"battery":100,"battery_voltage":3.190000057220459,"die_temperature":23,"event_sequence":59,"mac":"77A8C793","name":"Wyze MOTION C793","online":true,"sensor_type":"motion","signal_strength":-75,"state":"active","sw_version":"unknown","timestamp":1781326947.0}
+2026-06-13T05:03:26.305858Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[21,55,AA,53,1D,19,00,00,01,9E,BF,5C,D0,05,A2,37,37,41,38,43,37,39,33,02,17,66,00,01,00,00,3C,4B,07,8D,07,B0,01,01,06,FB,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=33 bytes:[55,AA,53,1D,19,00,00,01,9E,BF,5C,D0,05,A2,37,37,41,38,43,37,39,33,02,17,66,00,01,00,00,3C,4B,07,8D]
+2026-06-13T05:03:26.305895Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,bf,5c,d0,05,a2,37,37,41,38,43,37,39,33,02,17,66,00,01,00,00,3c,4b]
+2026-06-13T05:03:26.305918Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5319
+2026-06-13T05:03:26.305929Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+2026-06-13T05:03:26.306335Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Gateway received event for MAC: 77A8C793
+2026-06-13T05:03:26.316823Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Publishing state to wyzesense2mqtt/77A8C793: {"battery":100,"battery_voltage":3.190000057220459,"die_temperature":23,"event_sequence":60,"mac":"77A8C793","name":"Wyze MOTION C793","online":true,"sensor_type":"motion","signal_strength":-75,"state":"inactive","sw_version":"unknown","timestamp":1781326991.0}
+2026-06-13T05:03:28.498878Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[21,55,AA,53,1D,19,00,00,01,9E,BF,5C,D8,31,A2,37,37,41,38,43,37,39,33,02,16,66,00,01,01,00,3D,4C,07,C3,07,B0,01,01,06,FB,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=33 bytes:[55,AA,53,1D,19,00,00,01,9E,BF,5C,D8,31,A2,37,37,41,38,43,37,39,33,02,16,66,00,01,01,00,3D,4C,07,C3]
+2026-06-13T05:03:28.498913Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,bf,5c,d8,31,a2,37,37,41,38,43,37,39,33,02,16,66,00,01,01,00,3d,4c]
+2026-06-13T05:03:28.498935Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5319
+2026-06-13T05:03:28.498946Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+2026-06-13T05:03:28.499430Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Gateway received event for MAC: 77A8C793
+2026-06-13T05:03:28.510423Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Publishing state to wyzesense2mqtt/77A8C793: {"battery":100,"battery_voltage":3.190000057220459,"die_temperature":22,"event_sequence":61,"mac":"77A8C793","name":"Wyze MOTION C793","online":true,"sensor_type":"motion","signal_strength":-76,"state":"active","sw_version":"unknown","timestamp":1781326993.0}
+2026-06-13T05:04:08.497356Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[21,55,AA,53,1D,19,00,00,01,9E,BF,5D,6D,32,A2,37,37,41,38,43,37,39,33,02,16,66,00,01,00,00,3E,4C,07,5A,07,B0,01,01,06,FB,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=33 bytes:[55,AA,53,1D,19,00,00,01,9E,BF,5D,6D,32,A2,37,37,41,38,43,37,39,33,02,16,66,00,01,00,00,3E,4C,07,5A]
+2026-06-13T05:04:08.497392Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,bf,5d,6d,32,a2,37,37,41,38,43,37,39,33,02,16,66,00,01,00,00,3e,4c]
+2026-06-13T05:04:08.497415Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5319
+2026-06-13T05:04:08.497426Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+2026-06-13T05:04:08.497899Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Gateway received event for MAC: 77A8C793
+2026-06-13T05:04:08.503486Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Publishing state to wyzesense2mqtt/77A8C793: {"battery":100,"battery_voltage":3.190000057220459,"die_temperature":22,"event_sequence":62,"mac":"77A8C793","name":"Wyze MOTION C793","online":true,"sensor_type":"motion","signal_strength":-76,"state":"inactive","sw_version":"unknown","timestamp":1781327031.0}
+2026-06-13T05:04:42.424744Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[21,55,AA,53,1D,19,00,00,01,9E,BF,5D,EB,95,A2,37,37,41,38,43,37,39,33,02,17,66,00,01,01,00,3F,4D,08,3F,07,B0,01,01,06,FB,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=33 bytes:[55,AA,53,1D,19,00,00,01,9E,BF,5D,EB,95,A2,37,37,41,38,43,37,39,33,02,17,66,00,01,01,00,3F,4D,08,3F]
+2026-06-13T05:04:42.424780Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,bf,5d,eb,95,a2,37,37,41,38,43,37,39,33,02,17,66,00,01,01,00,3f,4d]
+2026-06-13T05:04:42.424804Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5319
+2026-06-13T05:04:42.424815Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+2026-06-13T05:04:42.425266Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Gateway received event for MAC: 77A8C793
+2026-06-13T05:04:42.430929Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Publishing state to wyzesense2mqtt/77A8C793: {"battery":100,"battery_voltage":3.190000057220459,"die_temperature":23,"event_sequence":63,"mac":"77A8C793","name":"Wyze MOTION C793","online":true,"sensor_type":"motion","signal_strength":-77,"state":"active","sw_version":"unknown","timestamp":1781327063.0}
+2026-06-13T05:05:10.146052Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[21,55,AA,53,1D,19,00,00,01,9E,BF,5E,52,D9,A2,37,37,37,43,31,46,43,41,02,17,57,00,01,01,C9,C5,55,09,49,07,B0,01,01,06,FB,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=33 bytes:[55,AA,53,1D,19,00,00,01,9E,BF,5E,52,D9,A2,37,37,37,43,31,46,43,41,02,17,57,00,01,01,C9,C5,55,09,49]
+2026-06-13T05:05:10.146088Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,bf,5e,52,d9,a2,37,37,37,43,31,46,43,41,02,17,57,00,01,01,c9,c5,55]
+2026-06-13T05:05:10.146111Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5319
+2026-06-13T05:05:10.146122Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+2026-06-13T05:05:10.146606Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Gateway received event for MAC: 777C1FCA
+2026-06-13T05:05:10.157352Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Publishing state to wyzesense2mqtt/777C1FCA: {"battery":28,"battery_voltage":2.7200000286102295,"die_temperature":23,"event_sequence":51653,"mac":"777C1FCA","name":"Wyze MOTION 1FCA","online":true,"sensor_type":"motion","signal_strength":-85,"state":"active","sw_version":"unknown","timestamp":1781327090.0}
+2026-06-13T05:05:22.121206Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[21,55,AA,53,1D,19,00,00,01,9E,BF,5E,7F,75,A2,37,37,42,44,35,32,45,45,0F,18,5B,00,01,01,7F,41,34,08,37,07,B0,01,01,06,FB,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=33 bytes:[55,AA,53,1D,19,00,00,01,9E,BF,5E,7F,75,A2,37,37,42,44,35,32,45,45,0F,18,5B,00,01,01,7F,41,34,08,37]
+2026-06-13T05:05:22.121242Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,bf,5e,7f,75,a2,37,37,42,44,35,32,45,45,0f,18,5b,00,01,01,7f,41,34]
+2026-06-13T05:05:22.121265Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5319
+2026-06-13T05:05:22.121277Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+2026-06-13T05:05:22.121754Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Gateway received event for MAC: 77BD52EE
+2026-06-13T05:05:22.126993Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Publishing state to wyzesense2mqtt/77BD52EE: {"battery":82,"battery_voltage":2.8399999141693115,"die_temperature":24,"event_sequence":32577,"mac":"77BD52EE","name":"Wyze MOTIONV2 52EE","online":true,"sensor_type":"motionv2","signal_strength":-52,"state":"active","sw_version":"unknown","timestamp":1781327101.0}
+2026-06-13T05:05:29.706215Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[21,55,AA,53,1D,19,00,00,01,9E,BF,5E,9B,B7,A2,37,37,38,42,37,37,44,39,02,14,5F,00,01,01,5C,0F,57,08,44,07,B0,01,01,06,FB,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=33 bytes:[55,AA,53,1D,19,00,00,01,9E,BF,5E,9B,B7,A2,37,37,38,42,37,37,44,39,02,14,5F,00,01,01,5C,0F,57,08,44]
+2026-06-13T05:05:29.706253Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,bf,5e,9b,b7,a2,37,37,38,42,37,37,44,39,02,14,5f,00,01,01,5c,0f,57]
+2026-06-13T05:05:29.706277Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5319
+2026-06-13T05:05:29.706288Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+2026-06-13T05:05:29.706597Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Gateway received event for MAC: 778B77D9
+2026-06-13T05:05:29.716951Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Publishing state to wyzesense2mqtt/778B77D9: {"battery":87,"battery_voltage":2.9700000286102295,"die_temperature":20,"event_sequence":23567,"mac":"778B77D9","name":"Wyze MOTION 77D9","online":true,"sensor_type":"motion","signal_strength":-87,"state":"active","sw_version":"unknown","timestamp":1781327109.0}
+2026-06-13T05:05:42.267349Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[21,55,AA,53,1D,19,00,00,01,9E,BF,5E,CA,80,A2,37,37,41,38,43,37,39,33,02,17,66,00,01,00,00,40,4C,08,09,07,B0,01,01,06,FB,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=33 bytes:[55,AA,53,1D,19,00,00,01,9E,BF,5E,CA,80,A2,37,37,41,38,43,37,39,33,02,17,66,00,01,00,00,40,4C,08,09]
+2026-06-13T05:05:42.267387Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,bf,5e,ca,80,a2,37,37,41,38,43,37,39,33,02,17,66,00,01,00,00,40,4c]
+2026-06-13T05:05:42.267411Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5319
+2026-06-13T05:05:42.267422Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+2026-06-13T05:05:42.267743Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Gateway received event for MAC: 77A8C793
+2026-06-13T05:05:42.279508Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Publishing state to wyzesense2mqtt/77A8C793: {"battery":100,"battery_voltage":3.190000057220459,"die_temperature":23,"event_sequence":64,"mac":"77A8C793","name":"Wyze MOTION C793","online":true,"sensor_type":"motion","signal_strength":-76,"state":"inactive","sw_version":"unknown","timestamp":1781327121.0}
+2026-06-13T05:05:56.521487Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[21,55,AA,53,1D,19,00,00,01,9E,BF,5E,FF,9B,A2,37,37,37,43,31,46,43,41,02,17,57,00,01,00,C9,C6,56,09,B9,07,B0,01,01,06,FB,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=33 bytes:[55,AA,53,1D,19,00,00,01,9E,BF,5E,FF,9B,A2,37,37,37,43,31,46,43,41,02,17,57,00,01,00,C9,C6,56,09,B9]
+2026-06-13T05:05:56.521526Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,bf,5e,ff,9b,a2,37,37,37,43,31,46,43,41,02,17,57,00,01,00,c9,c6,56]
+2026-06-13T05:05:56.521550Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5319
+2026-06-13T05:05:56.521562Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+2026-06-13T05:05:56.521875Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Gateway received event for MAC: 777C1FCA
+2026-06-13T05:05:56.526999Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Publishing state to wyzesense2mqtt/777C1FCA: {"battery":28,"battery_voltage":2.7200000286102295,"die_temperature":23,"event_sequence":51654,"mac":"777C1FCA","name":"Wyze MOTION 1FCA","online":true,"sensor_type":"motion","signal_strength":-86,"state":"inactive","sw_version":"unknown","timestamp":1781327134.0}
+2026-06-13T05:06:12.964681Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[21,55,AA,53,1D,19,00,00,01,9E,BF,5F,3C,DB,A2,37,37,38,42,37,37,44,39,02,17,5F,00,01,00,5C,10,56,08,0C,07,B0,01,01,06,FB,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=33 bytes:[55,AA,53,1D,19,00,00,01,9E,BF,5F,3C,DB,A2,37,37,38,42,37,37,44,39,02,17,5F,00,01,00,5C,10,56,08,0C]
+2026-06-13T05:06:12.964719Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,bf,5f,3c,db,a2,37,37,38,42,37,37,44,39,02,17,5f,00,01,00,5c,10,56]
+2026-06-13T05:06:12.964743Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5319
+2026-06-13T05:06:12.964754Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+2026-06-13T05:06:12.965068Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Gateway received event for MAC: 778B77D9
+2026-06-13T05:06:12.973385Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Publishing state to wyzesense2mqtt/778B77D9: {"battery":87,"battery_voltage":2.9700000286102295,"die_temperature":23,"event_sequence":23568,"mac":"778B77D9","name":"Wyze MOTION 77D9","online":true,"sensor_type":"motion","signal_strength":-86,"state":"inactive","sw_version":"unknown","timestamp":1781327150.0}
+2026-06-13T05:06:30.315008Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[21,55,AA,53,1D,19,00,00,01,9E,BF,5F,7D,7F,A2,37,37,37,43,31,46,43,41,02,17,57,00,01,01,C9,C7,58,09,20,07,B0,01,01,06,FB,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=33 bytes:[55,AA,53,1D,19,00,00,01,9E,BF,5F,7D,7F,A2,37,37,37,43,31,46,43,41,02,17,57,00,01,01,C9,C7,58,09,20]
+2026-06-13T05:06:30.315083Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,bf,5f,7d,7f,a2,37,37,37,43,31,46,43,41,02,17,57,00,01,01,c9,c7,58]
+2026-06-13T05:06:30.315118Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5319
+2026-06-13T05:06:30.315135Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+2026-06-13T05:06:30.315692Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Gateway received event for MAC: 777C1FCA
+2026-06-13T05:06:30.327692Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Publishing state to wyzesense2mqtt/777C1FCA: {"battery":28,"battery_voltage":2.7200000286102295,"die_temperature":23,"event_sequence":51655,"mac":"777C1FCA","name":"Wyze MOTION 1FCA","online":true,"sensor_type":"motion","signal_strength":-88,"state":"active","sw_version":"unknown","timestamp":1781327166.0}
+2026-06-13T05:06:34.738015Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[21,55,AA,53,1D,19,00,00,01,9E,BF,5F,8D,F8,A1,37,37,43,36,38,34,37,46,03,11,5C,00,01,00,00,01,40,07,ED,07,B0,01,01,06,FB,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=33 bytes:[55,AA,53,1D,19,00,00,01,9E,BF,5F,8D,F8,A1,37,37,43,36,38,34,37,46,03,11,5C,00,01,00,00,01,40,07,ED]
+2026-06-13T05:06:34.738053Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,bf,5f,8d,f8,a1,37,37,43,36,38,34,37,46,03,11,5c,00,01,00,00,01,40]
+2026-06-13T05:06:34.738076Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5319
+2026-06-13T05:06:34.738087Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+2026-06-13T05:06:34.738564Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Gateway received event for MAC: 77C6847F
+2026-06-13T05:06:34.750370Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Publishing state to wyzesense2mqtt/77C6847F: {"battery":70,"battery_voltage":2.880000114440918,"die_temperature":17,"event_sequence":1,"mac":"77C6847F","name":"Wyze LEAK 847F","online":true,"probe_available":false,"probe_state":"dry","sensor_type":"leak","signal_strength":-64,"state":"dry","sw_version":"unknown","timestamp":1781327171.0}
+2026-06-13T05:06:40.628124Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[21,55,AA,53,1D,19,00,00,01,9E,BF,5F,A3,EA,A2,37,37,42,44,35,32,45,45,0F,18,5A,00,01,00,7F,42,34,08,D0,07,B0,01,01,06,FB,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=33 bytes:[55,AA,53,1D,19,00,00,01,9E,BF,5F,A3,EA,A2,37,37,42,44,35,32,45,45,0F,18,5A,00,01,00,7F,42,34,08,D0]
+2026-06-13T05:06:40.628163Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,bf,5f,a3,ea,a2,37,37,42,44,35,32,45,45,0f,18,5a,00,01,00,7f,42,34]
+2026-06-13T05:06:40.628197Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5319
+2026-06-13T05:06:40.628214Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+2026-06-13T05:06:40.628807Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Gateway received event for MAC: 77BD52EE
+2026-06-13T05:06:40.636814Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Publishing state to wyzesense2mqtt/77BD52EE: {"battery":80,"battery_voltage":2.809999942779541,"die_temperature":24,"event_sequence":32578,"mac":"77BD52EE","name":"Wyze MOTIONV2 52EE","online":true,"sensor_type":"motionv2","signal_strength":-52,"state":"inactive","sw_version":"unknown","timestamp":1781327176.0}
+2026-06-13T05:06:46.457150Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[21,55,AA,53,1D,19,00,00,01,9E,BF,5F,B9,A1,A2,37,37,41,38,43,37,39,33,02,17,66,00,01,01,00,41,52,08,22,07,B0,01,01,06,FB,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=33 bytes:[55,AA,53,1D,19,00,00,01,9E,BF,5F,B9,A1,A2,37,37,41,38,43,37,39,33,02,17,66,00,01,01,00,41,52,08,22]
+2026-06-13T05:06:46.457189Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,bf,5f,b9,a1,a2,37,37,41,38,43,37,39,33,02,17,66,00,01,01,00,41,52]
+2026-06-13T05:06:46.457212Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5319
+2026-06-13T05:06:46.457223Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+2026-06-13T05:06:46.457678Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Gateway received event for MAC: 77A8C793
+2026-06-13T05:06:46.466006Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Publishing state to wyzesense2mqtt/77A8C793: {"battery":100,"battery_voltage":3.190000057220459,"die_temperature":23,"event_sequence":65,"mac":"77A8C793","name":"Wyze MOTION C793","online":true,"sensor_type":"motion","signal_strength":-82,"state":"active","sw_version":"unknown","timestamp":1781327182.0}
+2026-06-13T05:07:10.134357Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[27,55,AA,53,23,19,00,00,01,9E,BF,60,11,D5,AB,37,37,37,43,31,46,43,41,02,00,00,02,00,00,00,00,01,00,00,04,00,01,01,06,CB,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=39 bytes:[55,AA,53,23,19,00,00,01,9E,BF,60,11,D5,AB,37,37,37,43,31,46,43,41,02,00,00,02,00,00,00,00,01,00,00,04,00,01,01,06,CB]
+2026-06-13T05:07:10.134393Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,bf,60,11,d5,ab,37,37,37,43,31,46,43,41,02,00,00,02,00,00,00,00,01,00,00,04,00,01,01]
+2026-06-13T05:07:10.134419Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5319
+2026-06-13T05:07:10.134429Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+2026-06-13T05:07:10.134780Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Gateway received event for MAC: 777C1FCA
+2026-06-13T05:07:10.142077Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Publishing state to wyzesense2mqtt/777C1FCA: {"battery":28,"battery_voltage":2.7200000286102295,"die_temperature":23,"event_sequence":51655,"mac":"777C1FCA","name":"Wyze MOTION 1FCA","online":true,"sensor_type":"motion","signal_strength":-88,"state":"active","sw_version":"unknown","timestamp":1781327204.0}
+2026-06-13T05:07:14.284522Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[21,55,AA,53,1D,19,00,00,01,9E,BF,60,21,4D,A2,37,37,37,43,31,46,43,41,02,17,57,00,01,00,C9,C8,57,08,92,04,00,01,01,06,CB,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=33 bytes:[55,AA,53,1D,19,00,00,01,9E,BF,60,21,4D,A2,37,37,37,43,31,46,43,41,02,17,57,00,01,00,C9,C8,57,08,92]
+2026-06-13T05:07:14.284559Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,bf,60,21,4d,a2,37,37,37,43,31,46,43,41,02,17,57,00,01,00,c9,c8,57]
+2026-06-13T05:07:14.284581Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5319
+2026-06-13T05:07:14.284593Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+2026-06-13T05:07:14.285021Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Gateway received event for MAC: 777C1FCA
+2026-06-13T05:07:14.292918Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Publishing state to wyzesense2mqtt/777C1FCA: {"battery":28,"battery_voltage":2.7200000286102295,"die_temperature":23,"event_sequence":51656,"mac":"777C1FCA","name":"Wyze MOTION 1FCA","online":true,"sensor_type":"motion","signal_strength":-87,"state":"inactive","sw_version":"unknown","timestamp":1781327208.0}
+2026-06-13T05:07:29.706647Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[27,55,AA,53,23,19,00,00,01,9E,BF,60,5A,BE,AB,37,37,38,42,37,37,44,39,02,01,00,00,03,00,00,00,02,00,00,00,00,01,01,06,EC,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=39 bytes:[55,AA,53,23,19,00,00,01,9E,BF,60,5A,BE,AB,37,37,38,42,37,37,44,39,02,01,00,00,03,00,00,00,02,00,00,00,00,01,01,06,EC]
+2026-06-13T05:07:29.706684Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,bf,60,5a,be,ab,37,37,38,42,37,37,44,39,02,01,00,00,03,00,00,00,02,00,00,00,00,01,01]
+2026-06-13T05:07:29.706709Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5319
+2026-06-13T05:07:29.706720Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+2026-06-13T05:07:29.707118Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Gateway received event for MAC: 778B77D9
+2026-06-13T05:07:29.719284Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Publishing state to wyzesense2mqtt/778B77D9: {"battery":87,"battery_voltage":2.9700000286102295,"die_temperature":23,"event_sequence":23568,"mac":"778B77D9","name":"Wyze MOTION 77D9","online":true,"sensor_type":"motion","signal_strength":-86,"state":"inactive","sw_version":"unknown","timestamp":1781327223.0}
+2026-06-13T05:08:36.425439Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[21,55,AA,53,1D,19,00,00,01,9E,BF,61,53,4D,A2,37,37,41,38,43,37,39,33,02,16,66,00,01,00,00,42,4B,07,62,00,00,01,01,06,EC,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=33 bytes:[55,AA,53,1D,19,00,00,01,9E,BF,61,53,4D,A2,37,37,41,38,43,37,39,33,02,16,66,00,01,00,00,42,4B,07,62]
+2026-06-13T05:08:36.425476Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,bf,61,53,4d,a2,37,37,41,38,43,37,39,33,02,16,66,00,01,00,00,42,4b]
+2026-06-13T05:08:36.425499Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5319
+2026-06-13T05:08:36.425510Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+2026-06-13T05:08:36.425972Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Gateway received event for MAC: 77A8C793
+2026-06-13T05:08:36.433174Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Publishing state to wyzesense2mqtt/77A8C793: {"battery":100,"battery_voltage":3.190000057220459,"die_temperature":22,"event_sequence":66,"mac":"77A8C793","name":"Wyze MOTION C793","online":true,"sensor_type":"motion","signal_strength":-75,"state":"inactive","sw_version":"unknown","timestamp":1781327287.0}
+2026-06-13T05:08:41.353491Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[21,55,AA,53,1D,19,00,00,01,9E,BF,61,65,A8,A2,37,37,41,38,43,37,39,33,02,17,66,00,01,01,00,43,4C,07,D3,00,00,01,01,06,EC,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=33 bytes:[55,AA,53,1D,19,00,00,01,9E,BF,61,65,A8,A2,37,37,41,38,43,37,39,33,02,17,66,00,01,01,00,43,4C,07,D3]
+2026-06-13T05:08:41.353528Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,bf,61,65,a8,a2,37,37,41,38,43,37,39,33,02,17,66,00,01,01,00,43,4c]
+2026-06-13T05:08:41.353551Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5319
+2026-06-13T05:08:41.353562Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+2026-06-13T05:08:41.354028Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Gateway received event for MAC: 77A8C793
+2026-06-13T05:08:41.361478Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Publishing state to wyzesense2mqtt/77A8C793: {"battery":100,"battery_voltage":3.190000057220459,"die_temperature":23,"event_sequence":67,"mac":"77A8C793","name":"Wyze MOTION C793","online":true,"sensor_type":"motion","signal_strength":-76,"state":"active","sw_version":"unknown","timestamp":1781327291.0}
+2026-06-13T05:08:46.287563Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[23,55,AA,53,1F,19,00,00,01,9E,BF,61,78,09,E8,37,37,43,36,38,31,44,30,07,14,5E,00,03,17,4B,33,10,14,4F,07,FA,01,01,06,EC,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=35 bytes:[55,AA,53,1F,19,00,00,01,9E,BF,61,78,09,E8,37,37,43,36,38,31,44,30,07,14,5E,00,03,17,4B,33,10,14,4F,07,FA]
+2026-06-13T05:08:46.287600Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,bf,61,78,09,e8,37,37,43,36,38,31,44,30,07,14,5e,00,03,17,4b,33,10,14,4f]
+2026-06-13T05:08:46.287623Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5319
+2026-06-13T05:08:46.287634Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+2026-06-13T05:08:46.288084Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Gateway received event for MAC: 77C681D0
+2026-06-13T05:08:46.296627Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Publishing state to wyzesense2mqtt/77C681D0: {"battery":83,"battery_voltage":2.940000057220459,"die_temperature":20,"event_sequence":4116,"humidity":51,"mac":"77C681D0","name":"Wyze CLIMATE 81D0","online":true,"sensor_type":"climate","signal_strength":-79,"sw_version":"unknown","temperature":"23.75","timestamp":1781327296.0}
+2026-06-13T05:09:10.128793Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[27,55,AA,53,23,19,00,00,01,9E,BF,61,D0,DA,AB,37,37,37,43,31,46,43,41,02,00,00,02,00,00,00,00,01,00,00,04,00,01,01,07,90,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=39 bytes:[55,AA,53,23,19,00,00,01,9E,BF,61,D0,DA,AB,37,37,37,43,31,46,43,41,02,00,00,02,00,00,00,00,01,00,00,04,00,01,01,07,90]
+2026-06-13T05:09:10.128829Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,bf,61,d0,da,ab,37,37,37,43,31,46,43,41,02,00,00,02,00,00,00,00,01,00,00,04,00,01,01]
+2026-06-13T05:09:10.128854Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5319
+2026-06-13T05:09:10.128865Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+2026-06-13T05:09:10.129354Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Gateway received event for MAC: 777C1FCA
+2026-06-13T05:09:10.134885Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Publishing state to wyzesense2mqtt/777C1FCA: {"battery":28,"battery_voltage":2.7200000286102295,"die_temperature":23,"event_sequence":51656,"mac":"777C1FCA","name":"Wyze MOTION 1FCA","online":true,"sensor_type":"motion","signal_strength":-87,"state":"inactive","sw_version":"unknown","timestamp":1781327319.0}
+2026-06-13T05:09:36.182144Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[07,55,AA,53,03,32,01,87,01,9E,BF,61,D0,DA,AB,37,37,37,43,31,46,43,41,02,00,00,02,00,00,00,00,01,00,00,04,00,01,01,07,90,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=7 bytes:[55,AA,53,03,32,01,87]
+2026-06-13T05:09:36.182180Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5332, Payload=[<None>]
+2026-06-13T05:09:36.182190Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5332
+2026-06-13T05:09:36.182200Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,32,FF,02,83]
+2026-06-13T05:09:36.182643Z DEBUG wyzesense2mqtt_rs::engine: Received time sync request (0x5332). Replying with timestamp.
+2026-06-13T05:09:36.182675Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (15 bytes): [AA,55,53,0B,33,00,00,01,9E,BF,62,AF,36,04,35]
+2026-06-13T05:09:36.192017Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[07,55,AA,53,33,FF,02,84,01,9E,BF,61,D0,DA,AB,37,37,37,43,31,46,43,41,02,00,00,02,00,00,00,00,01,00,00,04,00,01,01,07,90,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=7 bytes:[55,AA,53,33,FF,02,84]
+2026-06-13T05:09:36.192041Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=53FF, Payload=ACK(5333)
+2026-06-13T05:10:26.531673Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[21,55,AA,53,1D,19,00,00,01,9E,BF,63,6A,BF,A2,37,37,41,38,43,37,39,33,02,17,66,00,01,00,00,44,4B,07,F0,04,00,01,01,07,90,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=33 bytes:[55,AA,53,1D,19,00,00,01,9E,BF,63,6A,BF,A2,37,37,41,38,43,37,39,33,02,17,66,00,01,00,00,44,4B,07,F0]
+2026-06-13T05:10:26.531708Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,bf,63,6a,bf,a2,37,37,41,38,43,37,39,33,02,17,66,00,01,00,00,44,4b]
+2026-06-13T05:10:26.531731Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5319
+2026-06-13T05:10:26.531742Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+2026-06-13T05:10:26.532256Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Gateway received event for MAC: 77A8C793
+2026-06-13T05:10:26.540955Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Publishing state to wyzesense2mqtt/77A8C793: {"battery":100,"battery_voltage":3.190000057220459,"die_temperature":23,"event_sequence":68,"mac":"77A8C793","name":"Wyze MOTION C793","online":true,"sensor_type":"motion","signal_strength":-75,"state":"inactive","sw_version":"unknown","timestamp":1781327424.0}
+2026-06-13T05:10:36.172838Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[21,55,AA,53,1D,19,00,00,01,9E,BF,63,8E,AA,A2,37,37,41,38,43,37,39,33,02,17,66,00,01,01,00,45,4B,08,01,04,00,01,01,07,90,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=33 bytes:[55,AA,53,1D,19,00,00,01,9E,BF,63,8E,AA,A2,37,37,41,38,43,37,39,33,02,17,66,00,01,01,00,45,4B,08,01]
+2026-06-13T05:10:36.172874Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,bf,63,8e,aa,a2,37,37,41,38,43,37,39,33,02,17,66,00,01,01,00,45,4b]
+2026-06-13T05:10:36.172897Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5319
+2026-06-13T05:10:36.172908Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+2026-06-13T05:10:36.173349Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Gateway received event for MAC: 77A8C793
+2026-06-13T05:10:36.181743Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Publishing state to wyzesense2mqtt/77A8C793: {"battery":100,"battery_voltage":3.190000057220459,"die_temperature":23,"event_sequence":69,"mac":"77A8C793","name":"Wyze MOTION C793","online":true,"sensor_type":"motion","signal_strength":-75,"state":"active","sw_version":"unknown","timestamp":1781327433.0}
+2026-06-13T05:11:01.843130Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[23,55,AA,53,1F,19,00,00,01,9E,BF,63,EE,4D,E8,37,37,43,36,38,31,44,30,07,18,5E,00,03,17,4D,36,10,15,4E,08,BF,01,01,07,90,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=35 bytes:[55,AA,53,1F,19,00,00,01,9E,BF,63,EE,4D,E8,37,37,43,36,38,31,44,30,07,18,5E,00,03,17,4D,36,10,15,4E,08,BF]
+2026-06-13T05:11:01.843169Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,bf,63,ee,4d,e8,37,37,43,36,38,31,44,30,07,18,5e,00,03,17,4d,36,10,15,4e]
+2026-06-13T05:11:01.843202Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5319
+2026-06-13T05:11:01.843220Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+2026-06-13T05:11:01.843625Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Gateway received event for MAC: 77C681D0
+2026-06-13T05:11:01.851781Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Publishing state to wyzesense2mqtt/77C681D0: {"battery":83,"battery_voltage":2.940000057220459,"die_temperature":24,"event_sequence":4117,"humidity":54,"mac":"77C681D0","name":"Wyze CLIMATE 81D0","online":true,"sensor_type":"climate","signal_strength":-78,"sw_version":"unknown","temperature":"23.77","timestamp":1781327457.0}
+2026-06-13T05:11:52.959725Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[21,55,AA,53,1D,19,00,00,01,9E,BF,64,AC,C0,A2,37,37,41,38,43,37,39,33,02,16,66,00,01,00,00,46,4A,08,34,08,BF,01,01,07,90,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=33 bytes:[55,AA,53,1D,19,00,00,01,9E,BF,64,AC,C0,A2,37,37,41,38,43,37,39,33,02,16,66,00,01,00,00,46,4A,08,34]
+2026-06-13T05:11:52.959762Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,bf,64,ac,c0,a2,37,37,41,38,43,37,39,33,02,16,66,00,01,00,00,46,4a]
+2026-06-13T05:11:52.959786Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5319
+2026-06-13T05:11:52.959797Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+2026-06-13T05:11:52.960219Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Gateway received event for MAC: 77A8C793
+2026-06-13T05:11:52.973832Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Publishing state to wyzesense2mqtt/77A8C793: {"battery":100,"battery_voltage":3.190000057220459,"die_temperature":22,"event_sequence":70,"mac":"77A8C793","name":"Wyze MOTION C793","online":true,"sensor_type":"motion","signal_strength":-74,"state":"inactive","sw_version":"unknown","timestamp":1781327506.0}
+2026-06-13T05:12:38.902249Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[21,55,AA,53,1D,19,00,00,01,9E,BF,65,57,EA,A2,37,37,41,38,43,37,39,33,02,17,66,00,01,01,00,47,49,08,0C,08,BF,01,01,07,90,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=33 bytes:[55,AA,53,1D,19,00,00,01,9E,BF,65,57,EA,A2,37,37,41,38,43,37,39,33,02,17,66,00,01,01,00,47,49,08,0C]
+2026-06-13T05:12:38.902285Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,bf,65,57,ea,a2,37,37,41,38,43,37,39,33,02,17,66,00,01,01,00,47,49]
+2026-06-13T05:12:38.902307Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5319
+2026-06-13T05:12:38.902318Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+2026-06-13T05:12:38.902777Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Gateway received event for MAC: 77A8C793
+2026-06-13T05:12:38.912510Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Publishing state to wyzesense2mqtt/77A8C793: {"battery":100,"battery_voltage":3.190000057220459,"die_temperature":23,"event_sequence":71,"mac":"77A8C793","name":"Wyze MOTION C793","online":true,"sensor_type":"motion","signal_strength":-73,"state":"active","sw_version":"unknown","timestamp":1781327550.0}
+2026-06-13T05:12:50.295349Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[23,55,AA,53,1F,19,00,00,01,9E,BF,65,82,5D,E8,37,37,43,36,38,31,44,30,07,18,5E,00,03,17,4D,39,10,16,4F,08,6A,01,01,07,90,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=35 bytes:[55,AA,53,1F,19,00,00,01,9E,BF,65,82,5D,E8,37,37,43,36,38,31,44,30,07,18,5E,00,03,17,4D,39,10,16,4F,08,6A]
+2026-06-13T05:12:50.295384Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,bf,65,82,5d,e8,37,37,43,36,38,31,44,30,07,18,5e,00,03,17,4d,39,10,16,4f]
+2026-06-13T05:12:50.295408Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5319
+2026-06-13T05:12:50.295418Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+2026-06-13T05:12:50.295928Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Gateway received event for MAC: 77C681D0
+2026-06-13T05:12:50.305222Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Publishing state to wyzesense2mqtt/77C681D0: {"battery":83,"battery_voltage":2.940000057220459,"die_temperature":24,"event_sequence":4118,"humidity":57,"mac":"77C681D0","name":"Wyze CLIMATE 81D0","online":true,"sensor_type":"climate","signal_strength":-79,"sw_version":"unknown","temperature":"23.77","timestamp":1781327561.0}
+2026-06-13T05:13:29.014837Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[21,55,AA,53,1D,19,00,00,01,9E,BF,66,12,9C,A2,37,37,41,38,43,37,39,33,02,17,66,00,01,00,00,48,4B,07,7C,08,6A,01,01,07,90,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=33 bytes:[55,AA,53,1D,19,00,00,01,9E,BF,66,12,9C,A2,37,37,41,38,43,37,39,33,02,17,66,00,01,00,00,48,4B,07,7C]
+2026-06-13T05:13:29.014873Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,bf,66,12,9c,a2,37,37,41,38,43,37,39,33,02,17,66,00,01,00,00,48,4b]
+2026-06-13T05:13:29.014896Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5319
+2026-06-13T05:13:29.014907Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+2026-06-13T05:13:29.015366Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Gateway received event for MAC: 77A8C793
+2026-06-13T05:13:29.021340Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Publishing state to wyzesense2mqtt/77A8C793: {"battery":100,"battery_voltage":3.190000057220459,"die_temperature":23,"event_sequence":72,"mac":"77A8C793","name":"Wyze MOTION C793","online":true,"sensor_type":"motion","signal_strength":-75,"state":"inactive","sw_version":"unknown","timestamp":1781327598.0}
+2026-06-13T05:14:04.616245Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[21,55,AA,53,1D,19,00,00,01,9E,BF,66,97,3E,A2,37,37,41,38,43,37,39,33,02,16,66,00,01,01,00,49,4B,07,A4,08,6A,01,01,07,90,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=33 bytes:[55,AA,53,1D,19,00,00,01,9E,BF,66,97,3E,A2,37,37,41,38,43,37,39,33,02,16,66,00,01,01,00,49,4B,07,A4]
+2026-06-13T05:14:04.616281Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,bf,66,97,3e,a2,37,37,41,38,43,37,39,33,02,16,66,00,01,01,00,49,4b]
+2026-06-13T05:14:04.616304Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5319
+2026-06-13T05:14:04.616315Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+2026-06-13T05:14:04.616746Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Gateway received event for MAC: 77A8C793
+2026-06-13T05:14:04.622216Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Publishing state to wyzesense2mqtt/77A8C793: {"battery":100,"battery_voltage":3.190000057220459,"die_temperature":22,"event_sequence":73,"mac":"77A8C793","name":"Wyze MOTION C793","online":true,"sensor_type":"motion","signal_strength":-75,"state":"active","sw_version":"unknown","timestamp":1781327632.0}
+2026-06-13T05:15:14.552975Z  INFO wyzesense2mqtt_rs: File logging enabled: dir="/app/logs", prefix=wyzesense2mqtt-rs, suffix=log, rotation=daily, max_files=7
+2026-06-13T05:15:14.553044Z  INFO wyzesense2mqtt_rs: ===============================================================
+2026-06-13T05:15:14.553049Z  INFO wyzesense2mqtt_rs:         wyzesense2mqtt-rs v0.1.3 Starting up... 
+2026-06-13T05:15:14.553051Z  INFO wyzesense2mqtt_rs: ===============================================================
+2026-06-13T05:15:14.553052Z  INFO wyzesense2mqtt_rs: Configuration loaded successfully. Log Level set to: trace
+2026-06-13T05:15:14.553054Z  INFO wyzesense2mqtt_rs: USB Dongle path set to 'auto'. Scanning Linux sysfs class...
+2026-06-13T05:15:14.553091Z  INFO wyzesense2mqtt_rs: Auto-Discovery: Found Wyze Sense Bridge on /dev/hidraw0
+2026-06-13T05:15:14.553096Z  INFO wyzesense2mqtt_rs: Initializing Wyze Sense to MQTT Bridge (Rust) Daemon mode...
+2026-06-13T05:15:14.553098Z  INFO wyzesense2mqtt_rs:   USB Device: /dev/hidraw0
+2026-06-13T05:15:14.553099Z  INFO wyzesense2mqtt_rs:   Web Console: http://localhost:7070
+2026-06-13T05:15:14.607200Z  INFO wyzesense2mqtt_rs::engine: Starting dongle initialization handshake...
+2026-06-13T05:15:14.607225Z DEBUG wyzesense2mqtt_rs::engine: ===> Sending command packet: Packet: Cmd=4327, Payload=[<None>]
+2026-06-13T05:15:14.607236Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,43,03,27,01,6C]
+2026-06-13T05:15:14.608886Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[08,55,AA,43,04,28,01,01,6F,9E,BF,66,97,3E,A2,37,37,41,38,43,37,39,33,02,16,66,00,01,01,00,49,4B,07,A4,08,6A,01,01,07,90,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=8 bytes:[55,AA,43,04,28,01,01,6F]
+2026-06-13T05:15:14.608907Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=4328, Payload=[01]
+2026-06-13T05:15:14.608960Z DEBUG wyzesense2mqtt_rs::engine: Handshake 1/5: Inquiry verified
+2026-06-13T05:15:14.709399Z DEBUG wyzesense2mqtt_rs::engine: ===> Sending command packet: Packet: Cmd=4302, Payload=[30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30]
+2026-06-13T05:15:14.709472Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (23 bytes): [AA,55,43,13,02,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,04,57]
+2026-06-13T05:15:14.714121Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[17,55,AA,43,13,03,8A,18,A3,A3,18,1F,CF,9A,7B,90,EC,8E,61,61,A4,AB,09,76,16,66,00,01,01,00,49,4B,07,A4,08,6A,01,01,07,90,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=23 bytes:[55,AA,43,13,03,8A,18,A3,A3,18,1F,CF,9A,7B,90,EC,8E,61,61,A4,AB,09,76]
+2026-06-13T05:15:14.714166Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=4303, Payload=[8a,18,a3,a3,18,1f,cf,9a,7b,90,ec,8e,61,61,a4,ab]
+2026-06-13T05:15:14.714344Z DEBUG wyzesense2mqtt_rs::engine: Handshake 2/5: ENR Token retrieved: Packet: Cmd=4303, Payload=[8a,18,a3,a3,18,1f,cf,9a,7b,90,ec,8e,61,61,a4,ab]
+2026-06-13T05:15:14.815696Z DEBUG wyzesense2mqtt_rs::engine: ===> Sending command packet: Packet: Cmd=4304, Payload=[<None>]
+2026-06-13T05:15:14.815728Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,43,03,04,01,49]
+2026-06-13T05:15:14.817065Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[0F,55,AA,43,0B,05,37,37,38,42,35,46,36,33,03,1E,EC,8E,61,61,A4,AB,09,76,16,66,00,01,01,00,49,4B,07,A4,08,6A,01,01,07,90,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=15 bytes:[55,AA,43,0B,05,37,37,38,42,35,46,36,33,03,1E]
+2026-06-13T05:15:14.817117Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=4305, Payload=[37,37,38,42,35,46,36,33]
+2026-06-13T05:15:14.817327Z  INFO wyzesense2mqtt_rs::engine: Dongle MAC address: 778B5F63
+2026-06-13T05:15:14.817350Z DEBUG wyzesense2mqtt_rs::engine: Handshake 3/5: MAC Address retrieved
+2026-06-13T05:15:14.918650Z DEBUG wyzesense2mqtt_rs::engine: ===> Sending command packet: Packet: Cmd=5316, Payload=[<None>]
+2026-06-13T05:15:14.918683Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,03,16,01,6B]
+2026-06-13T05:15:14.931147Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[28,55,AA,53,16,FF,02,67,55,AA,53,1D,17,30,2E,30,2E,30,2E,34,37,20,56,31,2E,38,20,47,61,74,65,77,61,79,20,47,57,33,55,08,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=40 bytes:[55,AA,53,16,FF,02,67,55,AA,53,1D,17,30,2E,30,2E,30,2E,34,37,20,56,31,2E,38,20,47,61,74,65,77,61,79,20,47,57,33,55,08,50]
+2026-06-13T05:15:14.931190Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=53FF, Payload=ACK(5316)
+2026-06-13T05:15:14.931200Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5317, Payload=[30,2e,30,2e,30,2e,34,37,20,56,31,2e,38,20,47,61,74,65,77,61,79,20,47,57,33,55]
+2026-06-13T05:15:14.931267Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5317
+2026-06-13T05:15:14.931279Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,17,FF,02,68]
+2026-06-13T05:15:14.931344Z  INFO wyzesense2mqtt_rs::engine: Dongle version: 0.0.0.47 V1.8 Gateway GW3U
+2026-06-13T05:15:14.931371Z DEBUG wyzesense2mqtt_rs::engine: Handshake 4/5: Version string retrieved
+2026-06-13T05:15:15.032703Z DEBUG wyzesense2mqtt_rs::engine: ===> Sending command packet: Packet: Cmd=5314, Payload=[ff]
+2026-06-13T05:15:15.032740Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (8 bytes): [AA,55,53,04,14,FF,02,69]
+2026-06-13T05:15:15.043164Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[0E,55,AA,53,14,FF,02,65,55,AA,53,03,15,01,6A,30,2E,30,2E,34,37,20,56,31,2E,38,20,47,61,74,65,77,61,79,20,47,57,33,55,08,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=14 bytes:[55,AA,53,14,FF,02,65,55,AA,53,03,15,01,6A]
+2026-06-13T05:15:15.043219Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=53FF, Payload=ACK(5314)
+2026-06-13T05:15:15.043230Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5315, Payload=[<None>]
+2026-06-13T05:15:15.043242Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5315
+2026-06-13T05:15:15.043251Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,15,FF,02,66]
+2026-06-13T05:15:15.043313Z DEBUG wyzesense2mqtt_rs::engine: Handshake 5/5: Authentication completed
+2026-06-13T05:15:15.043341Z  INFO wyzesense2mqtt_rs::engine: Dongle handshake completed successfully! Dongle is unlocked.
+2026-06-13T05:15:15.043354Z  INFO wyzesense2mqtt_rs: Dongle successfully unlocked and authenticated!
+2026-06-13T05:15:15.043363Z  INFO wyzesense2mqtt_rs: Warming up paired sensors cache from NVRAM...
+2026-06-13T05:15:15.043369Z  INFO wyzesense2mqtt_rs::engine: Retrieving sensor list...
+2026-06-13T05:15:15.043373Z  INFO wyzesense2mqtt_rs::engine: Retrieving sensor count...
+2026-06-13T05:15:15.043379Z DEBUG wyzesense2mqtt_rs::engine: ===> Sending command packet: Packet: Cmd=532E, Payload=[<None>]
+2026-06-13T05:15:15.043392Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,03,2E,01,83]
+2026-06-13T05:15:15.055105Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[16,55,AA,53,03,32,01,87,55,AA,53,2E,FF,02,7F,55,AA,53,04,2F,11,01,96,31,2E,38,20,47,61,74,65,77,61,79,20,47,57,33,55,08,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=22 bytes:[55,AA,53,03,32,01,87,55,AA,53,2E,FF,02,7F,55,AA,53,04,2F,11,01,96]
+2026-06-13T05:15:15.055145Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5332, Payload=[<None>]
+2026-06-13T05:15:15.055154Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5332
+2026-06-13T05:15:15.055164Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,32,FF,02,83]
+2026-06-13T05:15:15.055590Z DEBUG wyzesense2mqtt_rs::engine: Received time sync request (0x5332). Replying with timestamp.
+2026-06-13T05:15:15.055619Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (15 bytes): [AA,55,53,0B,33,00,00,01,9E,BF,67,DA,EF,05,1E]
+2026-06-13T05:15:15.056065Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=53FF, Payload=ACK(532E)
+2026-06-13T05:15:15.056086Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=532F, Payload=[11]
+2026-06-13T05:15:15.056106Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 532F
+2026-06-13T05:15:15.056123Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,2F,FF,02,80]
+2026-06-13T05:15:15.056180Z  INFO wyzesense2mqtt_rs::engine: 17 sensors reported by dongle
+2026-06-13T05:15:15.056209Z DEBUG wyzesense2mqtt_rs::engine: ===> Sending command packet: Packet: Cmd=5330, Payload=[11]
+2026-06-13T05:15:15.056224Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (8 bytes): [AA,55,53,04,30,11,01,97]
+2026-06-13T05:15:15.066116Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[0E,55,AA,53,33,FF,02,84,55,AA,53,30,FF,02,81,55,AA,53,04,2F,11,01,96,31,2E,38,20,47,61,74,65,77,61,79,20,47,57,33,55,08,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=14 bytes:[55,AA,53,33,FF,02,84,55,AA,53,30,FF,02,81]
+2026-06-13T05:15:15.066153Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=53FF, Payload=ACK(5333)
+2026-06-13T05:15:15.066162Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=53FF, Payload=ACK(5330)
+2026-06-13T05:15:15.079092Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[0F,55,AA,53,0B,31,37,37,42,44,35,32,45,45,03,73,AA,53,04,2F,11,01,96,31,2E,38,20,47,61,74,65,77,61,79,20,47,57,33,55,08,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=15 bytes:[55,AA,53,0B,31,37,37,42,44,35,32,45,45,03,73]
+2026-06-13T05:15:15.079131Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5331, Payload=[37,37,42,44,35,32,45,45]
+2026-06-13T05:15:15.079145Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5331
+2026-06-13T05:15:15.079154Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,31,FF,02,82]
+2026-06-13T05:15:15.079749Z  INFO wyzesense2mqtt_rs::engine: Sensor 1/17: MAC=77BD52EE
+2026-06-13T05:15:15.186089Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[0F,55,AA,53,0B,31,37,37,42,44,35,31,34,44,03,60,AA,53,04,2F,11,01,96,31,2E,38,20,47,61,74,65,77,61,79,20,47,57,33,55,08,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=15 bytes:[55,AA,53,0B,31,37,37,42,44,35,31,34,44,03,60]
+2026-06-13T05:15:15.186136Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5331, Payload=[37,37,42,44,35,31,34,44]
+2026-06-13T05:15:15.186157Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5331
+2026-06-13T05:15:15.186173Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,31,FF,02,82]
+2026-06-13T05:15:15.186889Z  INFO wyzesense2mqtt_rs::engine: Sensor 2/17: MAC=77BD514D
+2026-06-13T05:15:15.294077Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[0F,55,AA,53,0B,31,37,37,43,36,38,31,44,30,03,52,AA,53,04,2F,11,01,96,31,2E,38,20,47,61,74,65,77,61,79,20,47,57,33,55,08,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=15 bytes:[55,AA,53,0B,31,37,37,43,36,38,31,44,30,03,52]
+2026-06-13T05:15:15.294115Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5331, Payload=[37,37,43,36,38,31,44,30]
+2026-06-13T05:15:15.294129Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5331
+2026-06-13T05:15:15.294139Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,31,FF,02,82]
+2026-06-13T05:15:15.294718Z  INFO wyzesense2mqtt_rs::engine: Sensor 3/17: MAC=77C681D0
+2026-06-13T05:15:15.401003Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[0F,55,AA,53,0B,31,37,37,41,38,43,37,37,38,03,5E,AA,53,04,2F,11,01,96,31,2E,38,20,47,61,74,65,77,61,79,20,47,57,33,55,08,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=15 bytes:[55,AA,53,0B,31,37,37,41,38,43,37,37,38,03,5E]
+2026-06-13T05:15:15.401043Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5331, Payload=[37,37,41,38,43,37,37,38]
+2026-06-13T05:15:15.401060Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5331
+2026-06-13T05:15:15.401072Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,31,FF,02,82]
+2026-06-13T05:15:15.401632Z  INFO wyzesense2mqtt_rs::engine: Sensor 4/17: MAC=77A8C778
+2026-06-13T05:15:15.510103Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[0F,55,AA,53,0B,31,37,37,38,42,37,37,44,39,03,61,AA,53,04,2F,11,01,96,31,2E,38,20,47,61,74,65,77,61,79,20,47,57,33,55,08,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=15 bytes:[55,AA,53,0B,31,37,37,38,42,37,37,44,39,03,61]
+2026-06-13T05:15:15.510152Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5331, Payload=[37,37,38,42,37,37,44,39]
+2026-06-13T05:15:15.510168Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5331
+2026-06-13T05:15:15.510179Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,31,FF,02,82]
+2026-06-13T05:15:15.510826Z  INFO wyzesense2mqtt_rs::engine: Sensor 5/17: MAC=778B77D9
+2026-06-13T05:15:15.617090Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[0F,55,AA,53,0B,31,37,37,43,36,38,31,42,32,03,52,AA,53,04,2F,11,01,96,31,2E,38,20,47,61,74,65,77,61,79,20,47,57,33,55,08,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=15 bytes:[55,AA,53,0B,31,37,37,43,36,38,31,42,32,03,52]
+2026-06-13T05:15:15.617157Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5331, Payload=[37,37,43,36,38,31,42,32]
+2026-06-13T05:15:15.617182Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5331
+2026-06-13T05:15:15.617195Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,31,FF,02,82]
+2026-06-13T05:15:15.617830Z  INFO wyzesense2mqtt_rs::engine: Sensor 6/17: MAC=77C681B2
+2026-06-13T05:15:15.725046Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[0F,55,AA,53,0B,31,37,37,43,36,38,34,36,39,03,50,AA,53,04,2F,11,01,96,31,2E,38,20,47,61,74,65,77,61,79,20,47,57,33,55,08,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=15 bytes:[55,AA,53,0B,31,37,37,43,36,38,34,36,39,03,50]
+2026-06-13T05:15:15.725095Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5331, Payload=[37,37,43,36,38,34,36,39]
+2026-06-13T05:15:15.725111Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5331
+2026-06-13T05:15:15.725121Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,31,FF,02,82]
+2026-06-13T05:15:15.725710Z  INFO wyzesense2mqtt_rs::engine: Sensor 7/17: MAC=77C68469
+2026-06-13T05:15:15.835159Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[0F,55,AA,53,0B,31,37,37,43,36,38,35,33,45,03,5A,AA,53,04,2F,11,01,96,31,2E,38,20,47,61,74,65,77,61,79,20,47,57,33,55,08,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=15 bytes:[55,AA,53,0B,31,37,37,43,36,38,35,33,45,03,5A]
+2026-06-13T05:15:15.835247Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5331, Payload=[37,37,43,36,38,35,33,45]
+2026-06-13T05:15:15.835272Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5331
+2026-06-13T05:15:15.835288Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,31,FF,02,82]
+2026-06-13T05:15:15.835832Z  INFO wyzesense2mqtt_rs::engine: Sensor 8/17: MAC=77C6853E
+2026-06-13T05:15:15.943133Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[0F,55,AA,53,0B,31,37,37,43,36,38,35,45,34,03,5B,AA,53,04,2F,11,01,96,31,2E,38,20,47,61,74,65,77,61,79,20,47,57,33,55,08,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=15 bytes:[55,AA,53,0B,31,37,37,43,36,38,35,45,34,03,5B]
+2026-06-13T05:15:15.943185Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5331, Payload=[37,37,43,36,38,35,45,34]
+2026-06-13T05:15:15.943201Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5331
+2026-06-13T05:15:15.943211Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,31,FF,02,82]
+2026-06-13T05:15:15.943898Z  INFO wyzesense2mqtt_rs::engine: Sensor 9/17: MAC=77C685E4
+2026-06-13T05:15:16.052083Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[0F,55,AA,53,0B,31,37,37,43,36,38,35,41,45,03,68,AA,53,04,2F,11,01,96,31,2E,38,20,47,61,74,65,77,61,79,20,47,57,33,55,08,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=15 bytes:[55,AA,53,0B,31,37,37,43,36,38,35,41,45,03,68]
+2026-06-13T05:15:16.052129Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5331, Payload=[37,37,43,36,38,35,41,45]
+2026-06-13T05:15:16.052150Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5331
+2026-06-13T05:15:16.052165Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,31,FF,02,82]
+2026-06-13T05:15:16.052656Z  INFO wyzesense2mqtt_rs::engine: Sensor 10/17: MAC=77C685AE
+2026-06-13T05:15:16.161069Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[0F,55,AA,53,0B,31,37,37,43,36,38,34,43,34,03,58,AA,53,04,2F,11,01,96,31,2E,38,20,47,61,74,65,77,61,79,20,47,57,33,55,08,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=15 bytes:[55,AA,53,0B,31,37,37,43,36,38,34,43,34,03,58]
+2026-06-13T05:15:16.161109Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5331, Payload=[37,37,43,36,38,34,43,34]
+2026-06-13T05:15:16.161124Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5331
+2026-06-13T05:15:16.161133Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,31,FF,02,82]
+2026-06-13T05:15:16.161806Z  INFO wyzesense2mqtt_rs::engine: Sensor 11/17: MAC=77C684C4
+2026-06-13T05:15:16.270097Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[0F,55,AA,53,0B,31,37,37,43,36,38,31,44,31,03,53,AA,53,04,2F,11,01,96,31,2E,38,20,47,61,74,65,77,61,79,20,47,57,33,55,08,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=15 bytes:[55,AA,53,0B,31,37,37,43,36,38,31,44,31,03,53]
+2026-06-13T05:15:16.270144Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5331, Payload=[37,37,43,36,38,31,44,31]
+2026-06-13T05:15:16.270166Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5331
+2026-06-13T05:15:16.270181Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,31,FF,02,82]
+2026-06-13T05:15:16.270836Z  INFO wyzesense2mqtt_rs::engine: Sensor 12/17: MAC=77C681D1
+2026-06-13T05:15:16.380106Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[0F,55,AA,53,0B,31,37,37,43,36,38,32,31,37,03,47,AA,53,04,2F,11,01,96,31,2E,38,20,47,61,74,65,77,61,79,20,47,57,33,55,08,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=15 bytes:[55,AA,53,0B,31,37,37,43,36,38,32,31,37,03,47]
+2026-06-13T05:15:16.380144Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5331, Payload=[37,37,43,36,38,32,31,37]
+2026-06-13T05:15:16.380158Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5331
+2026-06-13T05:15:16.380168Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,31,FF,02,82]
+2026-06-13T05:15:16.380692Z  INFO wyzesense2mqtt_rs::engine: Sensor 13/17: MAC=77C68217
+2026-06-13T05:15:16.490050Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[0F,55,AA,53,0B,31,37,37,43,36,38,34,37,46,03,5E,AA,53,04,2F,11,01,96,31,2E,38,20,47,61,74,65,77,61,79,20,47,57,33,55,08,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=15 bytes:[55,AA,53,0B,31,37,37,43,36,38,34,37,46,03,5E]
+2026-06-13T05:15:16.490108Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5331, Payload=[37,37,43,36,38,34,37,46]
+2026-06-13T05:15:16.490125Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5331
+2026-06-13T05:15:16.490149Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,31,FF,02,82]
+2026-06-13T05:15:16.490502Z  INFO wyzesense2mqtt_rs::engine: Sensor 14/17: MAC=77C6847F
+2026-06-13T05:15:16.599037Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[0F,55,AA,53,0B,31,37,37,37,43,31,46,43,41,03,71,AA,53,04,2F,11,01,96,31,2E,38,20,47,61,74,65,77,61,79,20,47,57,33,55,08,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=15 bytes:[55,AA,53,0B,31,37,37,37,43,31,46,43,41,03,71]
+2026-06-13T05:15:16.599075Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5331, Payload=[37,37,37,43,31,46,43,41]
+2026-06-13T05:15:16.599086Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5331
+2026-06-13T05:15:16.599094Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,31,FF,02,82]
+2026-06-13T05:15:16.599426Z  INFO wyzesense2mqtt_rs::engine: Sensor 15/17: MAC=777C1FCA
+2026-06-13T05:15:16.708122Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[0F,55,AA,53,0B,31,37,37,43,36,38,31,45,44,03,67,AA,53,04,2F,11,01,96,31,2E,38,20,47,61,74,65,77,61,79,20,47,57,33,55,08,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=15 bytes:[55,AA,53,0B,31,37,37,43,36,38,31,45,44,03,67]
+2026-06-13T05:15:16.708196Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5331, Payload=[37,37,43,36,38,31,45,44]
+2026-06-13T05:15:16.708219Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5331
+2026-06-13T05:15:16.708241Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,31,FF,02,82]
+2026-06-13T05:15:16.708825Z  INFO wyzesense2mqtt_rs::engine: Sensor 16/17: MAC=77C681ED
+2026-06-13T05:15:16.818118Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[0F,55,AA,53,0B,31,37,37,41,38,43,37,39,33,03,5B,AA,53,04,2F,11,01,96,31,2E,38,20,47,61,74,65,77,61,79,20,47,57,33,55,08,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=15 bytes:[55,AA,53,0B,31,37,37,41,38,43,37,39,33,03,5B]
+2026-06-13T05:15:16.818160Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5331, Payload=[37,37,41,38,43,37,39,33]
+2026-06-13T05:15:16.818174Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5331
+2026-06-13T05:15:16.818183Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,31,FF,02,82]
+2026-06-13T05:15:16.818745Z  INFO wyzesense2mqtt_rs::engine: Sensor 17/17: MAC=77A8C793
+2026-06-13T05:15:16.818770Z  INFO wyzesense2mqtt_rs::engine: Successfully retrieved 17 paired sensors
+2026-06-13T05:15:16.832825Z  INFO wyzesense2mqtt_rs: Sensors memory cache successfully warmed up!
+2026-06-13T05:15:16.832871Z  INFO wyzesense2mqtt_rs: MQTT Gateway is enabled. Connecting to broker at mosquitto:1883...
+2026-06-13T05:15:16.841569Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Gateway received event for MAC: 77C6847F
+2026-06-13T05:15:16.842303Z  INFO wyzesense2mqtt_rs::web::server: Web interface successfully started. Listening on http://0.0.0.0:7070
+2026-06-13T05:15:16.850055Z  INFO wyzesense2mqtt_rs::gateway::mqtt: Publishing Home Assistant Discovery for MAC: 77C6847F
+2026-06-13T05:15:16.850112Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Publishing discovery config to homeassistant/sensor/wyzesense_77C6847F/battery/config: {"availability":[{"topic":"wyzesense2mqtt/status"},{"topic":"wyzesense2mqtt/77C6847F/status"}],"availability_mode":"all","device":{"identifiers":["wyzesense_77C6847F","77C6847F"],"manufacturer":"Wyze","model":"Leak Sensor V2","name":"Wyze LEAK 847F","via_device":"wyzesense2mqtt"},"device_class":"battery","entity_category":"diagnostic","state_class":"measurement","state_topic":"wyzesense2mqtt/77C6847F","unique_id":"wyzesense_77C6847F_battery","unit_of_measurement":"%","value_template":"{{ value_json.battery }}"}
+2026-06-13T05:15:16.850237Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Publishing discovery config to homeassistant/sensor/wyzesense_77C6847F/battery_voltage/config: {"availability":[{"topic":"wyzesense2mqtt/status"},{"topic":"wyzesense2mqtt/77C6847F/status"}],"availability_mode":"all","device":{"identifiers":["wyzesense_77C6847F","77C6847F"],"manufacturer":"Wyze","model":"Leak Sensor V2","name":"Wyze LEAK 847F","via_device":"wyzesense2mqtt"},"device_class":"voltage","entity_category":"diagnostic","name":"Battery Voltage","state_class":"measurement","state_topic":"wyzesense2mqtt/77C6847F","suggested_display_precision":2,"unique_id":"wyzesense_77C6847F_battery_voltage","unit_of_measurement":"V","value_template":"{{ value_json.battery_voltage }}"}
+2026-06-13T05:15:16.850303Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Publishing discovery config to homeassistant/sensor/wyzesense_77C6847F/die_temperature/config: {"availability":[{"topic":"wyzesense2mqtt/status"},{"topic":"wyzesense2mqtt/77C6847F/status"}],"availability_mode":"all","device":{"identifiers":["wyzesense_77C6847F","77C6847F"],"manufacturer":"Wyze","model":"Leak Sensor V2","name":"Wyze LEAK 847F","via_device":"wyzesense2mqtt"},"device_class":"temperature","entity_category":"diagnostic","name":"Die Temperature","state_class":"measurement","state_topic":"wyzesense2mqtt/77C6847F","unique_id":"wyzesense_77C6847F_die_temperature","unit_of_measurement":"°C","value_template":"{{ value_json.die_temperature }}"}
+2026-06-13T05:15:16.850375Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Publishing discovery config to homeassistant/sensor/wyzesense_77C6847F/signal_strength/config: {"availability":[{"topic":"wyzesense2mqtt/status"},{"topic":"wyzesense2mqtt/77C6847F/status"}],"availability_mode":"all","device":{"identifiers":["wyzesense_77C6847F","77C6847F"],"manufacturer":"Wyze","model":"Leak Sensor V2","name":"Wyze LEAK 847F","via_device":"wyzesense2mqtt"},"device_class":"signal_strength","entity_category":"diagnostic","state_class":"measurement","state_topic":"wyzesense2mqtt/77C6847F","unique_id":"wyzesense_77C6847F_signal_strength","unit_of_measurement":"dBm","value_template":"{{ value_json.signal_strength }}"}
+2026-06-13T05:15:16.850458Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Publishing discovery config to homeassistant/binary_sensor/wyzesense_77C6847F/state/config: {"availability":[{"topic":"wyzesense2mqtt/status"},{"topic":"wyzesense2mqtt/77C6847F/status"}],"availability_mode":"all","device":{"identifiers":["wyzesense_77C6847F","77C6847F"],"manufacturer":"Wyze","model":"Leak Sensor V2","name":"Wyze LEAK 847F","via_device":"wyzesense2mqtt"},"device_class":"moisture","json_attributes_topic":"wyzesense2mqtt/77C6847F","name":null,"payload_off":"dry","payload_on":"wet","state_topic":"wyzesense2mqtt/77C6847F","unique_id":"wyzesense_77C6847F_state","value_template":"{{ value_json.state }}"}
+2026-06-13T05:15:16.850550Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Publishing discovery config to homeassistant/binary_sensor/wyzesense_77C6847F/probe_available/config: {"availability":[{"topic":"wyzesense2mqtt/status"},{"topic":"wyzesense2mqtt/77C6847F/status"}],"availability_mode":"all","device":{"identifiers":["wyzesense_77C6847F","77C6847F"],"manufacturer":"Wyze","model":"Leak Sensor V2","name":"Wyze LEAK 847F","via_device":"wyzesense2mqtt"},"device_class":"connectivity","entity_category":"diagnostic","name":"Probe","state_topic":"wyzesense2mqtt/77C6847F","unique_id":"wyzesense_77C6847F_probe_available","value_template":"{{ 'ON' if value_json.probe_available else 'OFF' }}"}
+2026-06-13T05:15:16.850625Z DEBUG wyzesense2mqtt_rs::gateway::mqtt: Publishing discovery config to homeassistant/binary_sensor/wyzesense_77C6847F/probe_state/config: {"availability_mode":"all","availability_template":"{{ 'online' if value_json.probe_available else 'offline' }}","device":{"identifiers":["wyzesense_77C6847F","77C6847F"],"manufacturer":"Wyze","model":"Leak Sensor V2","name":"Wyze LEAK 847F","via_device":"wyzesense2mqtt"},"device_class":"moisture","json_attributes_topic":"wyzesense2mqtt/77C6847F","name":"Probe Moisture","payload_available":"online","payload_not_available":"offline","payload_off":"dry","payload_on":"wet","state_topic":"wyzesense2mqtt/77C6847F","unique_id":"wyzesense_77C6847F_probe_state","value_template":"{{ value_json.probe_state }}"}
+2026-06-13T05:15:16.850702Z  INFO wyzesense2mqtt_rs::gateway::mqtt: Published main bridge status: online
+2026-06-13T05:15:16.923849Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[07,55,AA,53,03,32,01,87,41,38,43,37,39,33,03,5B,AA,53,04,2F,11,01,96,31,2E,38,20,47,61,74,65,77,61,79,20,47,57,33,55,08,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=7 bytes:[55,AA,53,03,32,01,87]
+2026-06-13T05:15:16.923867Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5332, Payload=[<None>]
+2026-06-13T05:15:16.923872Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5332
+2026-06-13T05:15:16.923876Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,32,FF,02,83]
+2026-06-13T05:15:16.924039Z DEBUG wyzesense2mqtt_rs::engine: Received time sync request (0x5332). Replying with timestamp.
+2026-06-13T05:15:16.924049Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (15 bytes): [AA,55,53,0B,33,00,00,01,9E,BF,67,E2,3C,04,73]
+2026-06-13T05:15:16.933868Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[07,55,AA,53,33,FF,02,84,41,38,43,37,39,33,03,5B,AA,53,04,2F,11,01,96,31,2E,38,20,47,61,74,65,77,61,79,20,47,57,33,55,08,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=7 bytes:[55,AA,53,33,FF,02,84]
+2026-06-13T05:15:16.933934Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=53FF, Payload=ACK(5333)
+2026-06-13T05:15:32.968312Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[23,55,AA,53,1F,19,00,00,01,9E,BF,68,1D,F4,E8,37,37,43,36,38,31,44,30,07,14,5E,00,03,17,51,3C,10,17,4F,08,A3,57,33,55,08,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=35 bytes:[55,AA,53,1F,19,00,00,01,9E,BF,68,1D,F4,E8,37,37,43,36,38,31,44,30,07,14,5E,00,03,17,51,3C,10,17,4F,08,A3]
+2026-06-13T05:15:32.968391Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,bf,68,1d,f4,e8,37,37,43,36,38,31,44,30,07,14,5e,00,03,17,51,3c,10,17,4f]
+2026-06-13T05:15:32.968479Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5319
+2026-06-13T05:15:32.968493Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+2026-06-13T05:16:10.369660Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[21,55,AA,53,1D,19,00,00,01,9E,BF,68,A9,4A,A2,37,37,41,38,43,37,39,33,02,17,66,00,01,00,00,4A,4A,07,C4,08,A3,57,33,55,08,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=33 bytes:[55,AA,53,1D,19,00,00,01,9E,BF,68,A9,4A,A2,37,37,41,38,43,37,39,33,02,17,66,00,01,00,00,4A,4A,07,C4]
+2026-06-13T05:16:10.369684Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,bf,68,a9,4a,a2,37,37,41,38,43,37,39,33,02,17,66,00,01,00,00,4a,4a]
+2026-06-13T05:16:10.369695Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5319
+2026-06-13T05:16:10.369699Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+2026-06-13T05:16:13.570778Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[21,55,AA,53,1D,19,00,00,01,9E,BF,68,B5,37,A2,37,37,41,38,43,37,39,33,02,17,66,00,01,01,00,4B,4B,07,C0,08,A3,57,33,55,08,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=33 bytes:[55,AA,53,1D,19,00,00,01,9E,BF,68,B5,37,A2,37,37,41,38,43,37,39,33,02,17,66,00,01,01,00,4B,4B,07,C0]
+2026-06-13T05:16:13.570839Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,bf,68,b5,37,a2,37,37,41,38,43,37,39,33,02,17,66,00,01,01,00,4b,4b]
+2026-06-13T05:16:13.570874Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5319
+2026-06-13T05:16:13.570890Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+2026-06-13T05:16:14.787786Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[21,55,AA,53,1D,19,00,00,01,9E,BF,68,B9,C0,A1,37,37,43,36,38,34,43,34,03,11,60,00,01,00,00,04,4D,07,F8,08,A3,57,33,55,08,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=33 bytes:[55,AA,53,1D,19,00,00,01,9E,BF,68,B9,C0,A1,37,37,43,36,38,34,43,34,03,11,60,00,01,00,00,04,4D,07,F8]
+2026-06-13T05:16:14.787837Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,bf,68,b9,c0,a1,37,37,43,36,38,34,43,34,03,11,60,00,01,00,00,04,4d]
+2026-06-13T05:16:14.787863Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5319
+2026-06-13T05:16:14.787874Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+2026-06-13T05:16:53.571253Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[21,55,AA,53,1D,19,00,00,01,9E,BF,69,4A,3D,A2,37,37,41,38,43,37,39,33,02,16,66,00,01,00,00,4C,4D,07,5D,08,A3,57,33,55,08,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=33 bytes:[55,AA,53,1D,19,00,00,01,9E,BF,69,4A,3D,A2,37,37,41,38,43,37,39,33,02,16,66,00,01,00,00,4C,4D,07,5D]
+2026-06-13T05:16:53.571313Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,bf,69,4a,3d,a2,37,37,41,38,43,37,39,33,02,16,66,00,01,00,00,4c,4d]
+2026-06-13T05:16:53.571350Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5319
+2026-06-13T05:16:53.571367Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+2026-06-13T05:17:02.431306Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[21,55,AA,53,1D,19,00,00,01,9E,BF,69,6B,40,A2,37,37,41,38,43,37,39,33,02,17,66,00,01,01,00,4D,4B,07,82,08,A3,57,33,55,08,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=33 bytes:[55,AA,53,1D,19,00,00,01,9E,BF,69,6B,40,A2,37,37,41,38,43,37,39,33,02,17,66,00,01,01,00,4D,4B,07,82]
+2026-06-13T05:17:02.431358Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,bf,69,6b,40,a2,37,37,41,38,43,37,39,33,02,17,66,00,01,01,00,4d,4b]
+2026-06-13T05:17:02.431385Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5319
+2026-06-13T05:17:02.431396Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+2026-06-13T05:17:52.059812Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[21,55,AA,53,1D,19,00,00,01,9E,BF,6A,24,24,A2,37,37,41,38,43,37,39,33,02,17,66,00,01,00,00,4E,4B,07,20,08,A3,57,33,55,08,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=33 bytes:[55,AA,53,1D,19,00,00,01,9E,BF,6A,24,24,A2,37,37,41,38,43,37,39,33,02,17,66,00,01,00,00,4E,4B,07,20]
+2026-06-13T05:17:52.059866Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,bf,6a,24,24,a2,37,37,41,38,43,37,39,33,02,17,66,00,01,00,00,4e,4b]
+2026-06-13T05:17:52.059892Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5319
+2026-06-13T05:17:52.059903Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+2026-06-13T05:19:36.975867Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[23,55,AA,53,1F,19,00,00,01,9E,BF,6B,AB,01,E8,37,37,43,36,38,31,44,30,07,18,5E,00,03,17,54,3F,10,18,4E,08,4B,57,33,55,08,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=35 bytes:[55,AA,53,1F,19,00,00,01,9E,BF,6B,AB,01,E8,37,37,43,36,38,31,44,30,07,18,5E,00,03,17,54,3F,10,18,4E,08,4B]
+2026-06-13T05:19:36.975941Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,bf,6b,ab,01,e8,37,37,43,36,38,31,44,30,07,18,5e,00,03,17,54,3f,10,18,4e]
+2026-06-13T05:19:36.976024Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5319
+2026-06-13T05:19:36.976036Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+2026-06-13T05:20:31.483387Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[07,55,AA,53,03,32,01,87,01,9E,BF,6B,AB,01,E8,37,37,43,36,38,31,44,30,07,18,5E,00,03,17,54,3F,10,18,4E,08,4B,57,33,55,08,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=7 bytes:[55,AA,53,03,32,01,87]
+2026-06-13T05:20:31.483501Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5332, Payload=[<None>]
+2026-06-13T05:20:31.483522Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5332
+2026-06-13T05:20:31.483540Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,32,FF,02,83]
+2026-06-13T05:20:31.483890Z DEBUG wyzesense2mqtt_rs::engine: Received time sync request (0x5332). Replying with timestamp.
+2026-06-13T05:20:31.483921Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (15 bytes): [AA,55,53,0B,33,00,00,01,9E,BF,6C,AE,FB,05,03]
+2026-06-13T05:20:31.493326Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[07,55,AA,53,33,FF,02,84,01,9E,BF,6B,AB,01,E8,37,37,43,36,38,31,44,30,07,18,5E,00,03,17,54,3F,10,18,4E,08,4B,57,33,55,08,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=7 bytes:[55,AA,53,33,FF,02,84]
+2026-06-13T05:20:31.493376Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=53FF, Payload=ACK(5333)
+2026-06-13T05:26:02.815417Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[21,55,AA,53,1D,19,00,00,01,9E,BF,71,81,5B,A2,37,37,38,42,37,37,44,39,02,17,5F,00,01,01,5C,11,58,07,E7,08,4B,57,33,55,08,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=33 bytes:[55,AA,53,1D,19,00,00,01,9E,BF,71,81,5B,A2,37,37,38,42,37,37,44,39,02,17,5F,00,01,01,5C,11,58,07,E7]
+2026-06-13T05:26:02.815470Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,bf,71,81,5b,a2,37,37,38,42,37,37,44,39,02,17,5f,00,01,01,5c,11,58]
+2026-06-13T05:26:02.815497Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5319
+2026-06-13T05:26:02.815508Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+2026-06-13T05:26:23.650432Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[23,55,AA,53,1F,19,00,00,01,9E,BF,71,CE,F9,E8,37,37,43,36,38,31,44,30,07,18,5E,00,03,17,58,3C,10,19,4E,09,6E,57,33,55,08,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=35 bytes:[55,AA,53,1F,19,00,00,01,9E,BF,71,CE,F9,E8,37,37,43,36,38,31,44,30,07,18,5E,00,03,17,58,3C,10,19,4E,09,6E]
+2026-06-13T05:26:23.650510Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,bf,71,ce,f9,e8,37,37,43,36,38,31,44,30,07,18,5e,00,03,17,58,3c,10,19,4e]
+2026-06-13T05:26:23.650601Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5319
+2026-06-13T05:26:23.650615Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+2026-06-13T05:26:33.099762Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[21,55,AA,53,1D,19,00,00,01,9E,BF,71,F2,2D,A2,37,37,41,38,43,37,39,33,02,17,66,00,01,01,00,4F,4C,08,01,09,6E,57,33,55,08,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=33 bytes:[55,AA,53,1D,19,00,00,01,9E,BF,71,F2,2D,A2,37,37,41,38,43,37,39,33,02,17,66,00,01,01,00,4F,4C,08,01]
+2026-06-13T05:26:33.099816Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,bf,71,f2,2d,a2,37,37,41,38,43,37,39,33,02,17,66,00,01,01,00,4f,4c]
+2026-06-13T05:26:33.099841Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5319
+2026-06-13T05:26:33.099852Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+2026-06-13T05:26:42.816849Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[21,55,AA,53,1D,19,00,00,01,9E,BF,72,16,60,A2,37,37,38,42,37,37,44,39,02,14,5F,00,01,00,5C,12,57,07,7E,09,6E,57,33,55,08,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=33 bytes:[55,AA,53,1D,19,00,00,01,9E,BF,72,16,60,A2,37,37,38,42,37,37,44,39,02,14,5F,00,01,00,5C,12,57,07,7E]
+2026-06-13T05:26:42.816901Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,bf,72,16,60,a2,37,37,38,42,37,37,44,39,02,14,5f,00,01,00,5c,12,57]
+2026-06-13T05:26:42.816927Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5319
+2026-06-13T05:26:42.816938Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+2026-06-13T05:27:17.873208Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[23,55,AA,53,1F,19,00,00,01,9E,BF,72,98,FA,E8,37,37,43,36,38,31,44,30,07,17,5E,00,03,17,56,38,10,1A,4E,09,34,57,33,55,08,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=35 bytes:[55,AA,53,1F,19,00,00,01,9E,BF,72,98,FA,E8,37,37,43,36,38,31,44,30,07,17,5E,00,03,17,56,38,10,1A,4E,09,34]
+2026-06-13T05:27:17.873299Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,bf,72,98,fa,e8,37,37,43,36,38,31,44,30,07,17,5e,00,03,17,56,38,10,1a,4e]
+2026-06-13T05:27:17.873395Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5319
+2026-06-13T05:27:17.873409Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+2026-06-13T05:27:42.456521Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[21,55,AA,53,1D,19,00,00,01,9E,BF,72,F4,8F,A2,37,37,38,42,37,37,44,39,02,17,5F,00,01,01,5C,13,55,08,8E,09,34,57,33,55,08,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=33 bytes:[55,AA,53,1D,19,00,00,01,9E,BF,72,F4,8F,A2,37,37,38,42,37,37,44,39,02,17,5F,00,01,01,5C,13,55,08,8E]
+2026-06-13T05:27:42.456574Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,bf,72,f4,8f,a2,37,37,38,42,37,37,44,39,02,17,5f,00,01,01,5c,13,55]
+2026-06-13T05:27:42.456601Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5319
+2026-06-13T05:27:42.456612Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+2026-06-13T05:27:44.989511Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[23,55,AA,53,1F,19,00,00,01,9E,BF,72,FD,FF,E8,37,37,43,36,38,31,44,30,07,17,5E,00,03,17,54,3D,10,1B,4D,09,A1,57,33,55,08,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=35 bytes:[55,AA,53,1F,19,00,00,01,9E,BF,72,FD,FF,E8,37,37,43,36,38,31,44,30,07,17,5E,00,03,17,54,3D,10,1B,4D,09,A1]
+2026-06-13T05:27:44.989586Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,bf,72,fd,ff,e8,37,37,43,36,38,31,44,30,07,17,5e,00,03,17,54,3d,10,1b,4d]
+2026-06-13T05:27:44.989681Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5319
+2026-06-13T05:27:44.989695Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+2026-06-13T05:28:02.808628Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[27,55,AA,53,23,19,00,00,01,9E,BF,73,40,61,AB,37,37,38,42,37,37,44,39,02,00,00,03,00,00,00,00,02,00,00,00,01,01,01,06,88,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=39 bytes:[55,AA,53,23,19,00,00,01,9E,BF,73,40,61,AB,37,37,38,42,37,37,44,39,02,00,00,03,00,00,00,00,02,00,00,00,01,01,01,06,88]
+2026-06-13T05:28:02.808707Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,bf,73,40,61,ab,37,37,38,42,37,37,44,39,02,00,00,03,00,00,00,00,02,00,00,00,01,01,01]
+2026-06-13T05:28:02.808801Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5319
+2026-06-13T05:28:02.808814Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+2026-06-13T05:28:13.479849Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[21,55,AA,53,1D,19,00,00,01,9E,BF,73,68,22,A2,37,37,41,38,43,37,39,33,02,16,66,00,01,00,00,50,4C,07,6D,00,01,01,01,06,88,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=33 bytes:[55,AA,53,1D,19,00,00,01,9E,BF,73,68,22,A2,37,37,41,38,43,37,39,33,02,16,66,00,01,00,00,50,4C,07,6D]
+2026-06-13T05:28:13.479905Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,bf,73,68,22,a2,37,37,41,38,43,37,39,33,02,16,66,00,01,00,00,50,4c]
+2026-06-13T05:28:13.479931Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5319
+2026-06-13T05:28:13.479942Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+2026-06-13T05:28:27.065076Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[21,55,AA,53,1D,19,00,00,01,9E,BF,73,9A,C0,A2,37,37,38,42,37,37,44,39,02,13,5F,00,01,00,5C,14,55,08,62,00,01,01,01,06,88,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=33 bytes:[55,AA,53,1D,19,00,00,01,9E,BF,73,9A,C0,A2,37,37,38,42,37,37,44,39,02,13,5F,00,01,00,5C,14,55,08,62]
+2026-06-13T05:28:27.065154Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,bf,73,9a,c0,a2,37,37,38,42,37,37,44,39,02,13,5f,00,01,00,5c,14,55]
+2026-06-13T05:28:27.065195Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5319
+2026-06-13T05:28:27.065213Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+2026-06-13T05:28:29.546093Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[21,55,AA,53,1D,19,00,00,01,9E,BF,73,A3,FD,A2,37,37,38,42,37,37,44,39,02,14,5F,00,01,01,5C,15,5A,08,B0,00,01,01,01,06,88,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=33 bytes:[55,AA,53,1D,19,00,00,01,9E,BF,73,A3,FD,A2,37,37,38,42,37,37,44,39,02,14,5F,00,01,01,5C,15,5A,08,B0]
+2026-06-13T05:28:29.546149Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,bf,73,a3,fd,a2,37,37,38,42,37,37,44,39,02,14,5f,00,01,01,5c,15,5a]
+2026-06-13T05:28:29.546175Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5319
+2026-06-13T05:28:29.546186Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+2026-06-13T05:29:12.716608Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[21,55,AA,53,1D,19,00,00,01,9E,BF,74,44,D3,A2,37,37,41,38,43,37,39,33,02,17,66,00,01,01,00,51,4C,07,FE,00,01,01,01,06,88,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=33 bytes:[55,AA,53,1D,19,00,00,01,9E,BF,74,44,D3,A2,37,37,41,38,43,37,39,33,02,17,66,00,01,01,00,51,4C,07,FE]
+2026-06-13T05:29:12.716664Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,bf,74,44,d3,a2,37,37,41,38,43,37,39,33,02,17,66,00,01,01,00,51,4c]
+2026-06-13T05:29:12.716690Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5319
+2026-06-13T05:29:12.716701Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+2026-06-13T05:29:12.997505Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[21,55,AA,53,1D,19,00,00,01,9E,BF,74,45,DE,A2,37,37,38,42,37,37,44,39,02,17,5F,00,01,00,5C,16,58,08,35,00,01,01,01,06,88,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=33 bytes:[55,AA,53,1D,19,00,00,01,9E,BF,74,45,DE,A2,37,37,38,42,37,37,44,39,02,17,5F,00,01,00,5C,16,58,08,35]
+2026-06-13T05:29:12.997552Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,bf,74,45,de,a2,37,37,38,42,37,37,44,39,02,17,5f,00,01,00,5c,16,58]
+2026-06-13T05:29:12.997576Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5319
+2026-06-13T05:29:12.997599Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+2026-06-13T05:29:52.713927Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[21,55,AA,53,1D,19,00,00,01,9E,BF,74,D9,D8,A2,37,37,41,38,43,37,39,33,02,17,66,00,01,00,00,52,4D,08,99,00,01,01,01,06,88,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=33 bytes:[55,AA,53,1D,19,00,00,01,9E,BF,74,D9,D8,A2,37,37,41,38,43,37,39,33,02,17,66,00,01,00,00,52,4D,08,99]
+2026-06-13T05:29:52.713954Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,bf,74,d9,d8,a2,37,37,41,38,43,37,39,33,02,17,66,00,01,00,00,52,4d]
+2026-06-13T05:29:52.713964Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5319
+2026-06-13T05:29:52.713968Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+2026-06-13T05:30:02.799945Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[27,55,AA,53,23,19,00,00,01,9E,BF,74,FF,6C,AB,37,37,38,42,37,37,44,39,02,00,00,03,00,00,00,02,00,00,00,00,01,01,01,07,53,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=39 bytes:[55,AA,53,23,19,00,00,01,9E,BF,74,FF,6C,AB,37,37,38,42,37,37,44,39,02,00,00,03,00,00,00,02,00,00,00,00,01,01,01,07,53]
+2026-06-13T05:30:02.799997Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,bf,74,ff,6c,ab,37,37,38,42,37,37,44,39,02,00,00,03,00,00,00,02,00,00,00,00,01,01,01]
+2026-06-13T05:30:02.800043Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5319
+2026-06-13T05:30:02.800049Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+2026-06-13T05:30:35.743564Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[21,55,AA,53,1D,19,00,00,01,9E,BF,75,7A,2D,A2,37,37,41,38,43,37,39,33,02,17,66,00,01,01,00,53,4E,07,93,00,01,01,01,07,53,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=33 bytes:[55,AA,53,1D,19,00,00,01,9E,BF,75,7A,2D,A2,37,37,41,38,43,37,39,33,02,17,66,00,01,01,00,53,4E,07,93]
+2026-06-13T05:30:35.743630Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,bf,75,7a,2d,a2,37,37,41,38,43,37,39,33,02,17,66,00,01,01,00,53,4e]
+2026-06-13T05:30:35.743667Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5319
+2026-06-13T05:30:35.743685Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+2026-06-13T05:31:52.657421Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[21,55,AA,53,1D,19,00,00,01,9E,BF,76,98,C3,A2,37,37,41,38,43,37,39,33,02,16,66,00,01,00,00,54,4C,08,45,00,01,01,01,07,53,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=33 bytes:[55,AA,53,1D,19,00,00,01,9E,BF,76,98,C3,A2,37,37,41,38,43,37,39,33,02,16,66,00,01,00,00,54,4C,08,45]
+2026-06-13T05:31:52.657479Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,bf,76,98,c3,a2,37,37,41,38,43,37,39,33,02,16,66,00,01,00,00,54,4c]
+2026-06-13T05:31:52.657505Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5319
+2026-06-13T05:31:52.657516Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+2026-06-13T05:31:56.540457Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[21,55,AA,53,1D,19,00,00,01,9E,BF,76,A7,3C,A2,37,37,41,38,43,37,39,33,02,17,66,00,01,01,00,55,4D,07,D1,00,01,01,01,07,53,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=33 bytes:[55,AA,53,1D,19,00,00,01,9E,BF,76,A7,3C,A2,37,37,41,38,43,37,39,33,02,17,66,00,01,01,00,55,4D,07,D1]
+2026-06-13T05:31:56.540513Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,bf,76,a7,3c,a2,37,37,41,38,43,37,39,33,02,17,66,00,01,01,00,55,4d]
+2026-06-13T05:31:56.540539Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5319
+2026-06-13T05:31:56.540550Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+2026-06-13T05:32:03.473440Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[07,55,AA,53,03,32,01,87,01,9E,BF,76,A7,3C,A2,37,37,41,38,43,37,39,33,02,17,66,00,01,01,00,55,4D,07,D1,00,01,01,01,07,53,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=7 bytes:[55,AA,53,03,32,01,87]
+2026-06-13T05:32:03.473546Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5332, Payload=[<None>]
+2026-06-13T05:32:03.473560Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5332
+2026-06-13T05:32:03.473571Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,32,FF,02,83]
+2026-06-13T05:32:03.473930Z DEBUG wyzesense2mqtt_rs::engine: Received time sync request (0x5332). Replying with timestamp.
+2026-06-13T05:32:03.473961Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (15 bytes): [AA,55,53,0B,33,00,00,01,9E,BF,77,3E,11,03,B4]
+2026-06-13T05:32:03.483412Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[07,55,AA,53,33,FF,02,84,01,9E,BF,76,A7,3C,A2,37,37,41,38,43,37,39,33,02,17,66,00,01,01,00,55,4D,07,D1,00,01,01,01,07,53,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=7 bytes:[55,AA,53,33,FF,02,84]
+2026-06-13T05:32:03.483473Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=53FF, Payload=ACK(5333)
+2026-06-13T05:33:10.177340Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[21,55,AA,53,1D,19,00,00,01,9E,BF,78,36,93,A2,37,37,41,38,43,37,39,33,02,16,66,00,01,00,00,56,4C,07,B7,00,01,01,01,07,53,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=33 bytes:[55,AA,53,1D,19,00,00,01,9E,BF,78,36,93,A2,37,37,41,38,43,37,39,33,02,16,66,00,01,00,00,56,4C,07,B7]
+2026-06-13T05:33:10.177412Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,bf,78,36,93,a2,37,37,41,38,43,37,39,33,02,16,66,00,01,00,00,56,4c]
+2026-06-13T05:33:10.177449Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5319
+2026-06-13T05:33:10.177466Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+2026-06-13T05:33:56.830873Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[21,55,AA,53,1D,19,00,00,01,9E,BF,78,E4,67,A2,37,37,41,38,43,37,39,33,02,16,66,00,01,01,00,57,4C,08,3B,00,01,01,01,07,53,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=33 bytes:[55,AA,53,1D,19,00,00,01,9E,BF,78,E4,67,A2,37,37,41,38,43,37,39,33,02,16,66,00,01,01,00,57,4C,08,3B]
+2026-06-13T05:33:56.830929Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,bf,78,e4,67,a2,37,37,41,38,43,37,39,33,02,16,66,00,01,01,00,57,4c]
+2026-06-13T05:33:56.830955Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5319
+2026-06-13T05:33:56.830966Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+2026-06-13T05:34:31.663144Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[23,55,AA,53,1F,19,00,00,01,9E,BF,79,66,30,E8,37,37,43,36,38,31,44,30,07,14,5E,00,03,17,55,3A,10,1C,4F,08,40,01,01,07,53,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=35 bytes:[55,AA,53,1F,19,00,00,01,9E,BF,79,66,30,E8,37,37,43,36,38,31,44,30,07,14,5E,00,03,17,55,3A,10,1C,4F,08,40]
+2026-06-13T05:34:31.663268Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,bf,79,66,30,e8,37,37,43,36,38,31,44,30,07,14,5e,00,03,17,55,3a,10,1c,4f]
+2026-06-13T05:34:31.663366Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5319
+2026-06-13T05:34:31.663380Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+2026-06-13T05:35:01.964676Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[21,55,AA,53,1D,19,00,00,01,9E,BF,79,D7,16,A2,37,37,41,38,43,37,39,33,02,17,66,00,01,00,00,58,4C,07,DF,08,40,01,01,07,53,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=33 bytes:[55,AA,53,1D,19,00,00,01,9E,BF,79,D7,16,A2,37,37,41,38,43,37,39,33,02,17,66,00,01,00,00,58,4C,07,DF]
+2026-06-13T05:35:01.964734Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,bf,79,d7,16,a2,37,37,41,38,43,37,39,33,02,17,66,00,01,00,00,58,4c]
+2026-06-13T05:35:01.964760Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5319
+2026-06-13T05:35:01.964771Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+2026-06-13T05:35:53.005048Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[23,55,AA,53,1F,19,00,00,01,9E,BF,7A,95,3E,E8,37,37,43,36,38,31,44,30,07,18,5E,00,03,17,54,3D,10,1D,4D,08,83,01,01,07,53,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=35 bytes:[55,AA,53,1F,19,00,00,01,9E,BF,7A,95,3E,E8,37,37,43,36,38,31,44,30,07,18,5E,00,03,17,54,3D,10,1D,4D,08,83]
+2026-06-13T05:35:53.005142Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,bf,7a,95,3e,e8,37,37,43,36,38,31,44,30,07,18,5e,00,03,17,54,3d,10,1d,4d]
+2026-06-13T05:35:53.005233Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5319
+2026-06-13T05:35:53.005247Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+2026-06-13T05:35:54.462167Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[21,55,AA,53,1D,19,00,00,01,9E,BF,7A,9A,AC,A2,37,37,41,38,43,37,39,33,02,17,66,00,01,01,00,59,4D,08,3C,08,83,01,01,07,53,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=33 bytes:[55,AA,53,1D,19,00,00,01,9E,BF,7A,9A,AC,A2,37,37,41,38,43,37,39,33,02,17,66,00,01,01,00,59,4D,08,3C]
+2026-06-13T05:35:54.462253Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,bf,7a,9a,ac,a2,37,37,41,38,43,37,39,33,02,17,66,00,01,01,00,59,4d]
+2026-06-13T05:35:54.462282Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5319
+2026-06-13T05:35:54.462294Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+2026-06-13T05:37:06.596072Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[21,55,AA,53,1D,19,00,00,01,9E,BF,7B,A7,68,A2,37,37,41,38,43,37,39,33,02,16,66,00,01,00,00,5A,4C,08,04,08,83,01,01,07,53,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=33 bytes:[55,AA,53,1D,19,00,00,01,9E,BF,7B,A7,68,A2,37,37,41,38,43,37,39,33,02,16,66,00,01,00,00,5A,4C,08,04]
+2026-06-13T05:37:06.596128Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,bf,7b,a7,68,a2,37,37,41,38,43,37,39,33,02,16,66,00,01,00,00,5a,4c]
+2026-06-13T05:37:06.596153Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5319
+2026-06-13T05:37:06.596165Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+2026-06-13T05:37:22.047315Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[21,55,AA,53,1D,19,00,00,01,9E,BF,7B,E0,F8,A2,37,37,41,38,43,37,39,33,02,17,66,00,01,01,00,5B,4D,08,D1,08,83,01,01,07,53,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=33 bytes:[55,AA,53,1D,19,00,00,01,9E,BF,7B,E0,F8,A2,37,37,41,38,43,37,39,33,02,17,66,00,01,01,00,5B,4D,08,D1]
+2026-06-13T05:37:22.047385Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,bf,7b,e0,f8,a2,37,37,41,38,43,37,39,33,02,17,66,00,01,01,00,5b,4d]
+2026-06-13T05:37:22.047423Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5319
+2026-06-13T05:37:22.047442Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+2026-06-13T05:38:02.042770Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[21,55,AA,53,1D,19,00,00,01,9E,BF,7C,75,FA,A2,37,37,41,38,43,37,39,33,02,17,66,00,01,00,00,5C,4C,08,68,08,83,01,01,07,53,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=33 bytes:[55,AA,53,1D,19,00,00,01,9E,BF,7C,75,FA,A2,37,37,41,38,43,37,39,33,02,17,66,00,01,00,00,5C,4C,08,68]
+2026-06-13T05:38:02.042827Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,bf,7c,75,fa,a2,37,37,41,38,43,37,39,33,02,17,66,00,01,00,00,5c,4c]
+2026-06-13T05:38:02.042853Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5319
+2026-06-13T05:38:02.042865Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+2026-06-13T05:38:35.676029Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[23,55,AA,53,1F,19,00,00,01,9E,BF,7C,F3,47,E8,37,37,43,36,38,31,44,30,07,18,5E,00,03,17,56,38,10,1E,4E,08,EB,01,01,07,53,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=35 bytes:[55,AA,53,1F,19,00,00,01,9E,BF,7C,F3,47,E8,37,37,43,36,38,31,44,30,07,18,5E,00,03,17,56,38,10,1E,4E,08,EB]
+2026-06-13T05:38:35.676134Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,bf,7c,f3,47,e8,37,37,43,36,38,31,44,30,07,18,5e,00,03,17,56,38,10,1e,4e]
+2026-06-13T05:38:35.676282Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5319
+2026-06-13T05:38:35.676304Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
+2026-06-13T05:38:54.084353Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE READ raw=63 bytes:[21,55,AA,53,1D,19,00,00,01,9E,BF,7D,37,DA,A2,37,37,41,38,43,37,39,33,02,17,66,00,01,01,00,5D,4C,08,0D,08,EB,01,01,07,53,50,E7,01,01,00,01,4F,07,FE,7B,BD,D8,A6,43,FA,D2,43,8C,51,76,C3,55,62] proto=33 bytes:[55,AA,53,1D,19,00,00,01,9E,BF,7D,37,DA,A2,37,37,41,38,43,37,39,33,02,17,66,00,01,01,00,5D,4C,08,0D]
+2026-06-13T05:38:54.084409Z DEBUG wyzesense2mqtt_rs::engine: <=== Received packet: Packet: Cmd=5319, Payload=[00,00,01,9e,bf,7d,37,da,a2,37,37,41,38,43,37,39,33,02,17,66,00,01,01,00,5d,4c]
+2026-06-13T05:38:54.084436Z DEBUG wyzesense2mqtt_rs::engine: Sending ACK packet for async command 5319
+2026-06-13T05:38:54.084448Z TRACE wyzesense2mqtt_rs::transport::hidraw: WIRE WRITE (7 bytes): [AA,55,53,19,FF,02,6A]
