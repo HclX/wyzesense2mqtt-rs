@@ -395,7 +395,10 @@ async fn list_sensors(
                 sensor_type: sensor.sensor_type.as_str().to_string(),
                 last_seen: sensor.last_seen,
                 battery: sensor.battery_pct,
+                battery_raw: sensor.battery_raw,
                 signal: sensor.rssi_dbm,
+                die_temperature_c: sensor.die_temperature_c,
+                event_sequence: sensor.event_sequence,
                 state: sensor.state.clone(),
                 dongle_mac: sensor.dongle_mac.clone(),
             });
@@ -411,7 +414,10 @@ async fn list_sensors(
                 sensor_type: sensor.sensor_type.as_str().to_string(),
                 last_seen: sensor.last_seen,
                 battery: sensor.battery_pct,
+                battery_raw: sensor.battery_raw,
                 signal: sensor.rssi_dbm,
+                die_temperature_c: sensor.die_temperature_c,
+                event_sequence: sensor.event_sequence,
                 state: sensor.state.clone(),
                 dongle_mac: sensor.dongle_mac.clone(),
             });
@@ -432,7 +438,10 @@ async fn list_cached_sensors(
             sensor_type: sensor.sensor_type.as_str().to_string(),
             last_seen: sensor.last_seen,
             battery: sensor.battery_pct,
+            battery_raw: sensor.battery_raw,
             signal: sensor.rssi_dbm,
+            die_temperature_c: sensor.die_temperature_c,
+            event_sequence: sensor.event_sequence,
             state: sensor.state.clone(),
             dongle_mac: sensor.dongle_mac.clone(),
         }

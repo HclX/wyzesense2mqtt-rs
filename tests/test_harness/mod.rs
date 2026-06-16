@@ -177,6 +177,7 @@ impl TestHarness {
     }
 
     /// POST /api/fix — trigger ghost sensor cleanup.
+    #[allow(dead_code)]
     pub async fn fix_sensors(&self) -> reqwest::Response {
         self.client
             .post(&format!("{}/api/fix", self.base_url))
@@ -184,6 +185,7 @@ impl TestHarness {
     }
 
     /// POST /api/chime/:mac — trigger chime.
+    #[allow(dead_code)]
     pub async fn trigger_chime(&self, sensor_mac: &str) -> reqwest::Response {
         self.client
             .post(&format!("{}/api/chime/{}", self.base_url, sensor_mac))

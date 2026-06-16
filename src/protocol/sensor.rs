@@ -131,9 +131,28 @@ fn push_common_discovery_payloads(
                 "device_class": "voltage",
                 "unit_of_measurement": "V",
                 "state_class": "measurement",
+                "suggested_display_precision": 2,
                 "unique_id": format!("{}_battery_voltage", device_id),
-                "device": device,
-                "availability": availability,
+                "device": device.clone(),
+                "availability": availability.clone(),
+                "availability_mode": "all",
+                "entity_category": "diagnostic",
+            })
+        ));
+
+        // Die temperature diagnostic entity
+        payloads.push((
+            format!("homeassistant/sensor/{}/die_temperature/config", device_id),
+            json!({
+                "name": "Die Temperature",
+                "state_topic": state_topic,
+                "value_template": "{{ value_json.die_temperature }}",
+                "device_class": "temperature",
+                "unit_of_measurement": "°C",
+                "state_class": "measurement",
+                "unique_id": format!("{}_die_temperature", device_id),
+                "device": device.clone(),
+                "availability": availability.clone(),
                 "availability_mode": "all",
                 "entity_category": "diagnostic",
             })
@@ -353,7 +372,7 @@ impl WyzeSensor {
         }
         // Include raw battery voltage for diagnostics (V = raw / 32.0)
         if let Some(raw) = self.battery_raw {
-            payload["battery_voltage"] = json!(format!("{:.2}", raw as f32 / 32.0));
+            payload["battery_voltage"] = json!(raw as f32 / 32.0);
         }
         // Merge type-specific fields
         match &self.state {
@@ -754,6 +773,15 @@ impl SensorManager {
                         if let Some(b) = cached.battery {
                             sensor.battery_pct = Some(b);
                         }
+                        if let Some(b_raw) = cached.battery_raw {
+                            sensor.battery_raw = Some(b_raw);
+                        }
+                        if let Some(dt) = cached.die_temperature_c {
+                            sensor.die_temperature_c = Some(dt);
+                        }
+                        if let Some(seq) = cached.event_sequence {
+                            sensor.event_sequence = Some(seq);
+                        }
                         sensor.rssi_dbm = cached.signal;
                         sensor.last_seen = cached.last_seen;
                         sensor.state = cached.state.clone(); // Full type-specific state restored!
@@ -818,7 +846,10 @@ impl SensorManager {
                 sensor_type: sensor.sensor_type.as_str().to_string(),
                 last_seen: sensor.last_seen,
                 battery: sensor.battery_pct,
+                battery_raw: sensor.battery_raw,
                 signal: sensor.rssi_dbm,
+                die_temperature_c: sensor.die_temperature_c,
+                event_sequence: sensor.event_sequence,
                 state: sensor.state.clone(),
                 dongle_mac: sensor.dongle_mac.clone(),
             });

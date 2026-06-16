@@ -69,25 +69,78 @@ impl MqttGateway {
         let control_topic_reload = format!("{}/reload", topic_root);
         let dongle_scan_wildcard = format!("{}/dongle/+/scan/set", topic_root);
 
+        let control_topic_scan_loop = control_topic_scan.clone();
+        let control_topic_remove_loop = control_topic_remove.clone();
+        let control_topic_reload_loop = control_topic_reload.clone();
+
+        let dongle_topic_prefix = format!("{}/dongle/", topic_root);
+        let dongle_topic_suffix = "/scan/set";
+
+        // 1. DEDICATED EVENT LOOP TASK
+        // This task's ONLY job is to keep the MQTT connection alive and process incoming packets.
+        // It must never be blocked by queue backpressure.
         tokio::spawn(async move {
-            let status_topic = format!("{}/status", topic_root);
-            if let Err(e) = client.publish(&status_topic, QoS::AtLeastOnce, true, "online").await {
+            loop {
+                match event_loop.poll().await {
+                    Ok(notification) => {
+                        if let Event::Incoming(MqttPacket::Publish(publish)) = notification {
+                            let topic = String::from_utf8_lossy(&publish.topic).to_string();
+                            let payload = String::from_utf8_lossy(&publish.payload).trim().to_string();
+                            debug!("Received MQTT message on {}: {}", topic, payload);
+
+                            if topic == control_topic_scan_loop {
+                                warn!("Legacy scan topic used without dongle_mac target. Ignoring. Use dongle/{{mac}}/scan instead.");
+                                // Legacy broadcast scan is not supported per exclusive scan design.
+                                let _ = payload;
+                            } else if topic.starts_with(&dongle_topic_prefix) && topic.ends_with(dongle_topic_suffix) {
+                                // Per-dongle scan command: {topic_root}/dongle/{mac}/scan/set
+                                let inner = &topic[dongle_topic_prefix.len()..topic.len() - dongle_topic_suffix.len()];
+                                let dongle_mac = inner.to_string();
+                                let enable = payload == "1" || payload.eq_ignore_ascii_case("ON") || payload.eq_ignore_ascii_case("true");
+                                info!("Per-dongle scan command: dongle={}, enable={}", dongle_mac, enable);
+                                let _ = cmd_tx.send(GatewayCommand::Scan { enable, dongle_mac }).await;
+                            } else if topic == control_topic_remove_loop {
+                                info!("Received remove command for MAC: {}", payload);
+                                let _ = cmd_tx.send(GatewayCommand::Delete { sensor_mac: payload, dongle_mac: None }).await;
+                            } else if topic == control_topic_reload_loop {
+                                info!("Received reload command");
+                                let _ = cmd_tx.send(GatewayCommand::Reload).await;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        error!("MQTT event loop error: {}", e);
+                        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                    }
+                }
+            }
+        });
+
+        // 2. INITIAL SETUP TASK
+        // This task publishes the initial bridge status and subscribes to control topics.
+        // It is perfectly safe for this task to block if the queue fills up, because the event 
+        // loop task is running concurrently to drain it.
+        let client_setup = client.clone();
+        let topic_root_setup = topic_root.clone();
+        tokio::spawn(async move {
+            let status_topic = format!("{}/status", topic_root_setup);
+            if let Err(e) = client_setup.publish(&status_topic, QoS::AtLeastOnce, true, "online").await {
                 error!("Failed to publish main bridge status online: {}", e);
             } else {
                 info!("Published main bridge status: online");
             }
 
-            if let Err(e) = client.subscribe(&control_topic_scan, QoS::AtLeastOnce).await {
+            if let Err(e) = client_setup.subscribe(&control_topic_scan, QoS::AtLeastOnce).await {
                 error!("Failed to subscribe to scan topic: {}", e);
             }
-            if let Err(e) = client.subscribe(&control_topic_remove, QoS::AtLeastOnce).await {
+            if let Err(e) = client_setup.subscribe(&control_topic_remove, QoS::AtLeastOnce).await {
                 error!("Failed to subscribe to remove topic: {}", e);
             }
-            if let Err(e) = client.subscribe(&control_topic_reload, QoS::AtLeastOnce).await {
+            if let Err(e) = client_setup.subscribe(&control_topic_reload, QoS::AtLeastOnce).await {
                 error!("Failed to subscribe to reload topic: {}", e);
             }
             // Subscribe to per-dongle scan command topics (Phase 4)
-            if let Err(e) = client.subscribe(&dongle_scan_wildcard, QoS::AtLeastOnce).await {
+            if let Err(e) = client_setup.subscribe(&dongle_scan_wildcard, QoS::AtLeastOnce).await {
                 error!("Failed to subscribe to dongle scan wildcard topic: {}", e);
             }
             info!("Subscribed to MQTT control topics.");
@@ -97,50 +150,10 @@ impl MqttGateway {
                 let map = engines.lock().await;
                 for (mac, engine) in map.iter() {
                     let version = engine.dongle_version().unwrap_or("unknown").to_string();
-                    if let Err(e) = publish_dongle_discovery(&client, &topic_root, mac, &version).await {
+                    if let Err(e) = publish_dongle_discovery(&client_setup, &topic_root_setup, mac, &version).await {
                         error!("Failed to publish dongle discovery for {}: {}", mac, e);
                     } else {
                         info!("Published HA dongle discovery for {}", mac);
-                    }
-                }
-            }
-
-            // Build the per-dongle scan topic prefix for matching
-            let dongle_topic_prefix = format!("{}/dongle/", topic_root);
-            let dongle_topic_suffix = "/scan/set";
-
-            loop {
-                match event_loop.poll().await {
-                    Ok(notification) => {
-                        if let Event::Incoming(MqttPacket::Publish(publish)) = notification {
-                            let topic = String::from_utf8_lossy(&publish.topic).to_string();
-                            let payload = String::from_utf8_lossy(&publish.payload).trim().to_string();
-                            debug!("Received MQTT message on {}: {}", topic, payload);
-
-                            if topic == control_topic_scan {
-                                let enable = payload == "1" || payload.eq_ignore_ascii_case("ON") || payload.eq_ignore_ascii_case("true");
-                                warn!("Legacy scan topic used without dongle_mac target. Ignoring. Use dongle/{{mac}}/scan instead.");
-                                // Legacy broadcast scan is not supported per exclusive scan design.
-                                let _ = enable;
-                            } else if topic.starts_with(&dongle_topic_prefix) && topic.ends_with(dongle_topic_suffix) {
-                                // Per-dongle scan command: {topic_root}/dongle/{mac}/scan/set
-                                let inner = &topic[dongle_topic_prefix.len()..topic.len() - dongle_topic_suffix.len()];
-                                let dongle_mac = inner.to_string();
-                                let enable = payload == "1" || payload.eq_ignore_ascii_case("ON") || payload.eq_ignore_ascii_case("true");
-                                info!("Per-dongle scan command: dongle={}, enable={}", dongle_mac, enable);
-                                let _ = cmd_tx.send(GatewayCommand::Scan { enable, dongle_mac }).await;
-                            } else if topic == control_topic_remove {
-                                info!("Received remove command for MAC: {}", payload);
-                                let _ = cmd_tx.send(GatewayCommand::Delete { sensor_mac: payload, dongle_mac: None }).await;
-                            } else if topic == control_topic_reload {
-                                info!("Received reload command");
-                                let _ = cmd_tx.send(GatewayCommand::Reload).await;
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        error!("MQTT event loop error: {}", e);
-                        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
                     }
                 }
             }
@@ -341,7 +354,7 @@ mod tests {
             "Wyze Sense ABC12345".to_string(),
         );
         let payloads = sensor.get_discovery_payloads("wyzesense");
-        assert_eq!(payloads.len(), 4); // battery + battery_voltage + signal + state
+        assert_eq!(payloads.len(), 5); // battery + battery_voltage + die_temperature + signal + state
         
         let contact_topic = "homeassistant/binary_sensor/wyzesense_ABC12345/state/config";
         let contact_payload = payloads.iter().find(|(t, _)| t == contact_topic).unwrap().1.clone();
@@ -367,7 +380,7 @@ mod tests {
             "Wyze Sense ABC12345".to_string()
         );
         let payloads = sensor.get_discovery_payloads("wyzesense");
-        assert_eq!(payloads.len(), 5); // battery + battery_voltage + signal + temp + humidity
+        assert_eq!(payloads.len(), 6); // battery + battery_voltage + die_temperature + signal + temp + humidity
         
         let temp_topic = "homeassistant/sensor/wyzesense_ABC12345/temperature/config";
         let temp_payload = payloads.iter().find(|(t, _)| t == temp_topic).unwrap().1.clone();
@@ -392,7 +405,7 @@ mod tests {
             "Wyze Sense ABC12345".to_string(),
         );
         let payloads = sensor.get_discovery_payloads("wyzesense");
-        assert_eq!(payloads.len(), 6); // battery + battery_voltage + signal + main moisture + probe available + probe moisture
+        assert_eq!(payloads.len(), 7); // battery + battery_voltage + die_temperature + signal + main moisture + probe available + probe moisture
 
         let leak_topic = "homeassistant/binary_sensor/wyzesense_ABC12345/state/config";
         let leak_payload = payloads.iter().find(|(t, _)| t == leak_topic).unwrap().1.clone();
