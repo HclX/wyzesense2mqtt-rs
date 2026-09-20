@@ -150,21 +150,25 @@ impl AppConfig {
             }
         }
 
-        // 2. Override with Environment Variables
-        if let Ok(val) = std::env::var("USB_DONGLE") { config.usb.dongle = val; }
+        // 2. Override with Environment Variables. String-valued vars treat an
+        // empty value as "not set" (rather than an explicit blank) so that
+        // e.g. a docker-compose file forwarding `MQTT_HOST: "${MQTT_HOST:-}"`
+        // doesn't clobber a value the user set directly in config.yaml just
+        // because they never bothered to also set it on the host.
+        if let Some(val) = std::env::var("USB_DONGLE").ok().filter(|v| !v.is_empty()) { config.usb.dongle = val; }
         if let Ok(val) = std::env::var("WEB_ENABLED") { config.web.enabled = val.parse().unwrap_or(config.web.enabled); }
         if let Ok(val) = std::env::var("WEB_PORT") { config.web.port = val.parse().unwrap_or(config.web.port); }
         if let Ok(val) = std::env::var("MQTT_ENABLED") { config.mqtt.enabled = val.parse().unwrap_or(config.mqtt.enabled); }
-        if let Ok(val) = std::env::var("MQTT_HOST") { config.mqtt.host = Some(val); }
+        if let Some(val) = std::env::var("MQTT_HOST").ok().filter(|v| !v.is_empty()) { config.mqtt.host = Some(val); }
         if let Ok(val) = std::env::var("MQTT_PORT") { config.mqtt.port = val.parse().unwrap_or(config.mqtt.port); }
-        if let Ok(val) = std::env::var("MQTT_USERNAME") { config.mqtt.username = Some(val); }
-        if let Ok(val) = std::env::var("MQTT_PASSWORD") { config.mqtt.password = Some(val); }
-        if let Ok(val) = std::env::var("SELF_TOPIC_ROOT") { config.mqtt.self_topic_root = val; }
-        if let Ok(val) = std::env::var("HASS_TOPIC_ROOT") { config.mqtt.hass_topic_root = val; }
-        if let Ok(val) = std::env::var("LOG_LEVEL") { config.logging.level = val; }
+        if let Some(val) = std::env::var("MQTT_USERNAME").ok().filter(|v| !v.is_empty()) { config.mqtt.username = Some(val); }
+        if let Some(val) = std::env::var("MQTT_PASSWORD").ok().filter(|v| !v.is_empty()) { config.mqtt.password = Some(val); }
+        if let Some(val) = std::env::var("SELF_TOPIC_ROOT").ok().filter(|v| !v.is_empty()) { config.mqtt.self_topic_root = val; }
+        if let Some(val) = std::env::var("HASS_TOPIC_ROOT").ok().filter(|v| !v.is_empty()) { config.mqtt.hass_topic_root = val; }
+        if let Some(val) = std::env::var("LOG_LEVEL").ok().filter(|v| !v.is_empty()) { config.logging.level = val; }
         if let Ok(val) = std::env::var("LOG_NO_ANSI") { config.logging.no_ansi = val.parse().unwrap_or(config.logging.no_ansi); }
         if let Ok(val) = std::env::var("BRIDGE_ENABLED") { config.bridge.enabled = val.parse().unwrap_or(config.bridge.enabled); }
-        if let Ok(val) = std::env::var("BRIDGE_AUTH_TOKEN") { config.bridge.auth_token = Some(val); }
+        if let Some(val) = std::env::var("BRIDGE_AUTH_TOKEN").ok().filter(|v| !v.is_empty()) { config.bridge.auth_token = Some(val); }
 
         // Ensure that if host is set, MQTT is enabled
         if config.mqtt.host.is_some() {
