@@ -63,6 +63,8 @@ impl MqttGateway {
         let cmd_tx = self.cmd_tx.clone();
         let mut event_loop = self.event_loop;
         let engines = self.engines.clone();
+        let sensor_manager_conn = self.sensor_manager.clone();
+        let published_discovery_conn = self.published_discovery.clone();
 
         let control_topic_scan = format!("{}/scan", topic_root);
         let control_topic_remove = format!("{}/remove", topic_root);
@@ -76,84 +78,76 @@ impl MqttGateway {
         let dongle_topic_prefix = format!("{}/dongle/", topic_root);
         let dongle_topic_suffix = "/scan/set";
 
-        // 1. DEDICATED EVENT LOOP TASK
+        // DEDICATED EVENT LOOP TASK
         // This task's ONLY job is to keep the MQTT connection alive and process incoming packets.
-        // It must never be blocked by queue backpressure.
+        // It must never be blocked by queue backpressure, so the on-connect announce burst
+        // (below) is spawned off into its own task rather than awaited inline here.
         tokio::spawn(async move {
             loop {
                 match event_loop.poll().await {
                     Ok(notification) => {
-                        if let Event::Incoming(MqttPacket::Publish(publish)) = notification {
-                            let topic = String::from_utf8_lossy(&publish.topic).to_string();
-                            let payload = String::from_utf8_lossy(&publish.payload).trim().to_string();
-                            debug!("Received MQTT message on {}: {}", topic, payload);
-
-                            if topic == control_topic_scan_loop {
-                                warn!("Legacy scan topic used without dongle_mac target. Ignoring. Use dongle/{{mac}}/scan instead.");
-                                // Legacy broadcast scan is not supported per exclusive scan design.
-                                let _ = payload;
-                            } else if topic.starts_with(&dongle_topic_prefix) && topic.ends_with(dongle_topic_suffix) {
-                                // Per-dongle scan command: {topic_root}/dongle/{mac}/scan/set
-                                let inner = &topic[dongle_topic_prefix.len()..topic.len() - dongle_topic_suffix.len()];
-                                let dongle_mac = inner.to_string();
-                                let enable = payload == "1" || payload.eq_ignore_ascii_case("ON") || payload.eq_ignore_ascii_case("true");
-                                info!("Per-dongle scan command: dongle={}, enable={}", dongle_mac, enable);
-                                let _ = cmd_tx.send(GatewayCommand::Scan { enable, dongle_mac }).await;
-                            } else if topic == control_topic_remove_loop {
-                                info!("Received remove command for MAC: {}", payload);
-                                let _ = cmd_tx.send(GatewayCommand::Delete { sensor_mac: payload, dongle_mac: None }).await;
-                            } else if topic == control_topic_reload_loop {
-                                info!("Received reload command");
-                                let _ = cmd_tx.send(GatewayCommand::Reload).await;
+                        match notification {
+                            Event::Incoming(MqttPacket::ConnAck(_)) => {
+                                // Fires on the initial connect AND on every reconnect. A
+                                // reconnect can mean the broker we're now talking to has lost
+                                // everything it was retaining (e.g. it was restarted
+                                // independently of this process, or as part of a staggered
+                                // "restart all containers" routine) so we always re-announce,
+                                // never assuming a previous announce is still visible to it.
+                                info!("MQTT connected. Announcing bridge/dongle/sensor state.");
+                                let client = client.clone();
+                                let topic_root = topic_root.clone();
+                                let control_topic_scan = control_topic_scan.clone();
+                                let control_topic_remove = control_topic_remove.clone();
+                                let control_topic_reload = control_topic_reload.clone();
+                                let dongle_scan_wildcard = dongle_scan_wildcard.clone();
+                                let engines = engines.clone();
+                                let sensor_manager_conn = sensor_manager_conn.clone();
+                                let published_discovery_conn = published_discovery_conn.clone();
+                                tokio::spawn(async move {
+                                    announce_on_connect(
+                                        &client,
+                                        &topic_root,
+                                        &control_topic_scan,
+                                        &control_topic_remove,
+                                        &control_topic_reload,
+                                        &dongle_scan_wildcard,
+                                        &engines,
+                                        &sensor_manager_conn,
+                                        &published_discovery_conn,
+                                    ).await;
+                                });
                             }
+                            Event::Incoming(MqttPacket::Publish(publish)) => {
+                                let topic = String::from_utf8_lossy(&publish.topic).to_string();
+                                let payload = String::from_utf8_lossy(&publish.payload).trim().to_string();
+                                debug!("Received MQTT message on {}: {}", topic, payload);
+
+                                if topic == control_topic_scan_loop {
+                                    warn!("Legacy scan topic used without dongle_mac target. Ignoring. Use dongle/{{mac}}/scan instead.");
+                                    // Legacy broadcast scan is not supported per exclusive scan design.
+                                    let _ = payload;
+                                } else if topic.starts_with(&dongle_topic_prefix) && topic.ends_with(dongle_topic_suffix) {
+                                    // Per-dongle scan command: {topic_root}/dongle/{mac}/scan/set
+                                    let inner = &topic[dongle_topic_prefix.len()..topic.len() - dongle_topic_suffix.len()];
+                                    let dongle_mac = inner.to_string();
+                                    let enable = payload == "1" || payload.eq_ignore_ascii_case("ON") || payload.eq_ignore_ascii_case("true");
+                                    info!("Per-dongle scan command: dongle={}, enable={}", dongle_mac, enable);
+                                    let _ = cmd_tx.send(GatewayCommand::Scan { enable, dongle_mac }).await;
+                                } else if topic == control_topic_remove_loop {
+                                    info!("Received remove command for MAC: {}", payload);
+                                    let _ = cmd_tx.send(GatewayCommand::Delete { sensor_mac: payload, dongle_mac: None }).await;
+                                } else if topic == control_topic_reload_loop {
+                                    info!("Received reload command");
+                                    let _ = cmd_tx.send(GatewayCommand::Reload).await;
+                                }
+                            }
+                            _ => {}
                         }
                     }
                     Err(e) => {
                         error!("MQTT event loop error: {}", e);
                         tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
-                    }
-                }
-            }
-        });
-
-        // 2. INITIAL SETUP TASK
-        // This task publishes the initial bridge status and subscribes to control topics.
-        // It is perfectly safe for this task to block if the queue fills up, because the event 
-        // loop task is running concurrently to drain it.
-        let client_setup = client.clone();
-        let topic_root_setup = topic_root.clone();
-        tokio::spawn(async move {
-            let status_topic = format!("{}/status", topic_root_setup);
-            if let Err(e) = client_setup.publish(&status_topic, QoS::AtLeastOnce, true, "online").await {
-                error!("Failed to publish main bridge status online: {}", e);
-            } else {
-                info!("Published main bridge status: online");
-            }
-
-            if let Err(e) = client_setup.subscribe(&control_topic_scan, QoS::AtLeastOnce).await {
-                error!("Failed to subscribe to scan topic: {}", e);
-            }
-            if let Err(e) = client_setup.subscribe(&control_topic_remove, QoS::AtLeastOnce).await {
-                error!("Failed to subscribe to remove topic: {}", e);
-            }
-            if let Err(e) = client_setup.subscribe(&control_topic_reload, QoS::AtLeastOnce).await {
-                error!("Failed to subscribe to reload topic: {}", e);
-            }
-            // Subscribe to per-dongle scan command topics (Phase 4)
-            if let Err(e) = client_setup.subscribe(&dongle_scan_wildcard, QoS::AtLeastOnce).await {
-                error!("Failed to subscribe to dongle scan wildcard topic: {}", e);
-            }
-            info!("Subscribed to MQTT control topics.");
-
-            // Publish dongle discovery for all registered engines
-            {
-                let map = engines.lock().await;
-                for (mac, engine) in map.iter() {
-                    let version = engine.dongle_version().unwrap_or("unknown").to_string();
-                    if let Err(e) = publish_dongle_discovery(&client_setup, &topic_root_setup, mac, &version).await {
-                        error!("Failed to publish dongle discovery for {}: {}", mac, e);
-                    } else {
-                        info!("Published HA dongle discovery for {}", mac);
                     }
                 }
             }
@@ -172,7 +166,7 @@ impl MqttGateway {
 
                 let mut is_online = !matches!(event.data, TelemetryData::Offline);
 
-                // 1. Dispatch event to SensorManager
+                // Dispatch event to SensorManager
                 {
                     let mut manager = sensor_manager_worker.lock().unwrap();
                     if manager.dispatch_event(&event) {
@@ -183,58 +177,8 @@ impl MqttGateway {
                     }
                 }
 
-                // 2. Generate and Publish Home Assistant Discovery topic if not already published
-                {
-                    let mut published = published_discovery.lock().await;
-                    if !published.contains(&event.mac) {
-                        let discovery_payloads = {
-                            let manager = sensor_manager_worker.lock().unwrap();
-                            manager.get_sensors().get(&event.mac)
-                                .map(|sensor| sensor.get_discovery_payloads(&topic_root))
-                        };
-
-                        if let Some(payloads) = discovery_payloads {
-                            info!("Publishing Home Assistant Discovery for MAC: {}", event.mac);
-                            for (topic, payload) in payloads {
-                                let payload_str = serde_json::to_string(&payload).unwrap();
-                                debug!("Publishing discovery config to {}: {}", topic, payload_str);
-                                if let Err(e) = client.publish(&topic, QoS::AtLeastOnce, true, payload_str).await {
-                                    error!("Failed to publish discovery to {}: {}", topic, e);
-                                }
-                            }
-                            published.insert(event.mac.clone());
-                            
-                            // Sleep briefly to give Home Assistant time to process the discovery 
-                            // payload and instantiate the entity before we blast the initial state.
-                            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-                        }
-                    }
-                }
-
-                // 3. Publish availability topic
-                let availability_topic = format!("{}/{}/status", topic_root, event.mac);
-                let availability_payload = if is_online { "online" } else { "offline" };
-                if let Err(e) = client.publish(&availability_topic, QoS::AtLeastOnce, true, availability_payload).await {
-                    error!("Failed to publish availability: {}", e);
-                }
-
-                // 4. Publish State Topic
-                {
-                    let state_payload = {
-                        let manager = sensor_manager_worker.lock().unwrap();
-                        manager.get_sensors().get(&event.mac)
-                            .map(|sensor| sensor.get_state_payload())
-                    };
-
-                    if let Some(payload) = state_payload {
-                        let state_topic = format!("{}/{}", topic_root, event.mac);
-                        let state_str = serde_json::to_string(&payload).unwrap();
-                        debug!("Publishing state to {}: {}", state_topic, state_str);
-                        if let Err(e) = client.publish(&state_topic, QoS::AtLeastOnce, false, state_str).await {
-                            error!("Failed to publish state: {}", e);
-                        }
-                    }
-                }
+                // Publish discovery (if not already published this connection), availability, and state.
+                announce_sensor(&client, &topic_root, &event.mac, is_online, &sensor_manager_worker, &published_discovery, false).await;
             } else {
                 info!("Gateway event channel closed. Stopping gateway.");
                 break;
@@ -243,6 +187,146 @@ impl MqttGateway {
 
         Ok(())
     }
+}
+
+/// Publishes (or re-publishes) a single sensor's HA discovery config, availability
+/// status, and current state. `force_discovery` re-sends the discovery config even
+/// if this process believes it already sent it earlier — used after an MQTT
+/// (re)connect, since the broker may no longer be holding what we last gave it.
+async fn announce_sensor(
+    client: &AsyncClient,
+    topic_root: &str,
+    mac: &str,
+    is_online: bool,
+    sensor_manager: &Arc<Mutex<SensorManager>>,
+    published_discovery: &Arc<tokio::sync::Mutex<HashSet<String>>>,
+    force_discovery: bool,
+) {
+    // Publish discovery config if not already published (or if forced)
+    {
+        let mut published = published_discovery.lock().await;
+        if force_discovery {
+            published.remove(mac);
+        }
+        if !published.contains(mac) {
+            let discovery_payloads = {
+                let manager = sensor_manager.lock().unwrap();
+                manager.get_sensors().get(mac)
+                    .map(|sensor| sensor.get_discovery_payloads(topic_root))
+            };
+
+            // A sensor whose type isn't known yet (e.g. discovered only via NVRAM,
+            // not yet from a real telemetry packet) yields no payloads here. Don't
+            // mark it published in that case, or it will never get a discovery
+            // config once its type does become known.
+            if let Some(payloads) = discovery_payloads {
+                if !payloads.is_empty() {
+                    info!("Publishing Home Assistant Discovery for MAC: {}", mac);
+                    for (topic, payload) in payloads {
+                        let payload_str = serde_json::to_string(&payload).unwrap();
+                        debug!("Publishing discovery config to {}: {}", topic, payload_str);
+                        if let Err(e) = client.publish(&topic, QoS::AtLeastOnce, true, payload_str).await {
+                            error!("Failed to publish discovery to {}: {}", topic, e);
+                        }
+                    }
+                    published.insert(mac.to_string());
+
+                    // Sleep briefly to give Home Assistant time to process the discovery
+                    // payload and instantiate the entity before we blast the initial state.
+                    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                }
+            }
+        }
+    }
+
+    // Publish availability topic
+    let availability_topic = format!("{}/{}/status", topic_root, mac);
+    let availability_payload = if is_online { "online" } else { "offline" };
+    if let Err(e) = client.publish(&availability_topic, QoS::AtLeastOnce, true, availability_payload).await {
+        error!("Failed to publish availability for {}: {}", mac, e);
+    }
+
+    // Publish state topic
+    let state_payload = {
+        let manager = sensor_manager.lock().unwrap();
+        manager.get_sensors().get(mac).map(|sensor| sensor.get_state_payload())
+    };
+    if let Some(payload) = state_payload {
+        let state_topic = format!("{}/{}", topic_root, mac);
+        let state_str = serde_json::to_string(&payload).unwrap();
+        debug!("Publishing state to {}: {}", state_topic, state_str);
+        if let Err(e) = client.publish(&state_topic, QoS::AtLeastOnce, false, state_str).await {
+            error!("Failed to publish state: {}", e);
+        }
+    }
+}
+
+/// Runs on every MQTT connect (initial and reconnect): publishes the bridge's own
+/// "online" status, (re)subscribes to control topics, (re)publishes discovery for
+/// every known dongle, and force-re-announces every known sensor. This is what
+/// closes the gap where a container-restart order outside our control leaves this
+/// process talking to a broker that never received (or has since lost) our state.
+#[allow(clippy::too_many_arguments)]
+async fn announce_on_connect(
+    client: &AsyncClient,
+    topic_root: &str,
+    control_topic_scan: &str,
+    control_topic_remove: &str,
+    control_topic_reload: &str,
+    dongle_scan_wildcard: &str,
+    engines: &EnginesMap,
+    sensor_manager: &Arc<Mutex<SensorManager>>,
+    published_discovery: &Arc<tokio::sync::Mutex<HashSet<String>>>,
+) {
+    let status_topic = format!("{}/status", topic_root);
+    if let Err(e) = client.publish(&status_topic, QoS::AtLeastOnce, true, "online").await {
+        error!("Failed to publish main bridge status online: {}", e);
+    } else {
+        info!("Published main bridge status: online");
+    }
+
+    if let Err(e) = client.subscribe(control_topic_scan, QoS::AtLeastOnce).await {
+        error!("Failed to subscribe to scan topic: {}", e);
+    }
+    if let Err(e) = client.subscribe(control_topic_remove, QoS::AtLeastOnce).await {
+        error!("Failed to subscribe to remove topic: {}", e);
+    }
+    if let Err(e) = client.subscribe(control_topic_reload, QoS::AtLeastOnce).await {
+        error!("Failed to subscribe to reload topic: {}", e);
+    }
+    // Subscribe to per-dongle scan command topics (Phase 4)
+    if let Err(e) = client.subscribe(dongle_scan_wildcard, QoS::AtLeastOnce).await {
+        error!("Failed to subscribe to dongle scan wildcard topic: {}", e);
+    }
+    info!("Subscribed to MQTT control topics.");
+
+    // Publish dongle discovery for all registered engines
+    {
+        let map = engines.lock().await;
+        for (mac, engine) in map.iter() {
+            let version = engine.dongle_version().unwrap_or("unknown").to_string();
+            if let Err(e) = publish_dongle_discovery(client, topic_root, mac, &version).await {
+                error!("Failed to publish dongle discovery for {}: {}", mac, e);
+            } else {
+                info!("Published HA dongle discovery for {}", mac);
+            }
+        }
+    }
+
+    // Force-re-announce every known sensor: discovery config + availability + state.
+    let sensor_macs: Vec<String> = {
+        let manager = sensor_manager.lock().unwrap();
+        manager.get_sensors().keys().cloned().collect()
+    };
+    let count = sensor_macs.len();
+    for mac in sensor_macs {
+        let is_online = {
+            let manager = sensor_manager.lock().unwrap();
+            manager.get_sensors().get(&mac).map(|s| s.is_online).unwrap_or(false)
+        };
+        announce_sensor(client, topic_root, &mac, is_online, sensor_manager, published_discovery, true).await;
+    }
+    info!("Re-announced {} known sensor(s) after MQTT connect.", count);
 }
 
 /// Publishes MQTT auto-discovery config payloads for a dongle device in Home Assistant.
