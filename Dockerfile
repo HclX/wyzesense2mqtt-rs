@@ -67,12 +67,15 @@ RUN chmod +x /app/entrypoint.sh
 # The config file, logs, and state are expected to be mounted as volumes
 VOLUME ["/app/config", "/app/logs", "/app/state"]
 
-# Web dashboard port
-EXPOSE 8080
+# Web dashboard port. Override at runtime (-e WEB_PORT=...) if you also set a
+# custom web.port in config.yaml — the app reads this same WEB_PORT env var,
+# so it stays the single source of truth for both the app and the healthcheck.
+ENV WEB_PORT=8080
+EXPOSE ${WEB_PORT}
 
 # Health check via web API
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD curl -sf http://localhost:8080/api/dongle || exit 1
+    CMD curl -sf http://localhost:${WEB_PORT}/api/dongle || exit 1
 
 # Run as root initially — entrypoint remaps to PUID/PGID and drops privileges
 ENTRYPOINT ["/app/entrypoint.sh"]

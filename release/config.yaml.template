@@ -7,6 +7,9 @@ usb:
   dongle: "auto"
 
 # Web Console Panel Settings
+# In Docker, change the port via the WEB_PORT environment variable instead of
+# editing this value directly — the container's healthcheck and published
+# port both read WEB_PORT, so they'd otherwise fall out of sync with this file.
 web:
   enabled: true
   port: 8080

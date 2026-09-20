@@ -39,9 +39,12 @@ services:
     devices:
       - "${USB_DONGLE:-/dev/hidraw0}:/dev/hidraw0"
 
-    # Expose web dashboard
+    # Expose web dashboard. WEB_PORT is also forwarded below via `environment`,
+    # so the app actually binds to it (and the container's healthcheck, which
+    # reads the same env var, keeps working) rather than just remapping the
+    # host side while the app stays on the image's default 8080.
     ports:
-      - "${WEB_PORT:-8080}:8080"
+      - "${WEB_PORT:-8080}:${WEB_PORT:-8080}"
 
     # Persistent volumes
     volumes:
@@ -55,6 +58,7 @@ services:
       PGID: "${PGID:-1000}"          # Run as this GID
       TZ: "${TZ:-UTC}"
       USB_DONGLE: "${USB_DONGLE:-auto}"
+      WEB_PORT: "${WEB_PORT:-8080}"
       MQTT_HOST: "${MQTT_HOST:-}"
       MQTT_PORT: "${MQTT_PORT:-1883}"
       MQTT_USERNAME: "${MQTT_USERNAME:-}"

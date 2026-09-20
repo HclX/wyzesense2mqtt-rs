@@ -8,6 +8,7 @@ set -e
 
 PUID=${PUID:-1000}
 PGID=${PGID:-1000}
+WEB_PORT=${WEB_PORT:-8080}
 
 # Only remap if running as root (normal Docker case)
 if [ "$(id -u)" = "0" ]; then
@@ -30,9 +31,12 @@ if [ "$(id -u)" = "0" ]; then
 
     echo "Starting wyzesense2mqtt-rs as UID=$PUID, GID=$PGID"
 
-    # Drop privileges and exec the binary
-    exec su-exec wyzesense /app/wyzesense2mqtt-rs "$@"
+    # Drop privileges and exec the binary. --web-port is forced from WEB_PORT
+    # (prepended so it wins over any --web-port a caller might also pass in
+    # "$@") so the running app, the published port, and the healthcheck --
+    # which all key off WEB_PORT -- can never disagree with config.yaml.
+    exec su-exec wyzesense /app/wyzesense2mqtt-rs --web-port "$WEB_PORT" "$@"
 else
     # Already running as non-root (e.g. Kubernetes with securityContext)
-    exec /app/wyzesense2mqtt-rs "$@"
+    exec /app/wyzesense2mqtt-rs --web-port "$WEB_PORT" "$@"
 fi
