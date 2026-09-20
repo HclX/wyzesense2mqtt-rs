@@ -366,7 +366,7 @@ mod tests {
     async fn test_virtual_dongle_handshake() {
         let dongle = VirtualDongle::new("TESTMAC1", "V3.0.0");
         let (event_tx, _event_rx) = mpsc::channel::<DongleEvent>(32);
-        let mut engine = Engine::new(dongle.transport(), event_tx, None);
+        let mut engine = Engine::new(dongle.transport(), event_tx);
         let _exit_tx = engine.start();
 
         engine.initialize_handshake().await.unwrap();
@@ -378,7 +378,7 @@ mod tests {
     async fn test_virtual_dongle_scan_event() {
         let dongle = VirtualDongle::new("TESTMAC1", "V3.0.0");
         let (event_tx, mut event_rx) = mpsc::channel::<DongleEvent>(32);
-        let mut engine = Engine::new(dongle.transport(), event_tx, None);
+        let mut engine = Engine::new(dongle.transport(), event_tx);
         let _exit_tx = engine.start();
 
         engine.initialize_handshake().await.unwrap();
@@ -400,7 +400,7 @@ mod tests {
     async fn test_virtual_dongle_alarm_event() {
         let dongle = VirtualDongle::new("TESTMAC1", "V3.0.0");
         let (event_tx, mut event_rx) = mpsc::channel::<DongleEvent>(32);
-        let mut engine = Engine::new(dongle.transport(), event_tx, None);
+        let mut engine = Engine::new(dongle.transport(), event_tx);
         let _exit_tx = engine.start();
 
         engine.initialize_handshake().await.unwrap();

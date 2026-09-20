@@ -304,7 +304,7 @@ async fn run_daemon(
             _ => "unknown".to_string(),
         };
 
-        let mut engine = Engine::new(transport, event_tx.clone(), Some(state_path.to_string()));
+        let mut engine = Engine::new(transport, event_tx.clone());
         engine.transport_label = "local".to_string();
         engine.device_path = Some(device_path.clone());
 
@@ -713,7 +713,7 @@ async fn run_hid_command(
     args: &[String],
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (event_tx, mut event_rx) = mpsc::channel(32);
-    let mut engine = Engine::new(transport, event_tx, None);
+    let mut engine = Engine::new(transport, event_tx);
     let _exit_tx = engine.start();
 
     engine.initialize_handshake().await?;

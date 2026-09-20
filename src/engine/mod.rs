@@ -20,17 +20,22 @@ type PendingRequests = Arc<Mutex<HashMap<u16, oneshot::Sender<Packet>>>>;
 pub struct Engine {
     transport: GatewayTransport,
     pending_requests: PendingRequests,
+    // Serializes do_command() calls on this dongle. The protocol correlates a
+    // response to a request only by response *command type*, not a per-request
+    // ID, so two do_command calls racing for the same expected_response_cmd
+    // would otherwise clobber each other's slot in `pending_requests` (the
+    // loser's oneshot gets dropped, and the winner may receive a response
+    // meant for the loser's request). Holding this lock for the full
+    // send-then-await-response round trip makes that impossible.
+    cmd_lock: Arc<tokio::sync::Mutex<()>>,
     event_tx: mpsc::Sender<DongleEvent>,
     dongle_mac: Option<String>,
     dongle_version: Option<String>,
     exit_tx: Option<oneshot::Sender<()>>,
-    // Refactored local memory cache to use persistent SensorState
-    pub sensors: Arc<Mutex<HashMap<String, crate::config::state::PersistedSensorState>>>,
     auto_verify_tx: mpsc::Sender<(String, SensorType, u8)>,
     auto_verify: Arc<AtomicBool>,
     sensor_list_tx: Arc<Mutex<Option<mpsc::Sender<String>>>>,
     is_scanning: Arc<AtomicBool>,
-    state_path: Option<String>,
     // Transport metadata for dashboard display
     pub transport_label: String,     // "local" or "bridge"
     pub device_path: Option<String>, // e.g. /dev/hidraw0
@@ -42,9 +47,9 @@ pub struct Engine {
 }
 
 impl Engine {
-    pub fn new(transport: GatewayTransport, event_tx: mpsc::Sender<DongleEvent>, state_path: Option<String>) -> Self {
+    pub fn new(transport: GatewayTransport, event_tx: mpsc::Sender<DongleEvent>) -> Self {
         let pending_requests = Arc::new(Mutex::new(HashMap::new()));
-        let sensors = Arc::new(Mutex::new(HashMap::new()));
+        let cmd_lock = Arc::new(tokio::sync::Mutex::new(()));
         let (auto_verify_tx, mut auto_verify_rx) = mpsc::channel::<(String, SensorType, u8)>(32);
         let auto_verify = Arc::new(AtomicBool::new(false));
         let sensor_list_tx = Arc::new(Mutex::new(None));
@@ -55,16 +60,15 @@ impl Engine {
         let engine = Self {
             transport: transport.clone(),
             pending_requests: Arc::clone(&pending_requests),
+            cmd_lock: Arc::clone(&cmd_lock),
             event_tx: event_tx.clone(),
             dongle_mac: None,
             dongle_version: None,
             exit_tx: None,
-            sensors: Arc::clone(&sensors),
             auto_verify_tx,
             auto_verify: Arc::clone(&auto_verify),
             sensor_list_tx: Arc::clone(&sensor_list_tx),
             is_scanning: Arc::clone(&is_scanning),
-            state_path: state_path.clone(),
             transport_label: "local".to_string(),
             device_path: None,
             remote_addr: None,
@@ -75,16 +79,15 @@ impl Engine {
         let mut engine_clone = Self {
             transport: transport.clone(),
             pending_requests: Arc::clone(&pending_requests),
+            cmd_lock: Arc::clone(&cmd_lock),
             event_tx: event_tx.clone(),
             dongle_mac: None,
             dongle_version: None,
             exit_tx: None,
-            sensors: Arc::clone(&sensors),
             auto_verify_tx: engine.auto_verify_tx.clone(),
             auto_verify: Arc::clone(&auto_verify),
             sensor_list_tx: Arc::clone(&sensor_list_tx),
             is_scanning: Arc::clone(&is_scanning),
-            state_path: state_path.clone(),
             transport_label: "worker".to_string(),
             device_path: None,
             remote_addr: None,
@@ -147,29 +150,6 @@ impl Engine {
         self.dongle_version.as_deref()
     }
 
-    /// Exposes the thread-safe local memory list of rich persistent sensor states.
-    pub fn get_rich_sensors(&self) -> Vec<crate::config::state::PersistedSensorState> {
-        let guard = self.sensors.lock().unwrap();
-        guard.values().cloned().collect()
-    }
-
-    /// Manually registers a sensor locally in the RAM cache (used for boot warming).
-    pub fn register_sensor_locally(&self, mac: &str, s_type: &str) {
-        let mut guard = self.sensors.lock().unwrap();
-        guard.insert(mac.to_string(), crate::config::state::PersistedSensorState {
-            mac: mac.to_string(),
-            sensor_type: s_type.to_string(),
-            last_seen: SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs(),
-            battery: Some(100),
-            battery_raw: None,
-            signal: -60,
-            die_temperature_c: None,
-            event_sequence: None,
-            state: crate::protocol::sensor::SensorState::Unknown,
-            dongle_mac: None,
-        });
-    }
-
     /// Enables or disables automatic verification for scanned sensors in the background.
     pub fn set_auto_verify(&self, enable: bool) {
         self.auto_verify.store(enable, Ordering::SeqCst);
@@ -189,8 +169,6 @@ impl Engine {
  
         // Duplicate self references for local callbacks
         let mut tx_transport = self.transport.clone();
-        let sensors_worker = Arc::clone(&self.sensors);
-        let state_path_worker = self.state_path.clone();
         let disconnect_notify_clone = Arc::clone(&self.disconnect_notify);
  
         // Spawn read worker loop
@@ -228,10 +206,8 @@ impl Engine {
                                                 &pending_requests,
                                                 &event_tx,
                                                 &mut tx_transport,
-                                                &sensors_worker,
                                                 &auto_verify_tx,
                                                 &sensor_list_tx,
-                                                &state_path_worker,
                                                 &shared_dongle_mac,
                                             ).await;
                                         }
@@ -283,10 +259,8 @@ impl Engine {
         pending: &PendingRequests,
         event_tx: &mpsc::Sender<DongleEvent>,
         transport: &mut GatewayTransport,
-        _sensors: &Arc<Mutex<HashMap<String, crate::config::state::PersistedSensorState>>>,
         auto_verify_tx: &mpsc::Sender<(String, SensorType, u8)>,
         sensor_list_tx: &Arc<Mutex<Option<mpsc::Sender<String>>>>,
-        _state_path: &Option<String>,
         shared_dongle_mac: &Arc<Mutex<Option<String>>>,
     ) {
         debug!("<=== Received packet: {}", pkt);
@@ -404,6 +378,9 @@ impl Engine {
 
     /// Sends a command and awaits the expected response packet asynchronously.
     pub async fn do_command(&mut self, pkt: Packet, expected_response_cmd: u16) -> Result<Packet> {
+        // Held for the whole round trip: see the comment on `cmd_lock`.
+        let _cmd_guard = self.cmd_lock.lock().await;
+
         let (tx, rx) = oneshot::channel();
         
         {
@@ -560,20 +537,9 @@ impl Engine {
         let pkt = Packet::new_async((commands::CMD_DELETE_SENSOR & 0xFF) as u8, payload);
         // Expect 0x5326 response
         let _resp = self.do_command(pkt, commands::CMD_DELETE_SENSOR_RESPONSE).await?;
-        
-        // Evict from memory cache state
-        {
-            let mut sensors = self.sensors.lock().unwrap();
-            sensors.remove(mac);
-        }
 
-        // Write updates to disk atomically
-        if let Some(ref path) = self.state_path {
-            let s_map = self.sensors.lock().unwrap().clone();
-            let system_state = crate::config::state::SystemState { sensors: s_map.into_iter().collect() };
-            let _ = system_state.save_to_yaml_atomic(path);
-        }
-        
+        // Note: SensorManager (the single source of truth for persisted sensor
+        // state) is updated and saved by the caller via delete_and_persist_sensor.
         Ok(())
     }
 
@@ -676,24 +642,6 @@ impl Engine {
         let _resp = self.do_command(pkt, commands::CMD_PLAY_CHIME_RESPONSE).await?;
         Ok(())
     }
-
-    /// Registers a sensor with a specific timeout. Useful for pre-registering or testing.
-    pub fn register_sensor(&self, mac: &str, sensor_type: SensorType, _timeout: std::time::Duration) {
-        if let Ok(mut s_map) = self.sensors.lock() {
-            s_map.insert(mac.to_string(), crate::config::state::PersistedSensorState {
-                mac: mac.to_string(),
-                sensor_type: sensor_type.as_str().to_string(),
-                last_seen: SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs(),
-                battery: Some(100),
-                battery_raw: None,
-                signal: -60,
-                die_temperature_c: None,
-                event_sequence: None,
-                state: crate::protocol::sensor::SensorState::Unknown,
-                dongle_mac: None,
-            });
-        }
-    }
 }
 
 impl Clone for Engine {
@@ -701,16 +649,15 @@ impl Clone for Engine {
         Self {
             transport: self.transport.clone(),
             pending_requests: Arc::clone(&self.pending_requests),
+            cmd_lock: Arc::clone(&self.cmd_lock),
             event_tx: self.event_tx.clone(),
             dongle_mac: self.dongle_mac.clone(),
             dongle_version: self.dongle_version.clone(),
             exit_tx: None,
-            sensors: Arc::clone(&self.sensors),
             auto_verify_tx: self.auto_verify_tx.clone(),
             auto_verify: Arc::clone(&self.auto_verify),
             sensor_list_tx: Arc::clone(&self.sensor_list_tx),
             is_scanning: Arc::clone(&self.is_scanning),
-            state_path: self.state_path.clone(),
             transport_label: self.transport_label.clone(),
             device_path: self.device_path.clone(),
             remote_addr: self.remote_addr.clone(),

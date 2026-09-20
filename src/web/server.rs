@@ -171,11 +171,7 @@ async fn handle_bridge_connection(
         writer: Arc::new(tokio::sync::Mutex::new(writer)),
     };
 
-    let mut engine = Engine::new(
-        transport,
-        state.event_tx.clone(),
-        None, // No local state path for remote dongles
-    );
+    let mut engine = Engine::new(transport, state.event_tx.clone());
     engine.transport_label = "bridge".to_string();
     engine.device_path = device_path;
     engine.remote_addr = Some(remote_addr.clone());
@@ -372,57 +368,23 @@ fn sensor_info_to_json(s: &crate::protocol::sensor::WyzeSensor) -> serde_json::V
 async fn list_sensors(
     State(state): State<Arc<WebState>>,
 ) -> impl IntoResponse {
-    let engines = state.engines.lock().await;
-    let mut all_sensors = Vec::new();
-    for (_, engine) in engines.iter() {
-        all_sensors.extend(engine.get_rich_sensors());
-    }
-    drop(engines);
-
-    // Merge with sensor_manager data
     let manager = state.sensor_manager.lock().unwrap();
-    let mut sensors = Vec::new();
-    // Deduplicate by MAC, preferring sensor_manager data
-    let mut seen_macs = std::collections::HashSet::new();
-    for rich in &all_sensors {
-        if seen_macs.contains(&rich.mac) {
-            continue;
-        }
-        seen_macs.insert(rich.mac.clone());
-        if let Some(sensor) = manager.get_sensors().get(&rich.mac) {
-            sensors.push(crate::config::state::PersistedSensorState {
-                mac: sensor.mac.clone(),
-                sensor_type: sensor.sensor_type.as_str().to_string(),
-                last_seen: sensor.last_seen,
-                battery: sensor.battery_pct,
-                battery_raw: sensor.battery_raw,
-                signal: sensor.rssi_dbm,
-                die_temperature_c: sensor.die_temperature_c,
-                event_sequence: sensor.event_sequence,
-                state: sensor.state.clone(),
-                dongle_mac: sensor.dongle_mac.clone(),
-            });
-        } else {
-            sensors.push(rich.clone());
-        }
-    }
-    // Also include sensor_manager entries not found in engine caches
-    for (mac, sensor) in manager.get_sensors().iter() {
-        if !seen_macs.contains(mac) {
-            sensors.push(crate::config::state::PersistedSensorState {
-                mac: sensor.mac.clone(),
-                sensor_type: sensor.sensor_type.as_str().to_string(),
-                last_seen: sensor.last_seen,
-                battery: sensor.battery_pct,
-                battery_raw: sensor.battery_raw,
-                signal: sensor.rssi_dbm,
-                die_temperature_c: sensor.die_temperature_c,
-                event_sequence: sensor.event_sequence,
-                state: sensor.state.clone(),
-                dongle_mac: sensor.dongle_mac.clone(),
-            });
-        }
-    }
+    let mut sensors: Vec<crate::config::state::PersistedSensorState> = manager
+        .get_sensors()
+        .values()
+        .map(|sensor| crate::config::state::PersistedSensorState {
+            mac: sensor.mac.clone(),
+            sensor_type: sensor.sensor_type.as_str().to_string(),
+            last_seen: sensor.last_seen,
+            battery: sensor.battery_pct,
+            battery_raw: sensor.battery_raw,
+            signal: sensor.rssi_dbm,
+            die_temperature_c: sensor.die_temperature_c,
+            event_sequence: sensor.event_sequence,
+            state: sensor.state.clone(),
+            dongle_mac: sensor.dongle_mac.clone(),
+        })
+        .collect();
     sensors.sort_by_key(|s| s.mac.clone());
     (StatusCode::OK, Json(SensorsListResponse { sensors })).into_response()
 }
