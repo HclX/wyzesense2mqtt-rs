@@ -255,7 +255,12 @@ async fn announce_sensor(
         let state_topic = format!("{}/{}", topic_root, mac);
         let state_str = serde_json::to_string(&payload).unwrap();
         debug!("Publishing state to {}: {}", state_topic, state_str);
-        if let Err(e) = client.publish(&state_topic, QoS::AtLeastOnce, false, state_str).await {
+        // Retained so a client that (re)subscribes -- e.g. Home Assistant
+        // restarting without the gateway or broker also restarting -- gets
+        // the last known reading immediately instead of "unknown" until this
+        // sensor's next real transmission. Staleness is what the separate
+        // availability topic is for, not omitting retain here.
+        if let Err(e) = client.publish(&state_topic, QoS::AtLeastOnce, true, state_str).await {
             error!("Failed to publish state: {}", e);
         }
     }
