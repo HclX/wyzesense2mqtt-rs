@@ -25,6 +25,8 @@ pub mod commands {
     pub const CMD_DELETE_SENSOR_RESPONSE: u16 = 0x5326;
     pub const CMD_ALARM1: u16 = 0x5319;
     pub const CMD_ALARM2: u16 = 0x5355;
+    /// Reply to a keypad request (arm state, PIN result). See `protocol::keypad`.
+    pub const CMD_SEND_KEYPAD: u16 = 0x5353;
     pub const CMD_GET_SENSOR_COUNT: u16 = 0x532E;
     pub const CMD_SENSOR_COUNT_RESPONSE: u16 = 0x532F;
     pub const CMD_GET_SENSOR_LIST: u16 = 0x5330;
@@ -224,9 +226,19 @@ impl fmt::Display for Packet {
                 ack_cmd
             ),
             PacketPayload::Bytes(bytes) => {
+                // Never print keypad PIN digits, even at debug level.
+                let pin = if self.cmd() == commands::CMD_ALARM2 {
+                    crate::protocol::keypad::pin_digit_range(bytes)
+                } else {
+                    None
+                };
                 let hex_str = bytes
                     .iter()
-                    .map(|b| format!("{:02x}", b))
+                    .enumerate()
+                    .map(|(i, b)| match &pin {
+                        Some(range) if range.contains(&i) => "**".to_string(),
+                        _ => format!("{:02x}", b),
+                    })
                     .collect::<Vec<String>>()
                     .join(",");
                 write!(

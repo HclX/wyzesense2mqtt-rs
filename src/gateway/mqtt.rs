@@ -3,7 +3,9 @@ use rumqttc::v5::mqttbytes::{QoS, v5::Packet as MqttPacket};
 use tokio::sync::mpsc;
 use crate::protocol::telemetry::{DongleEvent, TelemetryData};
 use crate::protocol::sensor::SensorManager;
+use crate::config::app_config::KeypadConfig;
 use crate::engine::EnginesMap;
+use crate::gateway::keypad::KeypadController;
 use tracing::{info, error, debug, warn};
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
@@ -36,6 +38,7 @@ pub struct MqttGateway {
     sensor_manager: Arc<Mutex<SensorManager>>,
     broadcast_tx: tokio::sync::broadcast::Sender<()>,
     engines: EnginesMap,
+    keypad: Option<Arc<KeypadController>>,
 }
 
 impl MqttGateway {
@@ -67,7 +70,18 @@ impl MqttGateway {
             sensor_manager,
             broadcast_tx,
             engines,
+            keypad: None,
         }
+    }
+
+    /// Enables answering keypad requests with the Home Assistant alarm state.
+    pub fn with_keypad(mut self, config: &KeypadConfig) -> Self {
+        if config.enabled {
+            let controller = KeypadController::new(config, self.client.clone(), &self.topic_root, self.engines.clone());
+            info!("Keypad support enabled; alarm state topic: {}", controller.alarm_state_topic());
+            self.keypad = Some(controller);
+        }
+        self
     }
 
     pub async fn run(self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -90,6 +104,11 @@ impl MqttGateway {
 
         let dongle_topic_prefix = format!("{}/dongle/", topic_root);
         let dongle_topic_suffix = "/scan/set";
+
+        let keypad_loop = self.keypad.clone();
+        let keypad_topics: Vec<String> = self.keypad.as_ref()
+            .map(|k| vec![k.alarm_state_topic().to_string(), k.pin_result_topic()])
+            .unwrap_or_default();
 
         // DEDICATED EVENT LOOP TASK
         // This task's ONLY job is to keep the MQTT connection alive and process incoming packets.
@@ -117,6 +136,7 @@ impl MqttGateway {
                                 let engines = engines.clone();
                                 let sensor_manager_conn = sensor_manager_conn.clone();
                                 let published_discovery_conn = published_discovery_conn.clone();
+                                let keypad_topics = keypad_topics.clone();
                                 tokio::spawn(async move {
                                     announce_on_connect(
                                         &client,
@@ -125,6 +145,7 @@ impl MqttGateway {
                                         &control_topic_remove,
                                         &control_topic_reload,
                                         &dongle_scan_wildcard,
+                                        &keypad_topics,
                                         &engines,
                                         &sensor_manager_conn,
                                         &published_discovery_conn,
@@ -136,7 +157,11 @@ impl MqttGateway {
                                 let payload = String::from_utf8_lossy(&publish.payload).trim().to_string();
                                 debug!("Received MQTT message on {}: {}", topic, payload);
 
-                                if topic == control_topic_scan_loop {
+                                if let Some(keypad) = keypad_loop.as_ref().filter(|k| topic == k.alarm_state_topic()) {
+                                    keypad.on_alarm_state(&payload);
+                                } else if let Some(keypad) = keypad_loop.as_ref().filter(|k| topic == k.pin_result_topic()) {
+                                    keypad.on_pin_result(&payload);
+                                } else if topic == control_topic_scan_loop {
                                     warn!("Legacy scan topic used without dongle_mac target. Ignoring. Use dongle/{{mac}}/scan instead.");
                                     // Legacy broadcast scan is not supported per exclusive scan design.
                                     let _ = payload;
@@ -194,10 +219,16 @@ impl MqttGateway {
         let published_discovery = self.published_discovery.clone();
         let sensor_manager_worker = self.sensor_manager.clone();
         let broadcast_tx = self.broadcast_tx.clone();
+        let keypad = self.keypad.clone();
 
         loop {
             if let Some(event) = event_rx.recv().await {
                 debug!("Gateway received event for MAC: {}", event.mac);
+
+                // Reply first: the keypad is waiting, and announcing below can sleep.
+                if let (Some(keypad), TelemetryData::Keypad { .. }) = (&keypad, &event.data) {
+                    tokio::spawn(Arc::clone(keypad).handle(event.clone()));
+                }
 
                 let mut is_online = !matches!(event.data, TelemetryData::Offline);
 
@@ -314,6 +345,7 @@ async fn announce_on_connect(
     control_topic_remove: &str,
     control_topic_reload: &str,
     dongle_scan_wildcard: &str,
+    keypad_topics: &[String],
     engines: &EnginesMap,
     sensor_manager: &Arc<Mutex<SensorManager>>,
     published_discovery: &Arc<tokio::sync::Mutex<HashSet<String>>>,
@@ -337,6 +369,11 @@ async fn announce_on_connect(
     // Subscribe to per-dongle scan command topics (Phase 4)
     if let Err(e) = client.subscribe(dongle_scan_wildcard, QoS::AtLeastOnce).await {
         error!("Failed to subscribe to dongle scan wildcard topic: {}", e);
+    }
+    for topic in keypad_topics {
+        if let Err(e) = client.subscribe(topic, QoS::AtLeastOnce).await {
+            error!("Failed to subscribe to keypad topic {}: {}", topic, e);
+        }
     }
     info!("Subscribed to MQTT control topics.");
 
@@ -547,6 +584,53 @@ mod tests {
             "{{ 'online' if value_json.probe_available else 'offline' }}");
         assert_eq!(probe_state_payload["payload_available"], "online");
         assert_eq!(probe_state_payload["payload_not_available"], "offline");
+    }
+
+    #[test]
+    fn test_keypad_discovery() {
+        let sensor = WyzeSensor::new(
+            "77C066C0".to_string(),
+            SensorType::Keypad,
+            "Wyze Sense 77C066C0".to_string(),
+        );
+        let payloads = sensor.get_discovery_payloads("wyzesense");
+        assert_eq!(payloads.len(), 3); // signal + motion + button event (battery not decoded yet)
+
+        let motion = payloads.iter().find(|(t, _)| t == "homeassistant/binary_sensor/wyzesense_77C066C0/state/config").unwrap();
+        assert_eq!(motion.1["device_class"], "motion");
+
+        let button = payloads.iter().find(|(t, _)| t == "homeassistant/event/wyzesense_77C066C0/button/config").unwrap();
+        assert_eq!(button.1["state_topic"], "wyzesense/77C066C0/keypad/event");
+        assert_eq!(button.1["event_types"], serde_json::json!(["disarm", "arm_home", "arm_away", "panic"]));
+    }
+
+    #[test]
+    fn test_keypad_state_payload() {
+        use crate::protocol::keypad::{KeypadEvent, KeypadPin};
+        let mut sensor = WyzeSensor::new(
+            "77C066C0".to_string(),
+            SensorType::Keypad,
+            "Wyze Sense 77C066C0".to_string(),
+        );
+        let event = |event| DongleEvent {
+            mac: "77C066C0".to_string(),
+            timestamp: SystemTime::now(),
+            sensor_type: SensorType::Keypad,
+            event_type: 0xEA,
+            data: TelemetryData::Keypad { event, rssi: -19, sequence: 1 },
+            dongle_mac: None,
+        };
+        sensor.update_from_event(&event(KeypadEvent::Motion(true))).unwrap();
+        let payload = sensor.get_state_payload();
+        assert_eq!(payload["state"], "active");
+        assert_eq!(payload["signal_strength"], -19);
+        assert!(payload.get("battery").is_none());
+
+        // A PIN never reaches the (retained) state payload
+        sensor.update_from_event(&event(KeypadEvent::Pin(KeypadPin::new(vec![1, 2, 3, 4])))).unwrap();
+        let payload = sensor.get_state_payload().to_string();
+        assert!(!payload.contains("1234"), "{}", payload);
+        assert!(payload.contains("\"state\":\"active\""));
     }
 
     #[test]

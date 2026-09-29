@@ -114,6 +114,33 @@ impl Default for BridgeConfig {
     }
 }
 
+fn default_keypad_timeout_ms() -> u64 { 2000 }
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct KeypadConfig {
+    /// Answer keypad requests (mode, PIN result) on behalf of the Wyze Hub.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// MQTT topic carrying the Home Assistant alarm state (e.g. Alarmo's
+    /// `alarmo/state`). Default: `<self_topic_root>/keypad/alarm_state`.
+    #[serde(default)]
+    pub alarm_state_topic: Option<String>,
+    /// How long to wait for Home Assistant to act on a keypad request before
+    /// telling the keypad it needs a PIN (arm) or the PIN was wrong.
+    #[serde(default = "default_keypad_timeout_ms")]
+    pub response_timeout_ms: u64,
+}
+
+impl Default for KeypadConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_true(),
+            alarm_state_topic: None,
+            response_timeout_ms: default_keypad_timeout_ms(),
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct AppConfig {
     #[serde(default)]
@@ -126,6 +153,8 @@ pub struct AppConfig {
     pub logging: LoggingConfig,
     #[serde(default)]
     pub bridge: BridgeConfig,
+    #[serde(default)]
+    pub keypad: KeypadConfig,
 }
 
 impl AppConfig {
@@ -169,6 +198,8 @@ impl AppConfig {
         if let Ok(val) = std::env::var("LOG_NO_ANSI") { config.logging.no_ansi = val.parse().unwrap_or(config.logging.no_ansi); }
         if let Ok(val) = std::env::var("BRIDGE_ENABLED") { config.bridge.enabled = val.parse().unwrap_or(config.bridge.enabled); }
         if let Some(val) = std::env::var("BRIDGE_AUTH_TOKEN").ok().filter(|v| !v.is_empty()) { config.bridge.auth_token = Some(val); }
+        if let Ok(val) = std::env::var("KEYPAD_ENABLED") { config.keypad.enabled = val.parse().unwrap_or(config.keypad.enabled); }
+        if let Some(val) = std::env::var("KEYPAD_ALARM_STATE_TOPIC").ok().filter(|v| !v.is_empty()) { config.keypad.alarm_state_topic = Some(val); }
 
         // Ensure that if host is set, MQTT is enabled
         if config.mqtt.host.is_some() {
@@ -217,6 +248,14 @@ mqtt:
 bridge:
   enabled: false
   # auth_token: "your_secret_token"
+
+# Keypad Settings
+# The gateway answers keypad requests with the Home Assistant alarm state and
+# forwards arm/disarm requests (with the PIN) to Home Assistant over MQTT.
+keypad:
+  enabled: true
+  # alarm_state_topic: "alarmo/state"   # default: <self_topic_root>/keypad/alarm_state
+  # response_timeout_ms: 2000
 
 # Diagnostics Structural Logging Level
 # (Options: trace, debug, info, warn, error)

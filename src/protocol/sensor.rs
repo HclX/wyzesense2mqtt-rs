@@ -3,7 +3,18 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::time::SystemTime;
 use crate::protocol::battery::{BatteryChemistry, raw_to_capacity};
+use crate::protocol::keypad::KeypadEvent;
 use crate::protocol::telemetry::{DongleEvent, SensorType, TelemetryData};
+
+/// Non-retained topic for keypad button presses (HA `event` entity).
+pub fn keypad_event_topic(topic_root: &str, mac: &str) -> String {
+    format!("{}/{}/keypad/event", topic_root, mac)
+}
+
+/// Non-retained topic carrying alarm requests from a keypad, including the PIN.
+pub fn keypad_action_topic(topic_root: &str, mac: &str) -> String {
+    format!("{}/{}/keypad/action", topic_root, mac)
+}
 
 // ---------------------------------------------------------
 // SensorState: Type-specific state enum
@@ -27,6 +38,9 @@ pub enum SensorState {
         humidity: u8,
     },
     Chime,   // Actuator: no inbound telemetry state, receives play_chime commands
+    /// Keypad: only the built-in motion sensor is state. Button presses and
+    /// PINs are events, handled by the gateway and never persisted.
+    Keypad { motion_active: bool },
     Unknown,
 }
 
@@ -183,6 +197,8 @@ impl WyzeSensor {
             SensorType::ContactV2 | SensorType::MotionV2 |
             SensorType::LeakV2 | SensorType::ClimateV2 => (3600 * 4, Some(100u8)),
             SensorType::Chime => (3600 * 24, None), // Mains-powered, no battery
+            // Heartbeat interval unknown; battery byte not decoded yet
+            SensorType::Keypad => (3600 * 24, None),
             SensorType::Unknown(_) => (1800, Some(100u8)),
         };
         let state = Self::default_state_for_type(sensor_type).unwrap_or(SensorState::Unknown);
@@ -269,6 +285,9 @@ impl WyzeSensor {
             }
             self.rssi_dbm = r;
         }
+        if let TelemetryData::Keypad { rssi, .. } = &event.data {
+            self.rssi_dbm = *rssi;
+        }
         if let Some(dt) = die_temp {
             self.die_temperature_c = Some(dt);
         }
@@ -317,6 +336,12 @@ impl WyzeSensor {
                 *humidity = *h;
                 Ok(())
             }
+            (SensorState::Keypad { motion_active }, TelemetryData::Keypad { event, .. }) => {
+                if let KeypadEvent::Motion(detected) = event {
+                    *motion_active = *detected;
+                }
+                Ok(())
+            }
             // Chime: accept all events gracefully, nothing to update
             (SensorState::Chime, _) => Ok(()),
             // Common events handled by all sensor types (including Unknown that couldn't be upgraded)
@@ -344,6 +369,8 @@ impl WyzeSensor {
                 Some(SensorState::Climate { temperature: 0.0, humidity: 0 }),
             SensorType::Chime =>
                 Some(SensorState::Chime),
+            SensorType::Keypad =>
+                Some(SensorState::Keypad { motion_active: false }),
             SensorType::Unknown(_) => None,
         }
     }
@@ -401,6 +428,9 @@ impl WyzeSensor {
             }
             SensorState::Chime => {
                 payload["state"] = json!("idle");
+            }
+            SensorState::Keypad { motion_active } => {
+                payload["state"] = json!(if *motion_active { "active" } else { "inactive" });
             }
             SensorState::Unknown => {
                 payload["state"] = json!("unknown");
@@ -563,6 +593,38 @@ impl WyzeSensor {
                         "device": device,
                         "availability_mode": "all",
                         "json_attributes_topic": state_topic,
+                    })
+                ));
+            }
+            SensorState::Keypad { .. } => {
+                payloads.push((
+                    format!("homeassistant/binary_sensor/{}/state/config", device_id),
+                    json!({
+                        "name": "Motion",
+                        "state_topic": state_topic.clone(),
+                        "value_template": "{{ value_json.state }}",
+                        "device_class": "motion",
+                        "payload_on": "active",
+                        "payload_off": "inactive",
+                        "unique_id": format!("{}_state", device_id),
+                        "device": device.clone(),
+                        "availability": availability.clone(),
+                        "availability_mode": "all",
+                        "json_attributes_topic": state_topic,
+                    })
+                ));
+                // Button presses (never PINs) as an HA event entity
+                payloads.push((
+                    format!("homeassistant/event/{}/button/config", device_id),
+                    json!({
+                        "name": "Button",
+                        "state_topic": keypad_event_topic(topic_root, &self.mac),
+                        "event_types": ["disarm", "arm_home", "arm_away", "panic"],
+                        "unique_id": format!("{}_button", device_id),
+                        "device": device,
+                        "availability": availability,
+                        "availability_mode": "all",
+                        "icon": "mdi:dialpad",
                     })
                 ));
             }

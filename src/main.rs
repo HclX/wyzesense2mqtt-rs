@@ -480,7 +480,7 @@ async fn run_daemon(
                 Arc::clone(&sensor_manager),
                 broadcast_tx.clone(),
                 Arc::clone(&engines),
-            );
+            ).with_keypad(&config.keypad);
 
             // Spawn MQTT bridge in background
             let handle = tokio::spawn(async move {

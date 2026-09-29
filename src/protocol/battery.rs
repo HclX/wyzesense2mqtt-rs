@@ -49,8 +49,8 @@ impl BatteryChemistry {
             SensorType::ContactV2 => Some(BatteryChemistry::Alkaline1V5SingleAAA),
             // Motion V2: 2× AAA = 3V
             SensorType::MotionV2 => Some(BatteryChemistry::Alkaline3VDualAAA),
-            // Chime is mains-powered; Unknown we can't map
-            SensorType::Chime | SensorType::Unknown(_) => None,
+            // Chime is mains-powered; the keypad's battery byte isn't decoded yet; Unknown we can't map
+            SensorType::Chime | SensorType::Keypad | SensorType::Unknown(_) => None,
         }
     }
 }

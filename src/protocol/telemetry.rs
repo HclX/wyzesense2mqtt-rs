@@ -1,10 +1,13 @@
 use std::time::{SystemTime, Duration};
 
+use crate::protocol::keypad::KeypadEvent;
+
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum SensorType {
     ContactV1,
     MotionV1,
     LeakV2,
+    Keypad,
     ClimateV2,
     Chime,
     ContactV2,
@@ -18,6 +21,7 @@ impl From<u8> for SensorType {
             0x01 => SensorType::ContactV1,
             0x02 => SensorType::MotionV1,
             0x03 => SensorType::LeakV2,
+            0x05 => SensorType::Keypad,
             0x07 => SensorType::ClimateV2,
             0x0C => SensorType::Chime,
             0x0E => SensorType::ContactV2,
@@ -33,6 +37,7 @@ impl SensorType {
             SensorType::ContactV1 => 0x01,
             SensorType::MotionV1 => 0x02,
             SensorType::LeakV2 => 0x03,
+            SensorType::Keypad => 0x05,
             SensorType::ClimateV2 => 0x07,
             SensorType::Chime => 0x0C,
             SensorType::ContactV2 => 0x0E,
@@ -48,6 +53,7 @@ impl SensorType {
             SensorType::MotionV1 => "motion",
             SensorType::MotionV2 => "motionv2",
             SensorType::LeakV2 => "leak",
+            SensorType::Keypad => "keypad",
             SensorType::ClimateV2 => "climate",
             SensorType::Chime => "chime",
             SensorType::Unknown(_) => "unknown",
@@ -61,6 +67,7 @@ impl SensorType {
             SensorType::MotionV1 => "Motion Sensor V1",
             SensorType::MotionV2 => "Motion Sensor V2",
             SensorType::LeakV2 => "Leak Sensor V2",
+            SensorType::Keypad => "Keypad",
             SensorType::ClimateV2 => "Climate Sensor V2",
             SensorType::Chime => "Chime/Alarm V1",
             SensorType::Unknown(_) => "Unknown Sensor",
@@ -78,6 +85,7 @@ impl std::str::FromStr for SensorType {
             "motion" | "MotionV1" => Ok(SensorType::MotionV1),
             "motionv2" | "MotionV2" => Ok(SensorType::MotionV2),
             "leak" | "LeakV2" => Ok(SensorType::LeakV2),
+            "keypad" | "Keypad" => Ok(SensorType::Keypad),
             "climate" | "ClimateV2" => Ok(SensorType::ClimateV2),
             "chime" | "Chime" => Ok(SensorType::Chime),
             "unknown" => Ok(SensorType::Unknown(0)),
@@ -132,6 +140,12 @@ pub enum TelemetryData {
         state: u8,
         probe_state: u8,
         probe_available: bool,
+    },
+    Keypad {
+        event: KeypadEvent,
+        rssi: i8,
+        /// Per-keypad counter, +1 per event.
+        sequence: u8,
     },
     UnknownEvent(Vec<u8>),
     Scanned { version: u8 },
@@ -335,6 +349,29 @@ impl DongleEvent {
         let sensor_type = SensorType::from(sensor_type_val);
         let timestamp = SystemTime::now();
         let remaining = &payload[10..];
+
+        // Keypads share event type 0xEA with the leak sensor, so dispatch on
+        // sensor type first. See `protocol::keypad` for the layout.
+        if sensor_type == SensorType::Keypad {
+            let len = *remaining.first().ok_or("Keypad payload too short")? as usize;
+            // remaining[0] = len, [1..=3] header, [4] subtype, [5..len-1] data,
+            // [len-1] per-keypad constant, [len] sequence, [len+1] signal
+            if len < 6 || remaining.len() < len + 2 {
+                return Err("Keypad payload too short");
+            }
+            let subtype = remaining[4];
+            let data = &remaining[5..len - 1];
+            let sequence = remaining[len];
+            let rssi = (remaining[len + 1] as i8).saturating_neg();
+            return Ok(DongleEvent {
+                mac,
+                timestamp,
+                sensor_type,
+                event_type,
+                data: TelemetryData::Keypad { event: KeypadEvent::parse(subtype, data), rssi, sequence },
+                dongle_mac: None,
+            });
+        }
 
         let data = match event_type {
             Self::EVENT_TYPE_LEAK => {
