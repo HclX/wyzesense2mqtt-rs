@@ -184,6 +184,8 @@ Once `mqtt` is enabled in your `config.yaml`, **Wyze Sense to MQTT Bridge (Rust)
 
 The Wyze Sense keypad never learns the alarm state on its own: it asks, and the Hub answers (on a button press, when PIN entry starts, and when its motion sensor wakes it). The gateway takes the Hub's place. Home Assistant stays in charge of the alarm and of checking PINs; the gateway only relays.
 
+**PINs (codes) are managed in Alarmo**, not the gateway: open Alarmo → Codes and add the code under a user (enable "use disarm code" for the areas where it should apply). Every alarm_control_panel service call already accepts a `code`, so a keypad PIN is validated the same way as one typed into the HA UI.
+
 | Topic | Direction | Retained | Payload |
 | :--- | :--- | :--- | :--- |
 | `<root>/keypad/alarm_state` (or `keypad.alarm_state_topic`) | HA → gateway | yes | HA alarm state: `disarmed`, `arming`, `armed_home`, `armed_away`, `pending`, `triggered`, … |
@@ -195,7 +197,7 @@ How requests are answered:
 - **Disarm button:** the keypad is asked for a PIN. The PIN is then sent as a `disarm` action.
 - **Home / Away button:** an `arm_*` action without a code is sent. If the alarm state changes to `arming` or the armed state within the timeout, the keypad shows it; otherwise it asks for a PIN and the PIN is sent with the same action.
 - **PIN without a button** (e.g. during the entry delay): sent as `disarm`.
-- **PIN result:** accepted once the alarm state reaches the requested state, rejected on `invalid` or timeout.
+- **PIN result:** accepted once the alarm state reaches the requested state, rejected on `invalid`, `alarmo_failed_to_arm` with reason `invalid_code`, or timeout.
 - **Side button:** only the `panic` event is published; what it does is up to your automations.
 
 Example Home Assistant automations for Alarmo (the same works for any `alarm_control_panel`):
@@ -223,6 +225,20 @@ Example Home Assistant automations for Alarmo (the same works for any `alarm_con
         topic: "wyzesense2mqtt/keypad/alarm_state"
         payload: "{{ trigger.to_state.state }}"
         retain: true
+
+- alias: "Alarmo rejected a code from a Wyze keypad"
+  id: wyze_keypad_pin_result
+  triggers:
+    - trigger: event
+      event_type: alarmo_failed_to_arm
+  conditions:
+    - condition: template
+      value_template: "{{ trigger.event.data.reason == 'invalid_code' }}"
+  actions:
+    - action: mqtt.publish
+      data:
+        topic: "wyzesense2mqtt/keypad/pin_result"
+        payload: "invalid"
 ```
 
 > [!IMPORTANT]
