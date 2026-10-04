@@ -139,7 +139,7 @@ When the full command word is `0x53FF` (Async ACK):
 | **Sensor Scan** | `0x5320` | New sensor detected during scan mode. See Section 5.2. |
 | **Time Sync Request** | `0x5332` | Dongle requests current time. Host must reply with `0x5333`. |
 | **Event Log** | `0x5335` | Dongle log entry (informational, can be ignored). |
-| **Sensor Alarm2** | `0x5355` | Extended alarm event (leak sensor). See Section 6.4. |
+| **Sensor Alarm2** | `0x5355` | Extended alarm event (leak sensor, keypad). See Section 6.5. |
 
 ---
 
@@ -242,6 +242,7 @@ All standard telemetry events arrive via `0x5319`. The payload has an **18-byte 
 | `0x01` | Contact Sensor V1 (`switch`) | `0x00`=Closed, `0x01`=Open |
 | `0x02` | Motion Sensor V1 (`motion`) | `0x00`=Inactive, `0x01`=Active |
 | `0x03` | Leak Sensor (`leak`) | `0x00`=Dry, `0x01`=Wet |
+| `0x05` | Keypad (`keypad`) | See §6.5 Keypad Event Data |
 | `0x07` | Climate Sensor (`climate`) | N/A (temperature/humidity) |
 | `0x0C` | Chime (`chime`) | N/A |
 | `0x0E` | Contact Sensor V2 (`switchv2`) | `0x00`=Closed, `0x01`=Open |
@@ -345,7 +346,7 @@ Alarm1 Payload: [...header..., 18, 5f, 00, 03, 15, 2e, 30, 11, 36, 26]
 
 ### 6.5 Alarm2 — `NOTIFY_SENSOR_ALARM2` (`0x5355`)
 
-Alarm2 packets are used for **Leak Sensor** events. They have a different header format — **no timestamp** field. The current system time should be used instead.
+Alarm2 packets are used for **Leak Sensor** and **Keypad** events. They have a different header format — **no timestamp** field. The current system time should be used instead. The two are told apart by the sensor type byte (§6.1 table).
 
 #### Alarm2 Header (10 bytes)
 
