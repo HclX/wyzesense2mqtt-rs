@@ -15,7 +15,7 @@ A high-performance, lightweight, asynchronous USB-to-MQTT gateway for **Wyze Sen
 *   **🏠 Home Assistant Auto-Discovery**: Automatically registers sensors with Home Assistant showing battery states, signal strength (RSSI), and active/inactive telemetry states.
 *   **🎨 Premium Embedded Web UI Dashboard**: An elegant, dark-mode control panel with per-dongle sensor cards, per-dongle scan/pair actions, and real-time disconnect indicators.
 *   **🤝 Trait-Based Sensor Polymorphism**: Safe, type-secure modelling for Contact (V1/V2), Motion (V1/V2), Leak (V2), and Climate (V2) sensors.
-*   **⌨️ Keypad Support**: The Wyze Sense keypad works without the Wyze Hub. The gateway answers the keypad the way the Hub does, with Home Assistant (e.g. Alarmo) holding the alarm state and checking PINs. See the Keypad section below.
+*   **⌨️ Keypad Support**: The Wyze Sense keypad works without the Wyze Hub. The gateway answers the keypad the way the Hub does, with Home Assistant (e.g. Alarmo) holding the alarm state and checking PINs. See the Keypad section below and the Alarmo section for setup.
 *   **💻 Lock-Free CLI Subcommands**: Control pairing, trigger chimes, list sensors, or inject raw packets directly from your terminal *without stopping the background daemon* using automatic REST fallback routing.
 *   **🔒 Safe Persistence**: Stores sensor database mappings persistently using atomic write operations to guarantee zero corruption during power losses.
 *   **🧪 Comprehensive E2E Test Suite**: 14 full-stack integration tests using an in-process `VirtualDongle` simulator — no hardware required.
@@ -184,7 +184,7 @@ Once `mqtt` is enabled in your `config.yaml`, **Wyze Sense to MQTT Bridge (Rust)
 
 The Wyze Sense keypad never learns the alarm state on its own: it asks, and the Hub answers (on a button press, when PIN entry starts, and when its motion sensor wakes it). The gateway takes the Hub's place. Home Assistant stays in charge of the alarm and of checking PINs; the gateway only relays.
 
-**PINs (codes) are managed in Alarmo**, not the gateway: open Alarmo → Codes and add the code under a user (enable "use disarm code" for the areas where it should apply). Every alarm_control_panel service call already accepts a `code`, so a keypad PIN is validated the same way as one typed into the HA UI.
+**PINs (codes) are managed in your alarm panel**, not the gateway (see the [Alarmo](#-alarmo-alarm-panel) section below).
 
 | Topic | Direction | Retained | Payload |
 | :--- | :--- | :--- | :--- |
@@ -202,6 +202,19 @@ How requests are answered:
 - **Side button:** only the `panic` event is published; what it does is up to your automations.
 
 Keypad battery: every keypad event carries a battery byte on its own 0–155 scale (not the AON_BATMON encoding other sensors use). The gateway publishes it as an estimated `Battery` percentage (raw ÷ 155) plus a `Battery Voltage` diagnostic (an internal reading of ≈4.5 V on healthy packs — not a direct cell voltage). The percentage is a linear estimate; the true discharge shape is not yet characterized, so treat low readings as a prompt to recharge soon rather than an exact gauge.
+
+> [!IMPORTANT]
+> The action topic carries PINs. It is never retained, but anything subscribed to it sees them, so restrict it with broker ACLs. PINs are redacted from the gateway's logs, except at `trace` level, where the USB transport logs raw bytes.
+
+Availability self-healing: only `online` statuses are retained. A sleeping sensor's `offline` is not kept by the broker, so entities don't stay stuck "unavailable" for hours after the sensor wakes and reports again — the next report (or a gateway/HA restart, or HA's MQTT birth `homeassistant/status` → re-announce) restores the correct state. The same applies to the gateway's own LWT: an unclean shutdown marks entities unavailable without persisting that across broker restarts.
+
+---
+
+## 🚨 Alarmo (Alarm Panel)
+
+The keypad works with any `alarm_control_panel`; the notes below use [Alarmo](https://github.com/nielsfaber/alarmo).
+
+**PINs (codes) are managed in Alarmo**, not the gateway: open Alarmo → Codes and add the code under a user (enable "use disarm code" for the areas where it should apply). Every alarm_control_panel service call already accepts a `code`, so a keypad PIN is validated the same way as one typed into the HA UI.
 
 Example Home Assistant automations for Alarmo (the same works for any `alarm_control_panel`):
 
@@ -243,11 +256,6 @@ Example Home Assistant automations for Alarmo (the same works for any `alarm_con
         topic: "wyzesense2mqtt/keypad/pin_result"
         payload: "invalid"
 ```
-
-> [!IMPORTANT]
-> The action topic carries PINs. It is never retained, but anything subscribed to it sees them, so restrict it with broker ACLs. PINs are redacted from the gateway's logs, except at `trace` level, where the USB transport logs raw bytes.
-
-Availability self-healing: only `online` statuses are retained. A sleeping sensor's `offline` is not kept by the broker, so entities don't stay stuck "unavailable" for hours after the sensor wakes and reports again — the next report (or a gateway/HA restart, or HA's MQTT birth `homeassistant/status` → re-announce) restores the correct state. The same applies to the gateway's own LWT: an unclean shutdown marks entities unavailable without persisting that across broker restarts.
 
 ---
 
