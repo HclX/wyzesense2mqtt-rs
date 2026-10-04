@@ -465,7 +465,7 @@ async fn run_daemon(
                 status_topic,
                 "offline",
                 rumqttc::v5::mqttbytes::QoS::AtLeastOnce,
-                true, // retain
+                false, // not retained: a retained will keeps HA offline after broker restarts
                 Some(last_will_props)
             );
             

@@ -100,7 +100,9 @@ fn build_device_metadata(mac: &str, friendly_name: &str, sensor_type: SensorType
     })
 }
 
-// Helper to build common sensor discovery configs (battery, signal)
+// Helper to build common sensor discovery configs (battery, signal).
+// Keypads never report a die temperature, so pass `include_die_temperature:
+// false` to avoid advertising an entity that can never get a value.
 fn push_common_discovery_payloads(
     mac: &str,
     friendly_name: &str,
@@ -108,6 +110,7 @@ fn push_common_discovery_payloads(
     battery_pct: Option<u8>,
     topic_root: &str,
     payloads: &mut Vec<(String, Value)>,
+    include_die_temperature: bool,
 ) {
     let device_id = format!("wyzesense_{}", mac);
     let device = build_device_metadata(mac, friendly_name, sensor_type);
@@ -154,23 +157,25 @@ fn push_common_discovery_payloads(
             })
         ));
 
-        // Die temperature diagnostic entity
-        payloads.push((
-            format!("homeassistant/sensor/{}/die_temperature/config", device_id),
-            json!({
-                "name": "Die Temperature",
-                "state_topic": state_topic,
-                "value_template": "{{ value_json.die_temperature }}",
-                "device_class": "temperature",
-                "unit_of_measurement": "°C",
-                "state_class": "measurement",
-                "unique_id": format!("{}_die_temperature", device_id),
-                "device": device.clone(),
-                "availability": availability.clone(),
-                "availability_mode": "all",
-                "entity_category": "diagnostic",
-            })
-        ));
+        // Die temperature diagnostic entity (keypads have no such byte)
+        if include_die_temperature {
+            payloads.push((
+                format!("homeassistant/sensor/{}/die_temperature/config", device_id),
+                json!({
+                    "name": "Die Temperature",
+                    "state_topic": state_topic,
+                    "value_template": "{{ value_json.die_temperature }}",
+                    "device_class": "temperature",
+                    "unit_of_measurement": "°C",
+                    "state_class": "measurement",
+                    "unique_id": format!("{}_die_temperature", device_id),
+                    "device": device.clone(),
+                    "availability": availability.clone(),
+                    "availability_mode": "all",
+                    "entity_category": "diagnostic",
+                })
+            ));
+        }
     }
 
     payloads.push((
@@ -197,8 +202,8 @@ impl WyzeSensor {
             SensorType::ContactV2 | SensorType::MotionV2 |
             SensorType::LeakV2 | SensorType::ClimateV2 => (3600 * 4, Some(100u8)),
             SensorType::Chime => (3600 * 24, None), // Mains-powered, no battery
-            // Heartbeat interval unknown; battery byte not decoded yet
-            SensorType::Keypad => (3600 * 24, None),
+            // 0–155 battery scale, reported per event; heartbeat interval unknown
+            SensorType::Keypad => (3600 * 24, Some(100u8)),
             SensorType::Unknown(_) => (1800, Some(100u8)),
         };
         let state = Self::default_state_for_type(sensor_type).unwrap_or(SensorState::Unknown);
@@ -269,6 +274,8 @@ impl WyzeSensor {
                 (Some(*battery), Some(*rssi), Some(*die_temperature_c), Some(*event_sequence)),
             TelemetryData::Leak { battery, rssi, .. } =>
                 (Some(*battery), Some(*rssi), None, None),
+            TelemetryData::Keypad { battery, rssi, .. } =>
+                (Some(*battery), Some(*rssi), None, None),
             TelemetryData::Scanned { .. } => (Some(100), Some(0), None, None),
             _ => (None, None, None, None),
         };
@@ -284,9 +291,6 @@ impl WyzeSensor {
                 self.battery_pct = Some(pct);
             }
             self.rssi_dbm = r;
-        }
-        if let TelemetryData::Keypad { rssi, .. } = &event.data {
-            self.rssi_dbm = *rssi;
         }
         if let Some(dt) = die_temp {
             self.die_temperature_c = Some(dt);
@@ -504,6 +508,7 @@ impl WyzeSensor {
         push_common_discovery_payloads(
             &self.mac, &self.friendly_name, self.sensor_type, self.battery_pct,
             topic_root, &mut payloads,
+            !matches!(self.sensor_type, SensorType::Keypad),
         );
 
         match &self.state {

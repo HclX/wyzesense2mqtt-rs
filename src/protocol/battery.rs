@@ -33,6 +33,14 @@ pub enum BatteryChemistry {
     /// Alkaline discharge characteristics at the 3V scale.
     /// Raw byte range: 0–100.
     Alkaline3VDualAAA,
+
+    /// Keypad battery pack (2× NiMH cells, ~2.4–3.2V). Reports on an
+    /// independent 0–155 scale, not the AON_BATMON voltage encoding — 155
+    /// reads ≈4.84V on the /32.0 scale, so the byte tracks pack voltage but
+    /// has no volt meaning of its own. Discharge slope unknown; one linear
+    /// segment, and the percentage is an estimate.
+    /// Raw byte range: 0–155.
+    KeypadPack,
 }
 
 impl BatteryChemistry {
@@ -49,8 +57,10 @@ impl BatteryChemistry {
             SensorType::ContactV2 => Some(BatteryChemistry::Alkaline1V5SingleAAA),
             // Motion V2: 2× AAA = 3V
             SensorType::MotionV2 => Some(BatteryChemistry::Alkaline3VDualAAA),
-            // Chime is mains-powered; the keypad's battery byte isn't decoded yet; Unknown we can't map
-            SensorType::Chime | SensorType::Keypad | SensorType::Unknown(_) => None,
+            // Keypad: battery pack on a separate 0–155 scale (not AON_BATMON)
+            SensorType::Keypad => Some(BatteryChemistry::KeypadPack),
+            // Chime is mains-powered; Unknown we can't map
+            SensorType::Chime | SensorType::Unknown(_) => None,
         }
     }
 }
@@ -94,6 +104,13 @@ const ALKALINE_3V_CURVE: &[(u8, u8)] = &[
     (64,   0),   // 2.00V — dead
 ];
 
+// Keypad battery pack: independent 0–155 raw scale (not AON_BATMON),
+// normalised to 0–100 by division. Discharge shape unmeasured.
+const KEYPAD_PACK_CURVE: &[(u8, u8)] = &[
+    (155, 100),
+    (0,     0),
+];
+
 /// Convert a raw voltage-proportional battery byte to estimated remaining capacity.
 ///
 /// Uses piecewise linear interpolation on the discharge curve for the given chemistry.
@@ -103,6 +120,7 @@ pub fn raw_to_capacity(raw: u8, chemistry: BatteryChemistry) -> u8 {
         BatteryChemistry::Lithium3VCoinCell => LITHIUM_3V_CURVE,
         BatteryChemistry::Alkaline1V5SingleAAA => ALKALINE_1V5_CURVE,
         BatteryChemistry::Alkaline3VDualAAA => ALKALINE_3V_CURVE,
+        BatteryChemistry::KeypadPack => KEYPAD_PACK_CURVE,
     };
     interpolate(raw, curve)
 }
@@ -201,6 +219,27 @@ mod tests {
         assert_eq!(raw_to_capacity(64, BatteryChemistry::Alkaline3VDualAAA), 0);
     }
 
+    // --- Keypad pack curve ---
+
+    #[test]
+    fn keypad_pack_full_battery() {
+        assert_eq!(raw_to_capacity(155, BatteryChemistry::KeypadPack), 100);
+        // Above max raw still returns 100
+        assert_eq!(raw_to_capacity(255, BatteryChemistry::KeypadPack), 100);
+    }
+
+    #[test]
+    fn keypad_pack_dead_battery() {
+        assert_eq!(raw_to_capacity(0, BatteryChemistry::KeypadPack), 0);
+    }
+
+    #[test]
+    fn keypad_pack_scales_linearly() {
+        // Captured keypads read raw 0x85–0x95 (133–149) on healthy packs
+        assert_eq!(raw_to_capacity(139, BatteryChemistry::KeypadPack), 90);
+        assert_eq!(raw_to_capacity(78, BatteryChemistry::KeypadPack), 50);
+    }
+
     // --- Chemistry mapping ---
 
     #[test]
@@ -217,6 +256,8 @@ mod tests {
                    Some(BatteryChemistry::Alkaline1V5SingleAAA));
         assert_eq!(BatteryChemistry::for_sensor(SensorType::MotionV2),
                    Some(BatteryChemistry::Alkaline3VDualAAA));
+        assert_eq!(BatteryChemistry::for_sensor(SensorType::Keypad),
+                   Some(BatteryChemistry::KeypadPack));
         assert_eq!(BatteryChemistry::for_sensor(SensorType::Chime), None);
         assert_eq!(BatteryChemistry::for_sensor(SensorType::Unknown(0xFF)), None);
     }

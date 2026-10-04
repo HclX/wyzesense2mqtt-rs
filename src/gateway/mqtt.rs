@@ -27,6 +27,20 @@ pub struct DongleStatus {
     pub version: Option<String>,
 }
 
+/// True when an MQTT message is Home Assistant's MQTT-integration birth
+/// ("online" on the non-retained `homeassistant/status` topic). The gateway
+/// re-announces every known sensor on it, so entities heal after an HA restart.
+fn is_ha_birth(topic: &str, payload: &str) -> bool {
+    topic == "homeassistant/status" && payload.trim() == "online"
+}
+
+/// The availability retain policy: `online` is retained so it replays to
+/// Home Assistant after HA/broker restarts, `offline` is not so a sleeping
+/// sensor's status doesn't poison the broker's persistence DB for hours.
+fn availability_retain(is_online: bool) -> bool {
+    is_online
+}
+
 pub struct MqttGateway {
     client: AsyncClient,
     event_loop: rumqttc::v5::EventLoop,
@@ -105,6 +119,11 @@ impl MqttGateway {
         let dongle_topic_prefix = format!("{}/dongle/", topic_root);
         let dongle_topic_suffix = "/scan/set";
 
+        // Home Assistant publishes "online" here, non-retained, when its MQTT
+        // integration starts: the birth message. Re-announcing on it heals
+        // entities if HA restarted while sensors were asleep and anything in
+        // between overwrote their availability or state topics.
+        let hass_birth_topic = "homeassistant/status".to_string();
         let keypad_loop = self.keypad.clone();
         let keypad_topics: Vec<String> = self.keypad.as_ref()
             .map(|k| vec![k.alarm_state_topic().to_string(), k.pin_result_topic()])
@@ -137,7 +156,13 @@ impl MqttGateway {
                                 let sensor_manager_conn = sensor_manager_conn.clone();
                                 let published_discovery_conn = published_discovery_conn.clone();
                                 let keypad_topics = keypad_topics.clone();
+                                let hass_birth_topic = hass_birth_topic.clone();
                                 tokio::spawn(async move {
+                                    // Subscribe to the HA birth topic here too, so a
+                                    // later HA restart triggers re-announce below.
+                                    if let Err(e) = client.subscribe(&hass_birth_topic, QoS::AtLeastOnce).await {
+                                        error!("Failed to subscribe to HA birth topic: {}", e);
+                                    }
                                     announce_on_connect(
                                         &client,
                                         &topic_root,
@@ -161,6 +186,29 @@ impl MqttGateway {
                                     keypad.on_alarm_state(&payload);
                                 } else if let Some(keypad) = keypad_loop.as_ref().filter(|k| topic == k.pin_result_topic()) {
                                     keypad.on_pin_result(&payload);
+                                } else if is_ha_birth(&topic, &payload) {
+                                    // HA MQTT integration birth: everything we published
+                                    // before HA restarted may be stale for entities whose
+                                    // sensors were asleep; re-announce availability and
+                                    // state for every known sensor.
+                                    info!("Home Assistant MQTT integration online; re-announcing sensor state.");
+                                    let client = client.clone();
+                                    let topic_root = topic_root.clone();
+                                    let sensor_manager_birth = sensor_manager_conn.clone();
+                                    let published_discovery_birth = published_discovery_conn.clone();
+                                    tokio::spawn(async move {
+                                        let macs: Vec<String> = {
+                                            let manager = sensor_manager_birth.lock().unwrap();
+                                            manager.get_sensors().keys().cloned().collect()
+                                        };
+                                        for mac in macs {
+                                            let is_online = {
+                                                let manager = sensor_manager_birth.lock().unwrap();
+                                                manager.get_sensors().get(&mac).map(|s| s.is_online).unwrap_or(false)
+                                            };
+                                            announce_sensor(&client, &topic_root, &mac, is_online, &sensor_manager_birth, &published_discovery_birth, false).await;
+                                        }
+                                    });
                                 } else if topic == control_topic_scan_loop {
                                     warn!("Legacy scan topic used without dongle_mac target. Ignoring. Use dongle/{{mac}}/scan instead.");
                                     // Legacy broadcast scan is not supported per exclusive scan design.
@@ -305,10 +353,16 @@ async fn announce_sensor(
         }
     }
 
-    // Publish availability topic
+    // Publish availability topic. Only `online` is retained: a retained
+    // `offline` outlives the outage in the broker's persistence DB and keeps
+    // Home Assistant entities unavailable for hours/days on sleeping sensors,
+    // healing only when that sensor happens to report again. Non-retained
+    // offline still marks the entity unavailable immediately for every
+    // subscriber that is listening at that moment, and the boot-time
+    // re-announce below restores the correct state after any reconnect.
     let availability_topic = format!("{}/{}/status", topic_root, mac);
     let availability_payload = if is_online { "online" } else { "offline" };
-    if let Err(e) = client.publish(&availability_topic, QoS::AtLeastOnce, true, availability_payload).await {
+    if let Err(e) = client.publish(&availability_topic, QoS::AtLeastOnce, availability_retain(is_online), availability_payload).await {
         error!("Failed to publish availability for {}: {}", mac, e);
     }
 
@@ -594,7 +648,7 @@ mod tests {
             "Wyze Sense 77C066C0".to_string(),
         );
         let payloads = sensor.get_discovery_payloads("wyzesense");
-        assert_eq!(payloads.len(), 3); // signal + motion + button event (battery not decoded yet)
+        assert_eq!(payloads.len(), 5); // battery + battery_voltage + signal + motion + button event
 
         let motion = payloads.iter().find(|(t, _)| t == "homeassistant/binary_sensor/wyzesense_77C066C0/state/config").unwrap();
         assert_eq!(motion.1["device_class"], "motion");
@@ -602,6 +656,12 @@ mod tests {
         let button = payloads.iter().find(|(t, _)| t == "homeassistant/event/wyzesense_77C066C0/button/config").unwrap();
         assert_eq!(button.1["state_topic"], "wyzesense/77C066C0/keypad/event");
         assert_eq!(button.1["event_types"], serde_json::json!(["disarm", "arm_home", "arm_away", "panic"]));
+
+        // The keypad has no die temperature byte: no entity advertised for it
+        assert!(payloads.iter().all(|(t, _)| !t.contains("die_temperature")));
+
+        let battery = payloads.iter().find(|(t, _)| t == "homeassistant/sensor/wyzesense_77C066C0/battery/config").unwrap();
+        assert_eq!(battery.1["device_class"], "battery");
     }
 
     #[test]
@@ -617,14 +677,16 @@ mod tests {
             timestamp: SystemTime::now(),
             sensor_type: SensorType::Keypad,
             event_type: 0xEA,
-            data: TelemetryData::Keypad { event, rssi: -19, sequence: 1 },
+            data: TelemetryData::Keypad { event, rssi: -19, battery: 0x8B, sequence: 1 },
             dongle_mac: None,
         };
         sensor.update_from_event(&event(KeypadEvent::Motion(true))).unwrap();
         let payload = sensor.get_state_payload();
         assert_eq!(payload["state"], "active");
         assert_eq!(payload["signal_strength"], -19);
-        assert!(payload.get("battery").is_none());
+        // raw 0x8B = 139 on the keypad's 0-155 scale -> 90%
+        assert_eq!(payload["battery"], 90);
+        assert_eq!(payload["battery_voltage"], serde_json::json!(4.34375f32));
 
         // A PIN never reaches the (retained) state payload
         sensor.update_from_event(&event(KeypadEvent::Pin(KeypadPin::new(vec![1, 2, 3, 4])))).unwrap();
@@ -714,5 +776,15 @@ mod tests {
         assert_eq!(payload["probe_available"], false);
         // probe_state should always be present (defaults to "dry" when probe disconnected)
         assert_eq!(payload["probe_state"], "dry");
+    }
+
+    #[test]
+    fn test_ha_birth_predicate() {
+        assert!(is_ha_birth("homeassistant/status", "online"));
+        assert!(is_ha_birth("homeassistant/status", " online "));
+        assert!(!is_ha_birth("homeassistant/status", "offline"));
+        assert!(!is_ha_birth("homeassistant/status", "busy"));
+        assert!(!is_ha_birth("wyzesense2mqtt/status", "online"));
+        assert!(!is_ha_birth("homeassistant/status/other", "online"));
     }
 }

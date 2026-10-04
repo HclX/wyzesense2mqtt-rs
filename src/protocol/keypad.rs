@@ -9,7 +9,10 @@
 //!   0x01-0x08 MAC, ASCII
 //!   0x09      sensor type (0x05)
 //!   0x0A      len: number of bytes from 0x0B up to (not including) the signal byte
-//!   0x0B-0x0D unknown header (0x0D always 0x00)
+//!   0x0B      per-keypad constant, mostly stable (0x11/0x13/0x17 seen)
+//!   0x0C      battery, 0-155 scale (not AON_BATMON; pct = raw x 100 / 155,
+//!             pack voltage ~ raw / 32.0, see `battery.rs`)
+//!   0x0D      reserved (always 0x00)
 //!   0x0E      subtype
 //!   0x0F..    subtype data (PIN digit count = len - 6)
 //!   0x09+len  constant per keypad
@@ -364,8 +367,25 @@ mod tests {
         assert_eq!(evt.sensor_type, SensorType::Keypad);
         assert_eq!(
             evt.data,
-            TelemetryData::Keypad { event: KeypadEvent::Button(KeypadButton::Disarm), rssi: -0x13, sequence: 0x7A }
+            TelemetryData::Keypad { event: KeypadEvent::Button(KeypadButton::Disarm), rssi: -0x13, battery: 0x87, sequence: 0x7A }
         );
+    }
+
+    #[test]
+    fn parses_battery_header_byte() {
+        // Captured frames: healthy packs read raw 0x85-0x95 (keypads
+        // 77C066C0, 77C0CE7F and 77C51779 respectively).
+        let evt = keypad_event("55 AA 53 17 55 EA 37 37 43 35 31 37 37 39 05 08 11 92 00 0A 01 00 A1 2C 38 06 26");
+        assert_eq!(evt, KeypadEvent::Motion(true));
+        // The motion frame from keypad 77C51779 carries battery 0x92
+        match inbound("55 AA 53 17 55 EA 37 37 43 35 31 37 37 39 05 08 11 92 00 0A 01 00 A1 2C 38 06 26").data {
+            TelemetryData::Keypad { battery, rssi, sequence, .. } => {
+                assert_eq!(battery, 0x92);
+                assert_eq!(rssi, -0x38);
+                assert_eq!(sequence, 0x2C);
+            }
+            other => panic!("expected keypad telemetry, got {:?}", other),
+        }
     }
 
     #[test]

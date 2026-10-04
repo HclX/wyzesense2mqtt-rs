@@ -144,6 +144,9 @@ pub enum TelemetryData {
     Keypad {
         event: KeypadEvent,
         rssi: i8,
+        /// Raw battery byte, 0–155 scale (NOT the AON_BATMON encoding; pack
+        /// voltage ≈ raw / 32.0, pct = raw × 100 / 155, see `battery.rs`).
+        battery: u8,
         /// Per-keypad counter, +1 per event.
         sequence: u8,
     },
@@ -354,13 +357,15 @@ impl DongleEvent {
         // sensor type first. See `protocol::keypad` for the layout.
         if sensor_type == SensorType::Keypad {
             let len = *remaining.first().ok_or("Keypad payload too short")? as usize;
-            // remaining[0] = len, [1..=3] header, [4] subtype, [5..len-1] data,
-            // [len-1] per-keypad constant, [len] sequence, [len+1] signal
+            // remaining[0] = len, [1..=3] header ([2] = battery, 0–155 scale),
+            // [4] subtype, [5..len-1] data, [len-1] per-keypad constant,
+            // [len] sequence, [len+1] signal
             if len < 6 || remaining.len() < len + 2 {
                 return Err("Keypad payload too short");
             }
             let subtype = remaining[4];
             let data = &remaining[5..len - 1];
+            let battery = remaining[2];
             let sequence = remaining[len];
             let rssi = (remaining[len + 1] as i8).saturating_neg();
             return Ok(DongleEvent {
@@ -368,7 +373,7 @@ impl DongleEvent {
                 timestamp,
                 sensor_type,
                 event_type,
-                data: TelemetryData::Keypad { event: KeypadEvent::parse(subtype, data), rssi, sequence },
+                data: TelemetryData::Keypad { event: KeypadEvent::parse(subtype, data), rssi, battery, sequence },
                 dongle_mac: None,
             });
         }

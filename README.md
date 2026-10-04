@@ -176,7 +176,7 @@ Once `mqtt` is enabled in your `config.yaml`, **Wyze Sense to MQTT Bridge (Rust)
 | **Motion (V1/V2)** | Binary Sensor, Battery, Signal | `active` / `inactive` |
 | **Leak (V2)** | Moisture Binary Sensor, Probe Status, Battery, Signal | `wet` / `dry`, `connected` / `disconnected` |
 | **Climate (V2)** | Temperature (C), Humidity (%), Battery, Signal | Floats (e.g. `22.45°C`, `48%`) |
-| **Keypad** | Motion Binary Sensor, Button Event, Signal | `active` / `inactive`; events `disarm`, `arm_home`, `arm_away`, `panic` |
+| **Keypad** | Motion Binary Sensor, Button Event, Battery, Signal | `active` / `inactive`; events `disarm`, `arm_home`, `arm_away`, `panic` |
 
 ---
 
@@ -192,6 +192,7 @@ The Wyze Sense keypad never learns the alarm state on its own: it asks, and the 
 | `<root>/<MAC>/keypad/action` | gateway → HA | **no** | `{"action": "disarm" \| "arm_home" \| "arm_away", "code": "1234", "keypad": "<MAC>"}` (`code` only when a PIN was typed) |
 | `<root>/keypad/pin_result` | HA → gateway | no | `invalid` rejects the PIN immediately instead of after `response_timeout_ms` |
 | `<root>/<MAC>/keypad/event` | gateway → HA | no | `{"event_type": "disarm" \| "arm_home" \| "arm_away" \| "panic"}` (HA event entity, never a PIN) |
+| `homeassistant/status` | HA → gateway | no | HA birth (`online`): the gateway re-announces every known sensor's availability and state |
 
 How requests are answered:
 - **Disarm button:** the keypad is asked for a PIN. The PIN is then sent as a `disarm` action.
@@ -199,6 +200,8 @@ How requests are answered:
 - **PIN without a button** (e.g. during the entry delay): sent as `disarm`.
 - **PIN result:** accepted once the alarm state reaches the requested state, rejected on `invalid`, `alarmo_failed_to_arm` with reason `invalid_code`, or timeout.
 - **Side button:** only the `panic` event is published; what it does is up to your automations.
+
+Keypad battery: every keypad event carries a battery byte on its own 0–155 scale (not the AON_BATMON encoding other sensors use). The gateway publishes it as an estimated `Battery` percentage (raw ÷ 155) plus a `Battery Voltage` diagnostic (an internal reading of ≈4.5 V on healthy packs — not a direct cell voltage). The percentage is a linear estimate; the true discharge shape is not yet characterized, so treat low readings as a prompt to recharge soon rather than an exact gauge.
 
 Example Home Assistant automations for Alarmo (the same works for any `alarm_control_panel`):
 
@@ -243,6 +246,8 @@ Example Home Assistant automations for Alarmo (the same works for any `alarm_con
 
 > [!IMPORTANT]
 > The action topic carries PINs. It is never retained, but anything subscribed to it sees them, so restrict it with broker ACLs. PINs are redacted from the gateway's logs, except at `trace` level, where the USB transport logs raw bytes.
+
+Availability self-healing: only `online` statuses are retained. A sleeping sensor's `offline` is not kept by the broker, so entities don't stay stuck "unavailable" for hours after the sensor wakes and reports again — the next report (or a gateway/HA restart, or HA's MQTT birth `homeassistant/status` → re-announce) restores the correct state. The same applies to the gateway's own LWT: an unclean shutdown marks entities unavailable without persisting that across broker restarts.
 
 ---
 
