@@ -814,6 +814,7 @@ const HTML_CONTENT: &str = concat!(r##"
             else if (t.includes("motion")) tt = `<span class="tag border border-purple-900 bg-purple-950/20 text-purple-400">🏃 Motion</span>`;
             else if (t.includes("climate")) tt = `<span class="tag border border-sky-900 bg-sky-950/20 text-sky-400">🌡️ Climate</span>`;
             else if (t.includes("leak")) tt = `<span class="tag border border-blue-900 bg-blue-950/20 text-blue-400">💧 Leak</span>`;
+            else if (t.includes("keypad")) tt = `<span class="tag border border-fuchsia-900 bg-fuchsia-950/20 text-fuchsia-400">⌨️ Keypad</span>`;
             else tt = `<span class="tag border border-slate-800 bg-slate-900 text-slate-300">${s.sensor_type}</span>`;
 
             let st = `<span class="text-slate-500 italic text-xs">—</span>`;
@@ -821,6 +822,7 @@ const HTML_CONTENT: &str = concat!(r##"
                 case "Contact": st = s.state.is_open ? `<span class="text-rose-400 font-bold text-xs">Open</span>` : `<span class="text-emerald-400 font-bold text-xs">Closed</span>`; break;
                 case "Motion": st = s.state.is_active ? `<span class="text-rose-400 font-bold text-xs">Active</span>` : `<span class="text-emerald-400 font-bold text-xs">Clear</span>`; break;
                 case "Leak": st = s.state.is_wet ? `<span class="text-blue-400 font-bold text-xs">Wet</span>` : `<span class="text-emerald-400 font-bold text-xs">Dry</span>`; break;
+                case "Keypad": st = s.state.motion_active ? `<span class="text-rose-400 font-bold text-xs">Motion</span>` : `<span class="text-emerald-400 font-bold text-xs">Clear</span>`; break;
                 case "Climate": st = `<span class="text-cyan-400 font-mono text-xs">${parseFloat(s.state.temperature).toFixed(1)}°C / ${s.state.humidity}%</span>`; break;
             }
 
