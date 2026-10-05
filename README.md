@@ -203,6 +203,8 @@ How requests are answered:
 
 Keypad battery: every keypad event carries a battery byte on its own 0–155 scale (not the AON_BATMON encoding other sensors use). The gateway publishes it as an estimated `Battery` percentage (raw ÷ 155) plus a `Battery Voltage` diagnostic (an internal reading of ≈4.5 V on healthy packs — not a direct cell voltage). The percentage is a linear estimate; the true discharge shape is not yet characterized, so treat low readings as a prompt to recharge soon rather than an exact gauge.
 
+Keypad motion: the built-in PIR is what wakes the display when someone approaches — it is not a latched occupancy detector. A wave publishes `active`, and the keypad reports `inactive` as soon as the PIR clears, so expect brief pulses on the binary sensor, and expect the dashboard to show `Clear` again right after motion stops. This matches the Hub's behaviour (it answers motion-detected with the current alarm mode and never replies to motion-cleared).
+
 > [!IMPORTANT]
 > The action topic carries PINs. It is never retained, but anything subscribed to it sees them, so restrict it with broker ACLs. PINs are redacted from the gateway's logs, except at `trace` level, where the USB transport logs raw bytes.
 

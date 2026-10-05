@@ -117,6 +117,12 @@ impl KeypadController {
         };
         debug!("Keypad {}: {:?}", mac, kp_event);
 
+        if let KeypadEvent::Motion(false) = kp_event {
+            // The Hub ACKs motion-cleared without a reply; log it so motion
+            // traffic is visible without trace.
+            info!("Keypad {}: motion cleared", mac);
+        }
+
         if let KeypadEvent::Button(button) = kp_event {
             let payload = json!({ "event_type": button.event_type() }).to_string();
             if let Err(e) = self.client.publish(keypad_event_topic(&self.topic_root, mac), QoS::AtLeastOnce, false, payload).await {
