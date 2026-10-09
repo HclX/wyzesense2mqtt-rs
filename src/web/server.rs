@@ -215,7 +215,6 @@ async fn handle_bridge_connection(
     engine.inquiry_timeout = state.bridge.inquiry_timeout;
     // Held for the life of the connection; dropping it stops the engine worker.
     let exit_tx = engine.start();
-
     let handshake = match tokio::time::timeout(state.bridge.handshake_timeout, engine.initialize_handshake()).await {
         Ok(Ok(())) => Ok(()),
         Ok(Err(e)) => Err(e.to_string()),
@@ -254,7 +253,9 @@ async fn handle_bridge_connection(
 
     // Register in engines map
     let disconnect_notify = Arc::clone(&engine.disconnect_notify);
-    state.engines.lock().await.insert(mac.clone(), engine);
+    if state.engines.lock().await.insert(mac.clone(), engine).is_some() {
+        info!("Bridge dongle {} reconnected from {}; replacing the previous session", mac, remote_addr);
+    }
     let _ = state.dongle_status_tx.try_send(DongleStatus { mac: mac.clone(), online: true, version });
     let _ = state.broadcast_tx.send(());
 
