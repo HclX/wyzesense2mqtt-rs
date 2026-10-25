@@ -68,7 +68,6 @@ impl TestHarness {
             let mut engine = Engine::new(
                 dongle.transport(),
                 event_tx.clone(),
-                None,
             );
             let exit_tx = engine.start();
 
@@ -110,6 +109,7 @@ impl TestHarness {
         tokio::spawn(async move {
             if let Err(e) = start_web_server(
                 engines_server, sm_server, broadcast_server, event_tx_server, port, None,
+                tokio::sync::mpsc::channel(1).0,
             ).await {
                 panic!("Web server failed: {}", e);
             }
