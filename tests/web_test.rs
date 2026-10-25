@@ -44,7 +44,7 @@ async fn test_web_endpoints_integration() {
 
     // 2. Initialize engine and handshake
     let (event_tx, mut _event_rx) = mpsc::channel::<DongleEvent>(32);
-    let mut engine = Engine::new(GatewayTransport::Replay(replay_transport.clone()), event_tx, None);
+    let mut engine = Engine::new(GatewayTransport::Replay(replay_transport.clone()), event_tx);
     let _exit_tx = engine.start();
     engine.initialize_handshake().await.unwrap();
 
@@ -76,7 +76,7 @@ async fn test_web_endpoints_integration() {
     let (test_event_tx, _test_event_rx) = mpsc::channel::<DongleEvent>(32);
     let engines_server = Arc::clone(&engines);
     tokio::spawn(async move {
-        if let Err(e) = start_web_server(engines_server, sensor_manager, broadcast_tx, test_event_tx, port, None).await {
+        if let Err(e) = start_web_server(engines_server, sensor_manager, broadcast_tx, test_event_tx, port, None, tokio::sync::mpsc::channel(1).0).await {
             panic!("Web server failed to run: {}", e);
         }
     });

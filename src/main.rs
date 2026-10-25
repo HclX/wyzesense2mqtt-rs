@@ -4,7 +4,7 @@ use wyzesense2mqtt_rs::transport::{AsyncTransport, GatewayTransport};
 use wyzesense2mqtt_rs::protocol::telemetry::{TelemetryData, DongleEvent, SensorType};
 use wyzesense2mqtt_rs::web::start_web_server;
 use wyzesense2mqtt_rs::config::app_config::AppConfig;
-use wyzesense2mqtt_rs::gateway::mqtt::{MqttGateway, GatewayCommand};
+use wyzesense2mqtt_rs::gateway::mqtt::{MqttGateway, GatewayCommand, DongleStatus};
 use wyzesense2mqtt_rs::protocol::sensor::SensorManager;
 use wyzesense2mqtt_rs::config::monitor::AvailabilityMonitor;
 use std::sync::Mutex;
@@ -265,6 +265,9 @@ async fn run_daemon(
     // Setup central events channel (shared across all engines)
     let (event_tx, event_rx) = mpsc::channel::<DongleEvent>(128);
 
+    // Bridge dongle connects/disconnects, published to MQTT by the gateway
+    let (dongle_status_tx, dongle_status_rx) = mpsc::channel::<DongleStatus>(32);
+
     // Setup mpsc channels for MQTT gateway command callbacks
     let (gateway_cmd_tx, mut gateway_cmd_rx) = mpsc::channel::<GatewayCommand>(32);
 
@@ -312,7 +315,7 @@ async fn run_daemon(
             let exit_tx = engine.start();
 
             // Perform dongle unlock handshake
-            match tokio::time::timeout(Duration::from_secs(8), engine.initialize_handshake()).await {
+            match tokio::time::timeout(wyzesense2mqtt_rs::engine::HANDSHAKE_TIMEOUT, engine.initialize_handshake()).await {
                 Ok(Ok(_)) => {
                     info!("Dongle on {} successfully unlocked and authenticated!", device_path);
                     engine.set_auto_verify(true);
@@ -471,6 +474,7 @@ async fn run_daemon(
             let gateway = MqttGateway::new(
                 mqtt_options,
                 event_rx, // Consumes event receiver
+                dongle_status_rx,
                 gateway_cmd_tx,
                 config.mqtt.self_topic_root.clone(),
                 Arc::clone(&sensor_manager),
@@ -548,7 +552,7 @@ async fn run_daemon(
 
     // Route B: Web REST Control Server (if enabled)
     if config.web.enabled {
-        start_web_server(Arc::clone(&engines), Arc::clone(&sensor_manager), broadcast_tx.clone(), event_tx.clone(), config.web.port, config.bridge.auth_token.clone()).await?;
+        start_web_server(Arc::clone(&engines), Arc::clone(&sensor_manager), broadcast_tx.clone(), event_tx.clone(), config.web.port, config.bridge.auth_token.clone(), dongle_status_tx.clone()).await?;
     } else {
         info!("Web Panel is disabled. Running in headless daemon mode.");
         if let Some(handle) = mqtt_gateway_handle {

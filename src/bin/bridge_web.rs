@@ -6,7 +6,6 @@ use wyzesense2mqtt_rs::protocol::telemetry::DongleEvent;
 use wyzesense2mqtt_rs::protocol::sensor::SensorManager;
 use std::sync::Arc;
 
-use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{error, info, Level};
 use tracing_subscriber::FmtSubscriber;
@@ -94,7 +93,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let _exit_tx = engine.start();
 
     // 6. Perform dongle unlock handshake
-    match tokio::time::timeout(Duration::from_secs(8), engine.initialize_handshake()).await {
+    match tokio::time::timeout(wyzesense2mqtt_rs::engine::HANDSHAKE_TIMEOUT, engine.initialize_handshake()).await {
         Ok(Ok(_)) => info!("Dongle successfully unlocked and authenticated!"),
         Ok(Err(e)) => {
             error!("Failed during dongle handshake exchange: {}", e);
@@ -116,7 +115,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     }
 
     // 8. Start HTTP REST Web UI blocking thread
-    start_web_server(engines, sensor_manager, broadcast_tx, event_tx.clone(), port, None).await?;
+    // No MQTT here, so nothing consumes dongle status updates.
+    let (dongle_status_tx, _) = mpsc::channel(1);
+    start_web_server(engines, sensor_manager, broadcast_tx, event_tx.clone(), port, None, dongle_status_tx).await?;
 
     Ok(())
 }

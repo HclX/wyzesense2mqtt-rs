@@ -40,7 +40,7 @@ async fn test_dongle_handshake_integration() {
     let (event_tx, _event_rx) = mpsc::channel::<DongleEvent>(32);
 
     // 3. Initialize the engine
-    let mut engine = Engine::new(GatewayTransport::Replay(replay_transport.clone()), event_tx, None);
+    let mut engine = Engine::new(GatewayTransport::Replay(replay_transport.clone()), event_tx);
 
     // Start the listener thread loop
     let exit_tx = engine.start();

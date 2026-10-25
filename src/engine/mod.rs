@@ -15,6 +15,13 @@ use tracing::{debug, error, info, warn};
 /// Shared across the web server, gateway command router, and event router.
 pub type EnginesMap = std::sync::Arc<tokio::sync::Mutex<std::collections::HashMap<String, Engine>>>;
 
+/// Overall time allowed for `initialize_handshake`, Inquiry retries included.
+pub const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// How many times the handshake sends the Inquiry before giving up. One lost
+/// packet on a serial line should not cost the whole handshake.
+const INQUIRY_ATTEMPTS: u32 = 3;
+
 type PendingRequests = Arc<Mutex<HashMap<u16, oneshot::Sender<Packet>>>>;
 
 pub struct Engine {
@@ -40,6 +47,8 @@ pub struct Engine {
     pub transport_label: String,     // "local" or "bridge"
     pub device_path: Option<String>, // e.g. /dev/hidraw0
     pub remote_addr: Option<String>, // e.g. 192.168.1.5:43210
+    /// How long each handshake Inquiry waits for its response before retrying.
+    pub inquiry_timeout: std::time::Duration,
     /// Notified when the engine's transport encounters a fatal error.
     pub disconnect_notify: Arc<tokio::sync::Notify>,
     /// Shared dongle MAC for the reader loop to stamp onto DongleEvents.
@@ -72,6 +81,7 @@ impl Engine {
             transport_label: "local".to_string(),
             device_path: None,
             remote_addr: None,
+            inquiry_timeout: std::time::Duration::from_secs(2),
             disconnect_notify: Arc::clone(&disconnect_notify),
             shared_dongle_mac: Arc::clone(&shared_dongle_mac),
         };
@@ -91,6 +101,7 @@ impl Engine {
             transport_label: "worker".to_string(),
             device_path: None,
             remote_addr: None,
+            inquiry_timeout: std::time::Duration::from_secs(2),
             disconnect_notify: Arc::clone(&disconnect_notify),
             shared_dongle_mac: Arc::clone(&shared_dongle_mac),
         };
@@ -378,6 +389,16 @@ impl Engine {
 
     /// Sends a command and awaits the expected response packet asynchronously.
     pub async fn do_command(&mut self, pkt: Packet, expected_response_cmd: u16) -> Result<Packet> {
+        self.do_command_with_timeout(pkt, expected_response_cmd, tokio::time::Duration::from_secs(5)).await
+    }
+
+    /// Like `do_command`, but waits at most `timeout` for the response.
+    pub async fn do_command_with_timeout(
+        &mut self,
+        pkt: Packet,
+        expected_response_cmd: u16,
+        timeout: std::time::Duration,
+    ) -> Result<Packet> {
         // Held for the whole round trip: see the comment on `cmd_lock`.
         let _cmd_guard = self.cmd_lock.lock().await;
 
@@ -392,7 +413,7 @@ impl Engine {
         self.transport.write(&pkt.to_bytes()).await?;
 
         // Wait for the worker thread to resolve the response
-        match tokio::time::timeout(tokio::time::Duration::from_secs(5), rx).await {
+        match tokio::time::timeout(timeout, rx).await {
             Ok(Ok(resp)) => Ok(resp),
             Ok(Err(_)) => Err(Error::new(ErrorKind::ConnectionAborted, "Oneshot channel closed")),
             Err(_) => {
@@ -409,8 +430,19 @@ impl Engine {
         info!("Starting dongle initialization handshake...");
 
         // 1. Inquiry (0x4327) -> expect InquiryResponse (0x4328)
-        let inquiry = Packet::new_sync((commands::CMD_INQUIRY & 0xFF) as u8, vec![]);
-        let resp = self.do_command(inquiry, commands::CMD_INQUIRY_RESPONSE).await?;
+        // Retried on timeout: a lost Inquiry or response is the common failure on
+        // a serial link, and the dongle answers a repeated Inquiry the same way.
+        let mut attempt = 1;
+        let resp = loop {
+            let inquiry = Packet::new_sync((commands::CMD_INQUIRY & 0xFF) as u8, vec![]);
+            match self.do_command_with_timeout(inquiry, commands::CMD_INQUIRY_RESPONSE, self.inquiry_timeout).await {
+                Err(e) if e.kind() == ErrorKind::TimedOut && attempt < INQUIRY_ATTEMPTS => {
+                    warn!("Handshake Inquiry attempt {}/{} timed out, retrying", attempt, INQUIRY_ATTEMPTS);
+                    attempt += 1;
+                }
+                res => break res?,
+            }
+        };
         if let PacketPayload::Bytes(bytes) = resp.payload {
             if bytes.get(0) != Some(&0x01) {
                 return Err(Error::new(ErrorKind::InvalidData, "Inquiry verification failed"));
@@ -661,6 +693,7 @@ impl Clone for Engine {
             transport_label: self.transport_label.clone(),
             device_path: self.device_path.clone(),
             remote_addr: self.remote_addr.clone(),
+            inquiry_timeout: self.inquiry_timeout,
             disconnect_notify: Arc::clone(&self.disconnect_notify),
             shared_dongle_mac: Arc::clone(&self.shared_dongle_mac),
         }

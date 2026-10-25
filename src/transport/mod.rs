@@ -5,6 +5,7 @@ pub mod virtual_dongle;
 use async_trait::async_trait;
 use std::io::Result;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use tokio::sync::Mutex as TokioMutex;
 use futures_util::{SinkExt, StreamExt};
@@ -42,6 +43,10 @@ pub enum GatewayTransport {
     WebSocket {
         reader: Arc<TokioMutex<futures_util::stream::SplitStream<WebSocket>>>,
         writer: Arc<TokioMutex<futures_util::stream::SplitSink<WebSocket, Message>>>,
+        /// Number of Pong frames received so far. The reader loop is the only
+        /// thing that polls the socket, so it counts pongs here for the bridge
+        /// heartbeat to check.
+        pongs: Arc<AtomicU64>,
     },
     /// Mock transport for unit/integration tests.
     Replay(ReplayTransport),
@@ -52,7 +57,7 @@ impl AsyncTransport for GatewayTransport {
     async fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
         match self {
             GatewayTransport::Hidraw(t) => t.read(buf).await,
-            GatewayTransport::WebSocket { reader, .. } => {
+            GatewayTransport::WebSocket { reader, pongs, .. } => {
                 let mut reader = reader.lock().await;
                 loop {
                     match reader.next().await {
@@ -67,8 +72,11 @@ impl AsyncTransport for GatewayTransport {
                                 "WebSocket stream ended",
                             ));
                         }
+                        Some(Ok(Message::Pong(_))) => {
+                            pongs.fetch_add(1, Ordering::SeqCst);
+                        }
                         Some(Ok(_)) => {
-                            // Skip non-binary messages (Ping, Pong, Text)
+                            // Skip other non-binary messages (Ping, Text)
                             continue;
                         }
                         Some(Err(e)) => {

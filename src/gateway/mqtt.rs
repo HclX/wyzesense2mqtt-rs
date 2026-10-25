@@ -15,10 +15,21 @@ pub enum GatewayCommand {
     Reload,
 }
 
+/// A dongle came or went at runtime (e.g. a `/ws/bridge` client connected or was
+/// dropped). The gateway publishes its discovery and `online`, or `offline`, to
+/// the dongle's MQTT status topic.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DongleStatus {
+    pub mac: String,
+    pub online: bool,
+    pub version: Option<String>,
+}
+
 pub struct MqttGateway {
     client: AsyncClient,
     event_loop: rumqttc::v5::EventLoop,
     event_rx: mpsc::Receiver<DongleEvent>,
+    dongle_status_rx: mpsc::Receiver<DongleStatus>,
     cmd_tx: mpsc::Sender<GatewayCommand>,
     topic_root: String,
     published_discovery: Arc<tokio::sync::Mutex<HashSet<String>>>,
@@ -31,6 +42,7 @@ impl MqttGateway {
     pub fn new(
         mut mqtt_options: MqttOptions,
         event_rx: mpsc::Receiver<DongleEvent>,
+        dongle_status_rx: mpsc::Receiver<DongleStatus>,
         cmd_tx: mpsc::Sender<GatewayCommand>,
         topic_root: String,
         sensor_manager: Arc<Mutex<SensorManager>>,
@@ -48,6 +60,7 @@ impl MqttGateway {
             client,
             event_loop,
             event_rx,
+            dongle_status_rx,
             cmd_tx,
             topic_root,
             published_discovery: Arc::new(tokio::sync::Mutex::new(HashSet::new())),
@@ -148,6 +161,28 @@ impl MqttGateway {
                     Err(e) => {
                         error!("MQTT event loop error: {}", e);
                         tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                    }
+                }
+            }
+        });
+
+        // Publish runtime dongle connects/disconnects.
+        let mut dongle_status_rx = self.dongle_status_rx;
+        let client_status = self.client.clone();
+        let topic_root_status = self.topic_root.clone();
+        tokio::spawn(async move {
+            while let Some(status) = dongle_status_rx.recv().await {
+                if status.online {
+                    let version = status.version.as_deref().unwrap_or("unknown");
+                    if let Err(e) = publish_dongle_discovery(&client_status, &topic_root_status, &status.mac, version).await {
+                        error!("Failed to publish dongle discovery for {}: {}", status.mac, e);
+                    }
+                } else {
+                    let status_topic = format!("{}/dongle/{}/status", topic_root_status, status.mac);
+                    if let Err(e) = client_status.publish(status_topic, QoS::AtLeastOnce, true, "offline").await {
+                        error!("Failed to publish dongle {} offline: {}", status.mac, e);
+                    } else {
+                        info!("Published dongle {} status: offline", status.mac);
                     }
                 }
             }

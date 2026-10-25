@@ -20,22 +20,52 @@ use std::convert::Infallible;
 use std::sync::Arc;
 use std::net::SocketAddr;
 
+use axum::extract::ws::{CloseFrame, Message, WebSocket};
+use futures_util::SinkExt;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{info, debug, error, warn};
 
 use crate::protocol::sensor::SensorManager;
+use crate::gateway::mqtt::DongleStatus;
 
 pub struct WebState {
     pub engines: EnginesMap,
     pub sensor_manager: Arc<std::sync::Mutex<SensorManager>>,
     pub broadcast_tx: tokio::sync::broadcast::Sender<()>,
     pub event_tx: tokio::sync::mpsc::Sender<crate::protocol::telemetry::DongleEvent>,
-    /// Keeps engine worker loops alive for bridge-connected dongles.
-    /// When an exit_tx is dropped, its engine's background loop exits.
-    pub engine_exit_handles: tokio::sync::Mutex<Vec<tokio::sync::oneshot::Sender<()>>>,
+    /// Bridge dongle connects/disconnects, for the MQTT dongle status topic.
+    pub dongle_status_tx: tokio::sync::mpsc::Sender<DongleStatus>,
     /// Optional auth token required for WebSocket bridge connections.
     pub bridge_auth_token: Option<String>,
+    pub bridge: BridgeSettings,
 }
+
+/// Timing for `/ws/bridge` connections.
+pub struct BridgeSettings {
+    /// Time allowed for the whole dongle handshake.
+    pub handshake_timeout: Duration,
+    /// How long each handshake Inquiry waits before it is retried.
+    pub inquiry_timeout: Duration,
+    /// How often each bridge client is pinged.
+    pub ping_interval: Duration,
+    /// Consecutive unanswered pings after which the client is dropped.
+    pub max_missed_pongs: u32,
+}
+
+impl Default for BridgeSettings {
+    fn default() -> Self {
+        Self {
+            handshake_timeout: crate::engine::HANDSHAKE_TIMEOUT,
+            inquiry_timeout: Duration::from_secs(2),
+            ping_interval: Duration::from_secs(30),
+            max_missed_pongs: 3,
+        }
+    }
+}
+
+type BridgeWriter = Arc<tokio::sync::Mutex<futures_util::stream::SplitSink<WebSocket, Message>>>;
 
 #[derive(Serialize, Deserialize)]
 pub struct DongleStateResponse {
@@ -92,22 +122,33 @@ pub async fn start_web_server(
     event_tx: tokio::sync::mpsc::Sender<crate::protocol::telemetry::DongleEvent>,
     port: u16,
     bridge_auth_token: Option<String>,
+    dongle_status_tx: tokio::sync::mpsc::Sender<DongleStatus>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let shared_state = Arc::new(WebState {
         engines,
         sensor_manager,
         broadcast_tx,
         event_tx,
-        engine_exit_handles: tokio::sync::Mutex::new(Vec::new()),
+        dongle_status_tx,
         bridge_auth_token,
+        bridge: BridgeSettings::default(),
     });
 
+    let addr = SocketAddr::from(([0, 0, 0, 0], port));
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    info!("Web interface successfully started. Listening on http://{}", addr);
+    
+    axum::serve(listener, router(shared_state).into_make_service_with_connect_info::<SocketAddr>()).await?;
+    Ok(())
+}
+
+fn router(shared_state: Arc<WebState>) -> Router {
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)
         .allow_headers(Any);
 
-    let app = Router::new()
+    Router::new()
         .route("/", get(serve_dashboard))
         .route("/api/dongle", get(get_dongle_state))
         .route("/api/dongles", get(list_dongles))
@@ -122,14 +163,7 @@ pub async fn start_web_server(
         .route("/api/events", get(sse_handler))
         .route("/ws/bridge", get(ws_bridge_handler))
         .layer(cors)
-        .with_state(shared_state);
-
-    let addr = SocketAddr::from(([0, 0, 0, 0], port));
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    info!("Web interface successfully started. Listening on http://{}", addr);
-    
-    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await?;
-    Ok(())
+        .with_state(shared_state)
 }
 
 // --- GET /ws/bridge ---
@@ -157,7 +191,7 @@ async fn ws_bridge_handler(
 }
 
 async fn handle_bridge_connection(
-    socket: axum::extract::ws::WebSocket,
+    socket: WebSocket,
     state: Arc<WebState>,
     remote_addr: String,
     device_path: Option<String>,
@@ -166,84 +200,91 @@ async fn handle_bridge_connection(
     info!("New WebSocket bridge connection from {} (device: {:?})", remote_addr, device_path);
 
     let (writer, reader) = socket.split();
+    let writer: BridgeWriter = Arc::new(tokio::sync::Mutex::new(writer));
+    let pongs = Arc::new(AtomicU64::new(0));
     let transport = GatewayTransport::WebSocket {
         reader: Arc::new(tokio::sync::Mutex::new(reader)),
-        writer: Arc::new(tokio::sync::Mutex::new(writer)),
+        writer: Arc::clone(&writer),
+        pongs: Arc::clone(&pongs),
     };
 
     let mut engine = Engine::new(transport, state.event_tx.clone());
     engine.transport_label = "bridge".to_string();
     engine.device_path = device_path;
     engine.remote_addr = Some(remote_addr.clone());
+    engine.inquiry_timeout = state.bridge.inquiry_timeout;
+    // Held for the life of the connection; dropping it stops the engine worker.
     let exit_tx = engine.start();
 
-    // Run handshake with timeout
-    let mac = match tokio::time::timeout(
-        std::time::Duration::from_secs(8),
-        engine.initialize_handshake(),
-    )
-    .await
-    {
-        Ok(Ok(_)) => {
-            let mac = engine.dongle_mac().unwrap_or("unknown").to_string();
-            info!("WebSocket bridge dongle registered: MAC={}", mac);
-            engine.set_auto_verify(true);
-
-            // Warm up sensor cache from dongle NVRAM
-            info!("Warming up sensors cache for bridge dongle {}...", mac);
-            match engine.get_sensor_list().await {
-                Ok(sensors_list) => {
-                    let mut manager = state.sensor_manager.lock().unwrap();
-                    // Assign NVRAM sensors to this dongle in the single source of truth
-                    manager.assign_dongle(&mac, &sensors_list);
-                    info!("Assigned {} NVRAM sensors to bridge dongle {}", sensors_list.len(), mac);
-
-                    // Inject dummy events to trigger MQTT discovery for assigned sensors
-                    inject_discovery_events(&manager, &state.event_tx, &sensors_list);
-                }
-                Err(e) => {
-                    error!("Failed to get sensor list for bridge dongle {}: {}", mac, e);
-                }
-            }
-
-            // Register in engines map and keep exit handle alive
-            let mut map = state.engines.lock().await;
-            map.insert(mac.clone(), engine);
-            drop(map);
-            state.engine_exit_handles.lock().await.push(exit_tx);
-            mac
-        }
-        Ok(Err(e)) => {
-            error!("WebSocket bridge handshake failed: {}", e);
-            // exit_tx is dropped here, signaling the engine worker to stop
-            return;
-        }
-        Err(_) => {
-            error!("WebSocket bridge handshake timed out");
-            // exit_tx is dropped here, signaling the engine worker to stop
-            return;
-        }
+    let handshake = match tokio::time::timeout(state.bridge.handshake_timeout, engine.initialize_handshake()).await {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(e)) => Err(e.to_string()),
+        Err(_) => Err("timed out".to_string()),
     };
-
-    // Wait for the engine's transport to die (WebSocket close / broken pipe).
-    // The reader loop fires disconnect_notify when the transport errors out.
-    {
-        let engines = state.engines.lock().await;
-        let notify = if let Some(eng) = engines.get(&mac) {
-            Arc::clone(&eng.disconnect_notify)
-        } else {
-            // Engine already gone — nothing to wait for
-            return;
-        };
-        drop(engines);
-        notify.notified().await;
-        info!("Bridge dongle {} disconnected, cleaning up", mac);
+    if let Err(reason) = handshake {
+        error!("WebSocket bridge handshake with {} failed: {}", remote_addr, reason);
+        drop(exit_tx);
+        // Without a close frame the client keeps thinking it is connected and
+        // never reconnects for a new handshake.
+        close_bridge(&writer, 1011, &format!("handshake failed: {}", reason)).await;
+        return;
     }
 
-    // Remove engine from the shared map
-    {
+    let mac = engine.dongle_mac().unwrap_or("unknown").to_string();
+    let version = engine.dongle_version().map(|s| s.to_string());
+    info!("WebSocket bridge dongle registered: MAC={}", mac);
+    engine.set_auto_verify(true);
+
+    // Warm up sensor cache from dongle NVRAM
+    info!("Warming up sensors cache for bridge dongle {}...", mac);
+    match engine.get_sensor_list().await {
+        Ok(sensors_list) => {
+            let mut manager = state.sensor_manager.lock().unwrap();
+            // Assign NVRAM sensors to this dongle in the single source of truth
+            manager.assign_dongle(&mac, &sensors_list);
+            info!("Assigned {} NVRAM sensors to bridge dongle {}", sensors_list.len(), mac);
+
+            // Inject dummy events to trigger MQTT discovery for assigned sensors
+            inject_discovery_events(&manager, &state.event_tx, &sensors_list);
+        }
+        Err(e) => {
+            error!("Failed to get sensor list for bridge dongle {}: {}", mac, e);
+        }
+    }
+
+    // Register in engines map
+    let disconnect_notify = Arc::clone(&engine.disconnect_notify);
+    state.engines.lock().await.insert(mac.clone(), engine);
+    let _ = state.dongle_status_tx.try_send(DongleStatus { mac: mac.clone(), online: true, version });
+    let _ = state.broadcast_tx.send(());
+
+    // Wait for the transport to die (WebSocket close / broken pipe; the reader
+    // loop fires disconnect_notify) or for the client to stop answering pings,
+    // which is how a half-open TCP connection shows up.
+    tokio::select! {
+        _ = disconnect_notify.notified() => {
+            info!("Bridge dongle {} disconnected, cleaning up", mac);
+        }
+        _ = heartbeat(&writer, &pongs, state.bridge.ping_interval, state.bridge.max_missed_pongs) => {
+            warn!("Bridge dongle {} missed {} pings, dropping connection", mac, state.bridge.max_missed_pongs);
+            close_bridge(&writer, 1011, "heartbeat timeout").await;
+        }
+    }
+    drop(exit_tx);
+
+    // Remove engine from the shared map, unless the client has already
+    // reconnected and a new connection registered the same dongle.
+    let still_ours = {
         let mut map = state.engines.lock().await;
-        map.remove(&mac);
+        let ours = map.get(&mac).is_some_and(|e| Arc::ptr_eq(&e.disconnect_notify, &disconnect_notify));
+        if ours {
+            map.remove(&mac);
+        }
+        ours
+    };
+    if !still_ours {
+        info!("Bridge dongle {} already re-registered by a newer connection", mac);
+        return;
     }
 
     // Cleanup: unassign sensors from disconnected dongle
@@ -252,7 +293,52 @@ async fn handle_bridge_connection(
         manager.unassign_dongle(&mac);
         info!("Unassigned sensors from disconnected bridge dongle {}", mac);
     }
+    let _ = state.dongle_status_tx.try_send(DongleStatus { mac, online: false, version: None });
     let _ = state.broadcast_tx.send(());
+}
+
+/// Pings the bridge client every `interval` and returns once `max_missed`
+/// pings in a row went unanswered (or a ping could not be sent).
+async fn heartbeat(writer: &BridgeWriter, pongs: &AtomicU64, interval: Duration, max_missed: u32) {
+    let mut missed = 0;
+    loop {
+        let before = pongs.load(Ordering::SeqCst);
+        // A send that blocks for a whole interval (full TCP buffer) counts as dead too.
+        let sent = tokio::time::timeout(interval, async {
+            writer.lock().await.send(Message::Ping(Vec::new())).await
+        })
+        .await;
+        if !matches!(sent, Ok(Ok(()))) {
+            return;
+        }
+        tokio::time::sleep(interval).await;
+        if pongs.load(Ordering::SeqCst) == before {
+            missed += 1;
+            debug!("Bridge client missed ping ({}/{})", missed, max_missed);
+            if missed >= max_missed {
+                return;
+            }
+        } else {
+            missed = 0;
+        }
+    }
+}
+
+/// Sends a close frame so the bridge client knows to reconnect.
+async fn close_bridge(writer: &BridgeWriter, code: u16, reason: &str) {
+    // Close reasons are limited to 123 bytes.
+    let mut end = reason.len().min(123);
+    while !reason.is_char_boundary(end) {
+        end -= 1;
+    }
+    let frame = CloseFrame { code, reason: reason[..end].to_string().into() };
+    let sent = tokio::time::timeout(Duration::from_secs(5), async {
+        writer.lock().await.send(Message::Close(Some(frame))).await
+    })
+    .await;
+    if !matches!(sent, Ok(Ok(()))) {
+        debug!("Could not send close frame to bridge client");
+    }
 }
 
 /// Injects dummy events for each sensor MAC to trigger initial MQTT discovery & state sync.
@@ -1002,3 +1088,155 @@ const HTML_CONTENT: &str = concat!(r##"
 </html>
 "##);
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::protocol::packet::commands;
+    use crate::transport::AsyncTransport;
+    use crate::transport::replay::ReplayTransport;
+    use crate::transport::virtual_dongle::VirtualDongle;
+    use futures_util::{SinkExt, StreamExt};
+    use tokio::sync::mpsc;
+    use tokio_tungstenite::tungstenite::Message as WsMessage;
+
+    type Client = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+    async fn start_server(bridge: BridgeSettings) -> (Client, Arc<WebState>, mpsc::Receiver<DongleStatus>) {
+        let (event_tx, _) = mpsc::channel(128);
+        let (dongle_status_tx, dongle_status_rx) = mpsc::channel(8);
+        let state = Arc::new(WebState {
+            engines: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
+            sensor_manager: Arc::new(std::sync::Mutex::new(SensorManager::new(
+                "/nonexistent/sensors.yaml".to_string(),
+                "/nonexistent/state.yaml".to_string(),
+            ))),
+            broadcast_tx: tokio::sync::broadcast::channel(16).0,
+            event_tx,
+            dongle_status_tx,
+            bridge_auth_token: None,
+            bridge,
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = router(Arc::clone(&state)).into_make_service_with_connect_info::<SocketAddr>();
+        tokio::spawn(async move { axum::serve(listener, app).await });
+        let (client, _) = tokio_tungstenite::connect_async(format!("ws://{}/ws/bridge", addr)).await.unwrap();
+        (client, state, dongle_status_rx)
+    }
+
+    /// Relays frames between the bridge connection and a virtual dongle until `until` completes.
+    async fn pump_until<F: std::future::Future>(client: &mut Client, dongle: &mut ReplayTransport, until: F) -> F::Output {
+        tokio::pin!(until);
+        let mut buf = [0u8; 1024];
+        loop {
+            tokio::select! {
+                out = &mut until => return out,
+                msg = client.next() => match msg {
+                    Some(Ok(WsMessage::Binary(data))) => dongle.write(&data).await.unwrap(),
+                    Some(Ok(_)) => {}
+                    other => panic!("bridge connection ended: {:?}", other),
+                },
+                n = dongle.read(&mut buf) => {
+                    client.send(WsMessage::Binary(buf[..n.unwrap()].to_vec())).await.unwrap();
+                }
+            }
+        }
+    }
+
+    /// Reads until the server's close frame, returning it and how many Inquiries came before it.
+    async fn read_until_close(client: &mut Client) -> (u16, String, usize) {
+        let mut inquiries = 0;
+        loop {
+            match client.next().await {
+                Some(Ok(WsMessage::Binary(data))) => {
+                    if Packet::parse(&data).is_ok_and(|(p, _)| p.cmd() == commands::CMD_INQUIRY) {
+                        inquiries += 1;
+                    }
+                }
+                Some(Ok(WsMessage::Close(Some(frame)))) => {
+                    return (frame.code.into(), frame.reason.to_string(), inquiries);
+                }
+                Some(Ok(_)) => {}
+                other => panic!("connection ended without a close frame: {:?}", other),
+            }
+        }
+    }
+
+    fn fast_settings() -> BridgeSettings {
+        BridgeSettings {
+            handshake_timeout: Duration::from_secs(3),
+            inquiry_timeout: Duration::from_millis(200),
+            ping_interval: Duration::from_millis(100),
+            max_missed_pongs: 3,
+        }
+    }
+
+    #[tokio::test]
+    async fn handshake_failure_closes_bridge_connection() {
+        let (mut client, state, _status_rx) = start_server(fast_settings()).await;
+
+        // Never answer the handshake.
+        let (code, reason, inquiries) = tokio::time::timeout(Duration::from_secs(5), read_until_close(&mut client))
+            .await
+            .expect("server did not close the connection");
+
+        assert_eq!(code, 1011);
+        assert!(reason.starts_with("handshake failed"), "reason: {}", reason);
+        assert_eq!(inquiries, 3, "Inquiry should be retried before giving up");
+        assert!(state.engines.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn handshake_survives_one_lost_inquiry() {
+        let (mut client, state, mut status_rx) = start_server(fast_settings()).await;
+        let dongle = VirtualDongle::new("DONGLE01", "V1.0").with_sensors(vec![]);
+        let mut transport = dongle.replay_transport().clone();
+
+        // Drop the first Inquiry, then behave.
+        loop {
+            if let Some(Ok(WsMessage::Binary(data))) = client.next().await {
+                if Packet::parse(&data).is_ok_and(|(p, _)| p.cmd() == commands::CMD_INQUIRY) {
+                    break;
+                }
+            }
+        }
+        let status = tokio::time::timeout(Duration::from_secs(5), pump_until(&mut client, &mut transport, status_rx.recv()))
+            .await
+            .expect("dongle never registered")
+            .unwrap();
+        assert_eq!(status, DongleStatus { mac: "DONGLE01".into(), online: true, version: Some("V1.0".into()) });
+        assert!(state.engines.lock().await.contains_key("DONGLE01"));
+    }
+
+    #[tokio::test]
+    async fn unresponsive_bridge_client_is_dropped() {
+        let (mut client, state, mut status_rx) = start_server(fast_settings()).await;
+        let dongle = VirtualDongle::new("DONGLE01", "V1.0").with_sensors(vec![]);
+        let mut transport = dongle.replay_transport().clone();
+
+        let status = tokio::time::timeout(Duration::from_secs(5), pump_until(&mut client, &mut transport, status_rx.recv()))
+            .await
+            .expect("dongle never registered")
+            .unwrap();
+        assert!(status.online);
+
+        // While the client keeps reading (and so answers pings), it stays connected.
+        pump_until(&mut client, &mut transport, tokio::time::sleep(Duration::from_millis(600))).await;
+        assert!(status_rx.try_recv().is_err());
+        assert!(state.engines.lock().await.contains_key("DONGLE01"));
+
+        // Stop reading: pings go unanswered, but the TCP connection stays up.
+        let status = tokio::time::timeout(Duration::from_secs(3), status_rx.recv())
+            .await
+            .expect("dongle was not dropped")
+            .unwrap();
+        assert_eq!(status, DongleStatus { mac: "DONGLE01".into(), online: false, version: None });
+        assert!(state.engines.lock().await.is_empty());
+
+        let (code, reason, _) = tokio::time::timeout(Duration::from_secs(2), read_until_close(&mut client))
+            .await
+            .expect("no close frame");
+        assert_eq!((code, reason.as_str()), (1011, "heartbeat timeout"));
+    }
+}
