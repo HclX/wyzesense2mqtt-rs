@@ -139,7 +139,7 @@ When the full command word is `0x53FF` (Async ACK):
 | **Sensor Scan** | `0x5320` | New sensor detected during scan mode. See Section 5.2. |
 | **Time Sync Request** | `0x5332` | Dongle requests current time. Host must reply with `0x5333`. |
 | **Event Log** | `0x5335` | Dongle log entry (informational, can be ignored). |
-| **Sensor Alarm2** | `0x5355` | Extended alarm event (leak sensor). See Section 6.4. |
+| **Sensor Alarm2** | `0x5355` | Extended alarm event (leak sensor, keypad). See Section 6.5. |
 
 ---
 
@@ -242,6 +242,7 @@ All standard telemetry events arrive via `0x5319`. The payload has an **18-byte 
 | `0x01` | Contact Sensor V1 (`switch`) | `0x00`=Closed, `0x01`=Open |
 | `0x02` | Motion Sensor V1 (`motion`) | `0x00`=Inactive, `0x01`=Active |
 | `0x03` | Leak Sensor (`leak`) | `0x00`=Dry, `0x01`=Wet |
+| `0x05` | Keypad (`keypad`) | See §6.5 Keypad Event Data |
 | `0x07` | Climate Sensor (`climate`) | N/A (temperature/humidity) |
 | `0x0C` | Chime (`chime`) | N/A |
 | `0x0E` | Contact Sensor V2 (`switchv2`) | `0x00`=Closed, `0x01`=Open |
@@ -345,7 +346,7 @@ Alarm1 Payload: [...header..., 18, 5f, 00, 03, 15, 2e, 30, 11, 36, 26]
 
 ### 6.5 Alarm2 — `NOTIFY_SENSOR_ALARM2` (`0x5355`)
 
-Alarm2 packets are used for **Leak Sensor** events. They have a different header format — **no timestamp** field. The current system time should be used instead.
+Alarm2 packets are used for **Leak Sensor** and **Keypad** events. They have a different header format — **no timestamp** field. The current system time should be used instead. The two are told apart by the sensor type byte (§6.1 table).
 
 #### Alarm2 Header (10 bytes)
 
@@ -374,6 +375,39 @@ Unpacked as format `>BBBBBBBBBBB`:
 | **6** | 1 | Probe State | `0x00`=Dry, `0x01`=Wet (external probe). |
 | **7** | 1 | Probe Available | `0x00`=No probe, `0x01`=Probe connected. |
 | **10** | 1 | Signal Strength | Unsigned RSSI. Dongle-appended. dBm = `-raw_value`. |
+
+#### Keypad Event Data (follows 10-byte header, sensor type `0x05`)
+
+Keypad events share the `0x5355` command with the leak sensor (sensor type dispatches
+them apart). Fields after the header:
+
+```
++---------+---------+---------+---------+---------+------------+---------------+---------+-------------------+
+| Len (1B)| Const(1B)| Battery (1B)| 0x00 (1B)| Subtype (1B)| Data…   | Const (1B) | Seq (1B)| Signal Str. (1B)  |
++---------+---------+---------+---------+---------+------------+---------------+---------+-------------------+
+ 0         1         2          3         4          5..          [len]-1         [len]     [len]+1
+```
+
+| Offset | Size | Field | Description |
+| :--- | :--- | :--- | :--- |
+| **0** | 1 | Length | Bytes from offset 1 up to (not including) the signal byte. |
+| **1** | 1 | Constant | Mostly stable per keypad (values `0x11`, `0x13`, `0x17` observed); one outlier `0x1A`. Meaning unknown. |
+| **2** | 1 | Battery | Keypad battery pack on an **independent 0–155 scale**, *not* the AON_BATMON encoding of §6.2 (pack voltage ≈ raw / 32.0, i.e. ≈4.5 V healthy). Percentage estimate = `min(100, raw × 100 / 155)`. |
+| **3** | 1 | Reserved | Always `0x00`. |
+| **4** | 1 | Sub-Event Type | 0x02=Mode button, 0x06=PIN entry started, 0x08=PIN (digits follow), 0x0A=Motion. |
+| **5..** | var | Sub-Event Data | E.g. button raw `01`/`02`/`03`/`04` (Disarm/Home/Away/side), motion `01`/`00`, PIN digits one per byte. |
+| **[len]** | 1 | Sequence | Per-keypad counter, +1 per event. |
+| **[len]+1** | 1 | Signal Strength | Unsigned RSSI. Dongle-appended. dBm = `-raw_value`. |
+
+##### Verbatim Keypad Capture Example (Hub UART, keypad `77C066C0`)
+```
+Frame:   55 AA 53 17 55 | EA | 37 37 43 30 36 36 43 30 | 05 | 08 | 17 | 87 | 00 | 02 | 01 00 | 8B | 7A | 13 | 06 | 2E
+         |---header---|   evt  |-------MAC "77C066C0"----|  05  len  const batt  res  sub  data    const seq  RSSI csum
+
+  Sub-Event: 0x02 = Mode button, data 01 = Disarm, len 08, sequence 0x7A
+  Battery:    0x87 = 135 → pct ≈ 135/155 ≈ 87% (pack ≈ 135/32 = 4.22 V)
+  RSSI:       0x13 = 19 → -19 dBm (dongle-measured)
+```
 
 ---
 

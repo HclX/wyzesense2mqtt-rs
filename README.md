@@ -15,6 +15,7 @@ A high-performance, lightweight, asynchronous USB-to-MQTT gateway for **Wyze Sen
 *   **🏠 Home Assistant Auto-Discovery**: Automatically registers sensors with Home Assistant showing battery states, signal strength (RSSI), and active/inactive telemetry states.
 *   **🎨 Premium Embedded Web UI Dashboard**: An elegant, dark-mode control panel with per-dongle sensor cards, per-dongle scan/pair actions, and real-time disconnect indicators.
 *   **🤝 Trait-Based Sensor Polymorphism**: Safe, type-secure modelling for Contact (V1/V2), Motion (V1/V2), Leak (V2), and Climate (V2) sensors.
+*   **⌨️ Keypad Support**: The Wyze Sense keypad works without the Wyze Hub. The gateway answers the keypad the way the Hub does, with Home Assistant (e.g. Alarmo) holding the alarm state and checking PINs. See the Keypad section below and the Alarmo section for setup.
 *   **💻 Lock-Free CLI Subcommands**: Control pairing, trigger chimes, list sensors, or inject raw packets directly from your terminal *without stopping the background daemon* using automatic REST fallback routing.
 *   **🔒 Safe Persistence**: Stores sensor database mappings persistently using atomic write operations to guarantee zero corruption during power losses.
 *   **🧪 Comprehensive E2E Test Suite**: 14 full-stack integration tests using an in-process `VirtualDongle` simulator — no hardware required.
@@ -134,6 +135,12 @@ mqtt:
   self_topic_root: "wyzesense2mqtt"      # State publish root
   hass_topic_root: "homeassistant"      # Auto-Discovery root
 
+# Keypad (see the Keypad section)
+keypad:
+  enabled: true
+  alarm_state_topic: "wyzesense2mqtt/keypad/alarm_state"  # default; e.g. "alarmo/state"
+  response_timeout_ms: 2000             # wait for HA before rejecting a PIN
+
 # Diagnostics Structural Logging Level
 # (Options: trace, debug, info, warn, error)
 logging:
@@ -169,6 +176,88 @@ Once `mqtt` is enabled in your `config.yaml`, **Wyze Sense to MQTT Bridge (Rust)
 | **Motion (V1/V2)** | Binary Sensor, Battery, Signal | `active` / `inactive` |
 | **Leak (V2)** | Moisture Binary Sensor, Probe Status, Battery, Signal | `wet` / `dry`, `connected` / `disconnected` |
 | **Climate (V2)** | Temperature (C), Humidity (%), Battery, Signal | Floats (e.g. `22.45°C`, `48%`) |
+| **Keypad** | Motion Binary Sensor, Button Event, Battery, Signal | `active` / `inactive`; events `disarm`, `arm_home`, `arm_away`, `panic` |
+
+---
+
+## ⌨️ Keypad
+
+The Wyze Sense keypad never learns the alarm state on its own: it asks, and the Hub answers (on a button press, when PIN entry starts, and when its motion sensor wakes it). The gateway takes the Hub's place. Home Assistant stays in charge of the alarm and of checking PINs; the gateway only relays.
+
+**PINs (codes) are managed in your alarm panel**, not the gateway (see the [Alarmo](#-alarmo-alarm-panel) section below).
+
+| Topic | Direction | Retained | Payload |
+| :--- | :--- | :--- | :--- |
+| `<root>/keypad/alarm_state` (or `keypad.alarm_state_topic`) | HA → gateway | yes | HA alarm state: `disarmed`, `arming`, `armed_home`, `armed_away`, `pending`, `triggered`, … |
+| `<root>/<MAC>/keypad/action` | gateway → HA | **no** | `{"action": "disarm" \| "arm_home" \| "arm_away", "code": "1234", "keypad": "<MAC>"}` (`code` only when a PIN was typed) |
+| `<root>/keypad/pin_result` | HA → gateway | no | `invalid` rejects the PIN immediately instead of after `response_timeout_ms` |
+| `<root>/<MAC>/keypad/event` | gateway → HA | no | `{"event_type": "disarm" \| "arm_home" \| "arm_away" \| "panic"}` (HA event entity, never a PIN) |
+| `homeassistant/status` | HA → gateway | no | HA birth (`online`): the gateway re-announces every known sensor's availability and state |
+
+How requests are answered:
+- **Disarm button:** the keypad is asked for a PIN. The PIN is then sent as a `disarm` action.
+- **Home / Away button:** an `arm_*` action without a code is sent. If the alarm state changes to `arming` or the armed state within the timeout, the keypad shows it; otherwise it asks for a PIN and the PIN is sent with the same action.
+- **PIN without a button** (e.g. during the entry delay): sent as `disarm`.
+- **PIN result:** accepted once the alarm state reaches the requested state, rejected on `invalid`, `alarmo_failed_to_arm` with reason `invalid_code`, or timeout.
+- **Side button:** only the `panic` event is published; what it does is up to your automations.
+
+Keypad battery: every keypad event carries a battery byte on its own 0–155 scale (not the AON_BATMON encoding other sensors use). The gateway publishes it as an estimated `Battery` percentage (raw ÷ 155) plus a `Battery Voltage` diagnostic (an internal reading of ≈4.5 V on healthy packs — not a direct cell voltage). The percentage is a linear estimate; the true discharge shape is not yet characterized, so treat low readings as a prompt to recharge soon rather than an exact gauge.
+
+Keypad motion: the built-in PIR is what wakes the display when someone approaches — it is not a latched occupancy detector. A wave publishes `active`, and the keypad reports `inactive` as soon as the PIR clears, so expect brief pulses on the binary sensor, and expect the dashboard to show `Clear` again right after motion stops. This matches the Hub's behaviour (it answers motion-detected with the current alarm mode and never replies to motion-cleared).
+
+> [!IMPORTANT]
+> The action topic carries PINs. It is never retained, but anything subscribed to it sees them, so restrict it with broker ACLs. PINs are redacted from the gateway's logs, except at `trace` level, where the USB transport logs raw bytes.
+
+Availability self-healing: only `online` statuses are retained. A sleeping sensor's `offline` is not kept by the broker, so entities don't stay stuck "unavailable" for hours after the sensor wakes and reports again — the next report (or a gateway/HA restart, or HA's MQTT birth `homeassistant/status` → re-announce) restores the correct state. The same applies to the gateway's own LWT: an unclean shutdown marks entities unavailable without persisting that across broker restarts.
+
+---
+
+## 🚨 Alarmo (Alarm Panel)
+
+The keypad works with any `alarm_control_panel`; the notes below use [Alarmo](https://github.com/nielsfaber/alarmo).
+
+**PINs (codes) are managed in Alarmo**, not the gateway: open Alarmo → Codes and add the code under a user (enable "use disarm code" for the areas where it should apply). Every alarm_control_panel service call already accepts a `code`, so a keypad PIN is validated the same way as one typed into the HA UI.
+
+Example Home Assistant automations for Alarmo (the same works for any `alarm_control_panel`):
+
+```yaml
+- alias: "Wyze keypad → alarm panel"
+  mode: queued
+  triggers:
+    - trigger: mqtt
+      topic: "wyzesense2mqtt/+/keypad/action"
+  actions:
+    - action: "alarm_control_panel.alarm_{{ trigger.payload_json.action }}"
+      target:
+        entity_id: alarm_control_panel.alarmo
+      data: "{{ {'code': trigger.payload_json.code} if 'code' in trigger.payload_json else {} }}"
+      continue_on_error: true
+
+- alias: "Alarm state → Wyze keypads"
+  triggers:
+    - trigger: state
+      entity_id: alarm_control_panel.alarmo
+  actions:
+    - action: mqtt.publish
+      data:
+        topic: "wyzesense2mqtt/keypad/alarm_state"
+        payload: "{{ trigger.to_state.state }}"
+        retain: true
+
+- alias: "Alarmo rejected a code from a Wyze keypad"
+  id: wyze_keypad_pin_result
+  triggers:
+    - trigger: event
+      event_type: alarmo_failed_to_arm
+  conditions:
+    - condition: template
+      value_template: "{{ trigger.event.data.reason == 'invalid_code' }}"
+  actions:
+    - action: mqtt.publish
+      data:
+        topic: "wyzesense2mqtt/keypad/pin_result"
+        payload: "invalid"
+```
 
 ---
 
@@ -209,7 +298,7 @@ To capture raw USB packet logs, increase log verbosity in `config.yaml`:
 logging:
   level: "trace"
 ```
-This records all byte read/write transactions. You can extract captured frames for test replays using the Python script provided in `tools/extract_packets.py`.
+This records all byte read/write transactions (including keypad PIN digits). You can extract captured frames for test replays using the Python script provided in `tools/extract_packets.py`.
 
 ---
 
