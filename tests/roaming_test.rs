@@ -111,7 +111,7 @@ async fn no_flag_is_sent_unless_configured() {
     let status = w.roaming.status_json();
     assert!(status["gateways"].as_array().unwrap().iter().all(|g| g["roaming"] == false));
     let info = w.roaming.gateway_json("GWAAAAAA").expect("detected as ours");
-    assert_eq!(info["flags_supported"], "00000013");
+    assert_eq!(info["flags_supported"], "00000017");
 
     // overheard reports are not merged without roaming
     b.inject_overheard(S_SHORT, S, SensorType::ContactV2, 1, 7, 80);

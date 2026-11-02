@@ -62,7 +62,12 @@ pub struct Engine {
     pub disconnect_notify: Arc<tokio::sync::Notify>,
     /// Shared dongle MAC for the reader loop to stamp onto DongleEvents.
     shared_dongle_mac: Arc<Mutex<Option<String>>>,
+    /// Where the reader loop passes OpenWyzeSense sensor-update packets
+    /// (0x53F1 subs 0x10, 0x11, 0x13), while a sensor update runs.
+    ota_listener: OtaListener,
 }
+
+type OtaListener = Arc<Mutex<Option<mpsc::UnboundedSender<Packet>>>>;
 
 impl Engine {
     pub fn new(transport: GatewayTransport, event_tx: mpsc::Sender<DongleEvent>) -> Self {
@@ -73,6 +78,7 @@ impl Engine {
         let sensor_list_tx = Arc::new(Mutex::new(None));
         let is_scanning = Arc::new(AtomicBool::new(false));
         let disconnect_notify = Arc::new(tokio::sync::Notify::new());
+        let ota_listener: OtaListener = Arc::new(Mutex::new(None));
         let shared_dongle_mac = Arc::new(Mutex::new(None));
 
         let engine = Self {
@@ -93,6 +99,7 @@ impl Engine {
             inquiry_timeout: std::time::Duration::from_secs(2),
             disconnect_notify: Arc::clone(&disconnect_notify),
             shared_dongle_mac: Arc::clone(&shared_dongle_mac),
+            ota_listener: Arc::clone(&ota_listener),
         };
 
         let mut engine_clone = Self {
@@ -113,6 +120,7 @@ impl Engine {
             inquiry_timeout: std::time::Duration::from_secs(2),
             disconnect_notify: Arc::clone(&disconnect_notify),
             shared_dongle_mac: Arc::clone(&shared_dongle_mac),
+            ota_listener: Arc::clone(&ota_listener),
         };
 
         tokio::spawn(async move {
@@ -186,6 +194,7 @@ impl Engine {
         let auto_verify_tx = self.auto_verify_tx.clone();
         let sensor_list_tx = Arc::clone(&self.sensor_list_tx);
         let shared_dongle_mac = Arc::clone(&self.shared_dongle_mac);
+        let ota_listener = Arc::clone(&self.ota_listener);
  
         // Duplicate self references for local callbacks
         let mut tx_transport = self.transport.clone();
@@ -234,6 +243,7 @@ impl Engine {
                                                 &auto_verify_tx,
                                                 &sensor_list_tx,
                                                 &shared_dongle_mac,
+                                                &ota_listener,
                                             ).await;
                                         }
                                         Err(e) => {
@@ -335,6 +345,7 @@ impl Engine {
         auto_verify_tx: &mpsc::Sender<(String, SensorType, u8)>,
         sensor_list_tx: &Arc<Mutex<Option<mpsc::Sender<String>>>>,
         shared_dongle_mac: &Arc<Mutex<Option<String>>>,
+        ota_listener: &OtaListener,
     ) {
         debug!("<=== Received packet: {}", pkt);
 
@@ -346,6 +357,13 @@ impl Engine {
         if let Some(key) = Self::pending_key(&pkt) {
             let mut pending_map = pending.lock().unwrap();
             if let Some(tx) = pending_map.remove(&key) {
+                let _ = tx.send(pkt.clone());
+            }
+        }
+        if pkt_cmd == ows::CMD_OWS_RESPONSE
+            && matches!(pkt.payload_bytes().and_then(|b| b.first()), Some(&(ows::SUB_OTA_OFFER | ows::SUB_OTA_NEED | ows::SUB_OTA_DONE)))
+        {
+            if let Some(tx) = ota_listener.lock().unwrap().as_ref() {
                 let _ = tx.send(pkt.clone());
             }
         }
@@ -770,6 +788,24 @@ impl Engine {
     }
 
     /// Sets the gateway's feature flags; returns what it reports back.
+    /// Receives the gateway's sensor-update packets until dropped or replaced.
+    pub fn subscribe_ota(&self) -> mpsc::UnboundedReceiver<Packet> {
+        let (tx, rx) = mpsc::unbounded_channel();
+        *self.ota_listener.lock().unwrap() = Some(tx);
+        rx
+    }
+
+    /// Stops passing sensor-update packets on.
+    pub fn unsubscribe_ota(&self) {
+        self.ota_listener.lock().unwrap().take();
+    }
+
+    /// Writes a complete host packet as it is (e.g. built by `ows-host`).
+    pub async fn write_raw(&self, bytes: &[u8]) -> Result<()> {
+        let mut t = self.transport.clone();
+        t.write(bytes).await
+    }
+
     pub async fn ows_set_flags(&mut self, flags: u32) -> Result<ows::Flags> {
         let mut payload = vec![ows::SUB_FLAGS];
         payload.extend_from_slice(&flags.to_be_bytes());
@@ -873,6 +909,7 @@ impl Clone for Engine {
             inquiry_timeout: self.inquiry_timeout,
             disconnect_notify: Arc::clone(&self.disconnect_notify),
             shared_dongle_mac: Arc::clone(&self.shared_dongle_mac),
+            ota_listener: Arc::clone(&self.ota_listener),
         }
     }
 }

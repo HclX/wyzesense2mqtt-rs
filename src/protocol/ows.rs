@@ -12,6 +12,10 @@ pub const SUB_FLAGS: u8 = 0x01;
 pub const SUB_BUILD_INFO: u8 = 0x02;
 pub const SUB_NETWORK: u8 = 0x04;
 pub const SUB_NV: u8 = 0x06;
+pub const SUB_OTA_OFFER: u8 = 0x10;
+pub const SUB_OTA_NEED: u8 = 0x11;
+pub const SUB_OTA_DATA: u8 = 0x12;
+pub const SUB_OTA_DONE: u8 = 0x13;
 pub const SUB_OVERHEARD: u8 = 0x20;
 pub const SUB_ADDR_RANGE: u8 = 0x23;
 
@@ -19,6 +23,7 @@ pub const NV_ADD_SENSOR: u8 = 0x03;
 pub const NV_GET_SENSOR: u8 = 0x04;
 
 pub const FLAG_DEDUP: u32 = 1 << 0;
+pub const FLAG_OTA: u32 = 1 << 2;
 pub const FLAG_FIX_ZERO_MAC: u32 = 1 << 1;
 pub const FLAG_ANNOUNCE: u32 = 1 << 3;
 pub const FLAG_ROAM: u32 = 1 << 4;

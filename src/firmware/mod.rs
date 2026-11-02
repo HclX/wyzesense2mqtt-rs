@@ -23,7 +23,9 @@
 //! USB flashing is for local dongles only; relays update themselves.
 
 mod relay;
+mod sensors;
 pub use relay::RelayInfo;
+pub use sensors::{SensorJob, SensorRow, SensorState};
 
 use crate::engine::EnginesMap;
 use crate::local_dongle::LocalDongles;
@@ -157,6 +159,10 @@ pub struct Firmware {
     /// The release fetched for the job in review.
     release: Mutex<Option<Release>>,
     next_id: Mutex<u64>,
+    /// The current (or last) sensor update.
+    sensor_job: Arc<Mutex<Option<SensorJob>>>,
+    /// Set to stop the running sensor update.
+    sensor_cancel: Arc<tokio::sync::Notify>,
 }
 
 fn default_opener() -> Opener {
@@ -215,6 +221,8 @@ impl Firmware {
             relay_cache: Mutex::new(Default::default()),
             release: Mutex::new(None),
             next_id: Mutex::new(1),
+            sensor_job: Arc::new(Mutex::new(None)),
+            sensor_cancel: Arc::new(tokio::sync::Notify::new()),
         })
     }
 
@@ -315,9 +323,37 @@ impl Firmware {
                 }),
             );
         }
+        // Sensor updates: gateways running OpenWyzeSense that can update sensors,
+        // and their sensors of a board our sensor firmware runs on.
+        let gateways: Vec<String> = self.engines.lock().await.keys().cloned().collect();
+        for mac in gateways {
+            let supported = self
+                .roaming
+                .as_ref()
+                .and_then(|r| r.gateway_json(&mac))
+                .and_then(|g| g["flags_supported"].as_str().and_then(|h| u32::from_str_radix(h, 16).ok()));
+            let Some(supported) = supported else { continue };
+            let sensors: Vec<serde_json::Value> = {
+                let manager = self.local.sensor_manager.lock().unwrap();
+                let mut list: Vec<_> = manager
+                    .get_sensors()
+                    .values()
+                    .filter(|s| s.dongle_mac.as_deref() == Some(mac.as_str()))
+                    .filter_map(|s| sensors::board_of(s.sensor_type).map(|b| serde_json::json!({ "mac": s.mac, "board": b })))
+                    .collect();
+                list.sort_by(|a, b| a["mac"].as_str().cmp(&b["mac"].as_str()));
+                list
+            };
+            let entry = out.entry(mac).or_insert_with(|| serde_json::json!({}));
+            entry["ota"] = serde_json::json!({
+                "supported": supported & ows_host::host::FLAG_OTA != 0,
+                "sensors": sensors,
+            });
+        }
         serde_json::json!({
             "release": RELEASE_VERSION,
             "job": self.job(),
+            "sensor_job": self.sensor_job(),
             "dongles": out,
         })
     }
@@ -355,6 +391,9 @@ impl Firmware {
                 }
             }
         };
+        if let Some(j) = self.sensor_job().filter(|j| j.active()) {
+            return Err(format!("a sensor update is running on gateway {}", j.gateway));
+        }
         let mut slot = self.job.lock().unwrap();
         if let Some(j) = slot.as_ref().filter(|j| j.step.active()) {
             return Err(format!("a firmware job is already running on dongle {}", j.dongle));
@@ -608,6 +647,15 @@ impl Firmware {
 
     /// One file of [`RELEASE_VERSION`] by product: (release version, file name, bytes), checked against the manifest.
     async fn fetch_file(&self, product: &str) -> Result<(String, String, Vec<u8>), String> {
+        self.fetch_matching(product, |f| f.product.as_deref() == Some(product)).await
+    }
+
+    /// The first file of [`RELEASE_VERSION`] that `pick` accepts (`what` names it in errors).
+    async fn fetch_matching(
+        &self,
+        what: &str,
+        pick: impl Fn(&ows_host::manifest::ManifestFile) -> bool,
+    ) -> Result<(String, String, Vec<u8>), String> {
         let base = self.source.replace("{version}", RELEASE_VERSION);
         let cache = self.cache_dir.join(RELEASE_VERSION);
         let remote = base.starts_with("http://") || base.starts_with("https://");
@@ -624,8 +672,10 @@ impl Firmware {
         };
         let manifest = Manifest::from_json(&manifest_text).map_err(|e| e.to_string())?;
         let file = manifest
-            .product(product)
-            .ok_or_else(|| format!("release {} has no {} image", manifest.version, product))?
+            .files
+            .iter()
+            .find(|f| pick(f))
+            .ok_or_else(|| format!("release {} has no {} image", manifest.version, what))?
             .clone();
         let image = match read(&cache, &file.file) {
             Ok(b) if remote && file.verify(&b).is_ok() => b,
