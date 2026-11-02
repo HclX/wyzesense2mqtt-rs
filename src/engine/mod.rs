@@ -19,6 +19,11 @@ pub type EnginesMap = std::sync::Arc<tokio::sync::Mutex<std::collections::HashMa
 /// Overall time allowed for `initialize_handshake`, Inquiry retries included.
 pub const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
+/// How long a byte-identical async packet counts as the dongle's resend of
+/// one already received. The OpenWyzeSense gateway re-sends after 160 ms;
+/// distinct packets (sensor retries, new replies) differ or come later.
+pub const RESEND_WINDOW: std::time::Duration = std::time::Duration::from_millis(300);
+
 /// How many times the handshake sends the Inquiry before giving up. One lost
 /// packet on a serial line should not cost the whole handshake.
 const INQUIRY_ATTEMPTS: u32 = 3;
@@ -190,6 +195,7 @@ impl Engine {
         tokio::spawn(async move {
             let mut buffer = Vec::new();
             let mut read_buf = [0u8; 1024];
+            let mut recent: std::collections::VecDeque<(Vec<u8>, std::time::Instant)> = Default::default();
 
             loop {
                 tokio::select! {
@@ -216,6 +222,10 @@ impl Engine {
                                     match Packet::parse(&buffer) {
                                         Ok((pkt, consumed)) => {
                                             buffer.drain(..consumed);
+                                            if Self::is_resend(&mut recent, &pkt, &pending_requests) {
+                                                debug!("Dropping a resend of {} (already handled and ACKed)", pkt);
+                                                continue;
+                                            }
                                             Self::handle_packet(
                                                 pkt,
                                                 &pending_requests,
@@ -259,6 +269,54 @@ impl Engine {
         self.exit_tx.take().unwrap()
     }
 
+    /// The pending-request key a packet completes, if any.
+    fn pending_key(pkt: &Packet) -> Option<u16> {
+        let cmd = match &pkt.payload {
+            PacketPayload::Ack(ack_cmd) => *ack_cmd,
+            _ => pkt.cmd(),
+        };
+        // OpenWyzeSense replies all share 0x53F1 and are told apart by sub-ID.
+        // An overheard report (sub 0x20) is unsolicited and completes nothing.
+        match (cmd, pkt.payload_bytes().and_then(|b| b.first())) {
+            (ows::CMD_OWS_RESPONSE, Some(&ows::SUB_OVERHEARD)) => None,
+            (ows::CMD_OWS_RESPONSE, Some(&sub)) => Some(ows::response_key(sub)),
+            _ => Some(cmd),
+        }
+    }
+
+    /// Whether `pkt` is the dongle re-sending a reply it already sent, because
+    /// it hadn't seen our ACK yet: a byte-identical copy of a reply received in
+    /// the last [`RESEND_WINDOW`], with no request waiting for it. The first
+    /// copy was handled and ACKed. ACKing the copy too would be harmful: an
+    /// ACK names only the command, so the dongle takes the second ACK for its
+    /// next packet of that command (a newer reply) and stops re-sending it.
+    ///
+    /// Sensor reports are never dropped here: their copies are the sensor's
+    /// own retries, which roaming counts.
+    fn is_resend(
+        recent: &mut std::collections::VecDeque<(Vec<u8>, std::time::Instant)>,
+        pkt: &Packet,
+        pending: &PendingRequests,
+    ) -> bool {
+        if pkt.cmd_type != CommandType::Async || pkt.command_id == (commands::CMD_ASYNC_ACK & 0xFF) as u8 {
+            return false;
+        }
+        let Some(key) = Self::pending_key(pkt) else { return false };
+        if matches!(pkt.cmd(), commands::CMD_ALARM1 | commands::CMD_ALARM2) {
+            return false;
+        }
+        let now = std::time::Instant::now();
+        while recent.front().is_some_and(|(_, t)| now.duration_since(*t) > RESEND_WINDOW) {
+            recent.pop_front();
+        }
+        let bytes = pkt.to_bytes();
+        if recent.iter().any(|(b, _)| *b == bytes) && !pending.lock().unwrap().contains_key(&key) {
+            return true;
+        }
+        recent.push_back((bytes, now));
+        false
+    }
+
     fn find_magic_prefix(buf: &[u8]) -> Option<usize> {
         for i in 0..buf.len().saturating_sub(1) {
             let val = ((buf[i] as u16) << 8) | (buf[i+1] as u16);
@@ -285,14 +343,7 @@ impl Engine {
             PacketPayload::Ack(ack_cmd) => *ack_cmd,
             _ => pkt.cmd(),
         };
-        // OpenWyzeSense replies all share 0x53F1 and are told apart by sub-ID.
-        // An overheard report (sub 0x20) is unsolicited and completes nothing.
-        let pending_key = match (pkt_cmd, pkt.payload_bytes().and_then(|b| b.first())) {
-            (ows::CMD_OWS_RESPONSE, Some(&ows::SUB_OVERHEARD)) => None,
-            (ows::CMD_OWS_RESPONSE, Some(&sub)) => Some(ows::response_key(sub)),
-            _ => Some(pkt_cmd),
-        };
-        if let Some(key) = pending_key {
+        if let Some(key) = Self::pending_key(&pkt) {
             let mut pending_map = pending.lock().unwrap();
             if let Some(tx) = pending_map.remove(&key) {
                 let _ = tx.send(pkt.clone());

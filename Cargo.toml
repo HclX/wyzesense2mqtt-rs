@@ -21,9 +21,9 @@ tracing-appender = "0.2.5"
 tokio-stream = { version = "0.1.18", features = ["sync"] }
 futures-util = "0.3"
 tokio-tungstenite = { version = "0.24", features = ["connect"] }
-# OpenWyzeSense host tools: dongle backup, flash and restore. On the `sim` branch
-# (openwyzesense#52, built on v0.1.0) until a tag includes its simulated dongle.
-ows-host = { git = "https://github.com/HclX/openwyzesense", branch = "issue-51-sim" }
+# OpenWyzeSense host tools: dongle backup, flash and restore. Keep the tag in
+# step with firmware::RELEASE_VERSION.
+ows-host = { git = "https://github.com/HclX/openwyzesense", tag = "v0.2.0" }
 
 [dev-dependencies]
-ows-host = { git = "https://github.com/HclX/openwyzesense", branch = "issue-51-sim", features = ["sim"] }
+ows-host = { git = "https://github.com/HclX/openwyzesense", tag = "v0.2.0", features = ["sim"] }

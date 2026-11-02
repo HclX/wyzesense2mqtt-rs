@@ -31,7 +31,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::{error, info, warn};
 
 /// The OpenWyzeSense release this build installs (the `ows-host` tag).
-pub const RELEASE_VERSION: &str = "v0.1.0";
+pub const RELEASE_VERSION: &str = "v0.2.0";
 /// Where releases are downloaded from; `{version}` is replaced.
 pub const DEFAULT_SOURCE: &str = "https://github.com/HclX/openwyzesense/releases/download/{version}";
 /// The release file for the USB dongle.

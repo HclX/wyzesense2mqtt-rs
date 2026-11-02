@@ -763,8 +763,8 @@ checksum = "c1b04fb49957986fdce4d6ee7a65027d55d4b6d2265e5848bbb507b58ccfdb6f"
 
 [[package]]
 name = "ows-host"
-version = "0.1.0"
-source = "git+https://github.com/HclX/openwyzesense?branch=issue-51-sim#addf2f6e72704a751306c74e85463322a9bca280"
+version = "0.2.0"
+source = "git+https://github.com/HclX/openwyzesense?tag=v0.2.0#3baea5c753a8192de15ff4332840c5109e383e26"
 dependencies = [
  "crc32fast",
  "hex",
