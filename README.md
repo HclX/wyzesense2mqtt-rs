@@ -252,6 +252,16 @@ With `roam: true`, gateways can share one network identity (for example, several
 
 `GET /api/roaming` shows each gateway's table and how strongly each gateway hears each sensor. Design notes: [docs/roaming.md](docs/roaming.md).
 
+### Installing OpenWyzeSense on a USB dongle
+
+The dashboard can install OpenWyzeSense on a local USB dongle, update it, and put the stock firmware back: open the dongle's **Actions** dialog and use the **Firmware** section. The firmware comes from the [OpenWyzeSense release](https://github.com/HclX/openwyzesense/releases) this build is pinned to, and is checked against the release's SHA-256 before it is used.
+
+1.  **Backup.** The whole chip is read and saved under `state/backups/<dongle MAC>-<time>/`. A backup taken while the dongle runs stock firmware is the only way back to stock, so keep it. The dongle is offline for about a minute and then comes back by itself.
+2.  **Review.** The dashboard lists the sensors that carry over and any that don't (for example, two sensors sharing one address in the stock table): those need pairing again afterwards. Nothing has been written yet; **Cancel** leaves the dongle as it was.
+3.  **Install.** The firmware is written and verified, and the sensor table is converted (about 20 seconds). The dongle normally comes back on its own; if it doesn't, the dashboard asks you to unplug it and plug it back in.
+
+**Restore stock firmware** writes the newest stock backup back; sensors paired since that backup need pairing again. A bridged gateway (for example an ESP relay) is updated from its own web page instead. For a machine without internet access, set `openwyzesense.firmware_source` (or `OWS_FIRMWARE_SOURCE`) to a directory holding the release's `manifest.json` and dongle image.
+
 ---
 
 ## 🧪 Testing

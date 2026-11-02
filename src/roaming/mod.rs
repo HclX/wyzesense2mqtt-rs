@@ -602,6 +602,11 @@ impl Roaming {
             Ok(Some(f)) => f,
             Ok(None) => {
                 info!("Gateway {} does not answer 0x53F0: stock firmware", gateway);
+                // It may have run our firmware before (stock restored).
+                if self.state.lock().unwrap().gateways.remove(gateway).is_some() {
+                    info!("Gateway {} no longer runs OpenWyzeSense; forgotten", gateway);
+                    let _ = self.broadcast_tx.send(());
+                }
                 return;
             }
             Err(e) => {

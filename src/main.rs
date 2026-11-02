@@ -1,6 +1,7 @@
 use wyzesense2mqtt_rs::engine::Engine;
 use wyzesense2mqtt_rs::transport::hidraw::HidrawTransport;
 use wyzesense2mqtt_rs::local_dongle::{self, DongleSource, LocalDongles};
+use wyzesense2mqtt_rs::firmware::Firmware;
 use wyzesense2mqtt_rs::transport::{AsyncTransport, GatewayTransport};
 use wyzesense2mqtt_rs::protocol::telemetry::{TelemetryData, DongleEvent, SensorType};
 use wyzesense2mqtt_rs::web::start_web_server;
@@ -294,6 +295,7 @@ async fn run_daemon(
     };
 
     // --- Local USB dongles: attached as they appear, detached when unplugged ---
+    let mut firmware = None;
     match dongle_source {
         None => {
             info!("No local USB dongle configured. Running in bridge-only mode.");
@@ -308,6 +310,14 @@ async fn run_daemon(
                 broadcast_tx.clone(),
             )
             .with_roaming(roaming.clone());
+            firmware = Some(Firmware::new(
+                local.clone(),
+                Arc::clone(&engines),
+                roaming.clone(),
+                broadcast_tx.clone(),
+                std::path::Path::new("state"),
+                config.openwyzesense.firmware_source.clone(),
+            ));
             tokio::spawn(local.supervise(source, local_dongle::POLL_INTERVAL, local_dongle::RETRY_AFTER));
         }
     }
@@ -475,7 +485,7 @@ async fn run_daemon(
 
     // Route B: Web REST Control Server (if enabled)
     if config.web.enabled {
-        start_web_server(Arc::clone(&engines), Arc::clone(&sensor_manager), broadcast_tx.clone(), engine_tx.clone(), config.web.port, config.bridge.auth_token.clone(), dongle_status_tx.clone(), roaming.clone()).await?;
+        start_web_server(Arc::clone(&engines), Arc::clone(&sensor_manager), broadcast_tx.clone(), engine_tx.clone(), config.web.port, config.bridge.auth_token.clone(), dongle_status_tx.clone(), roaming.clone(), firmware.clone()).await?;
     } else {
         info!("Web Panel is disabled. Running in headless daemon mode.");
         if let Some(handle) = mqtt_gateway_handle {

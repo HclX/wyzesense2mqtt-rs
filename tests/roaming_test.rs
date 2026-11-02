@@ -153,6 +153,19 @@ async fn flags_lost_to_a_gateway_restart_are_set_again() {
 }
 
 #[tokio::test]
+async fn a_gateway_flashed_back_to_stock_is_forgotten() {
+    let ours = VirtualDongle::new("GWAAAAAA", "OWS").with_ows(NET, vec![entry(S, S_SHORT)]);
+    let mut w = World::new(RoamingConfig { probe_timeout: Duration::from_millis(200), ..Default::default() }).await;
+    w.connect(&ours).await;
+    assert!(w.roaming.gateway_json("GWAAAAAA").is_some());
+    w.disconnect(&ours).await;
+    // Stock restored: the same MAC comes back without our extensions.
+    let stock = VirtualDongle::new("GWAAAAAA", "0.0.0.47").with_sensors(vec![S.into()]);
+    w.connect(&stock).await;
+    assert!(w.roaming.gateway_json("GWAAAAAA").is_none());
+}
+
+#[tokio::test]
 async fn stock_dongle_is_left_alone() {
     let stock = VirtualDongle::new("STOCK001", "0.0.0.30").with_sensors(vec![S.into()]);
     let mut w = World::new(RoamingConfig { probe_timeout: Duration::from_millis(200), ..Default::default() }).await;

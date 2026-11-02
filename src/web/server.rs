@@ -42,6 +42,8 @@ pub struct WebState {
     pub bridge: BridgeSettings,
     /// Roaming coordinator, when roaming is enabled.
     pub roaming: Option<Arc<crate::roaming::Roaming>>,
+    /// OpenWyzeSense firmware install/update/restore for local USB dongles.
+    pub firmware: Option<Arc<crate::firmware::Firmware>>,
 }
 
 /// Timing for `/ws/bridge` connections.
@@ -126,6 +128,7 @@ pub async fn start_web_server(
     bridge_auth_token: Option<String>,
     dongle_status_tx: tokio::sync::mpsc::Sender<DongleStatus>,
     roaming: Option<Arc<crate::roaming::Roaming>>,
+    firmware: Option<Arc<crate::firmware::Firmware>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let shared_state = Arc::new(WebState {
         engines,
@@ -136,6 +139,7 @@ pub async fn start_web_server(
         bridge_auth_token,
         bridge: BridgeSettings::default(),
         roaming,
+        firmware,
     });
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
@@ -166,6 +170,11 @@ fn router(shared_state: Arc<WebState>) -> Router {
         .route("/api/raw", post(send_raw_packet))
         .route("/api/events", get(sse_handler))
         .route("/api/roaming", get(roaming_status))
+        .route("/api/firmware", get(firmware_status))
+        .route("/api/firmware/install", post(firmware_install))
+        .route("/api/firmware/confirm", post(firmware_confirm))
+        .route("/api/firmware/cancel", post(firmware_cancel))
+        .route("/api/firmware/restore", post(firmware_restore))
         .route("/ws/bridge", get(ws_bridge_handler))
         .layer(cors)
         .with_state(shared_state)
@@ -614,6 +623,67 @@ async fn roaming_status(State(state): State<Arc<WebState>>) -> impl IntoResponse
     }
 }
 
+// --- OpenWyzeSense firmware for local USB dongles ---
+
+#[derive(Deserialize)]
+struct FirmwareRequest {
+    dongle: String,
+}
+
+fn firmware_result(r: Result<crate::firmware::Job, String>) -> (StatusCode, Json<serde_json::Value>) {
+    match r {
+        Ok(job) => (StatusCode::OK, Json(json!({ "job": job }))),
+        Err(e) => (StatusCode::CONFLICT, Json(json!({ "error": e }))),
+    }
+}
+
+fn firmware_unavailable() -> (StatusCode, Json<serde_json::Value>) {
+    (StatusCode::NOT_FOUND, Json(json!({ "error": "firmware updates need local USB dongles (usb.dongle is none)" })))
+}
+
+// GET /api/firmware
+async fn firmware_status(State(state): State<Arc<WebState>>) -> impl IntoResponse {
+    match &state.firmware {
+        Some(f) => (StatusCode::OK, Json(f.status().await)),
+        None => (StatusCode::OK, Json(json!({ "release": crate::firmware::RELEASE_VERSION, "job": null, "dongles": {} }))),
+    }
+}
+
+// POST /api/firmware/install {dongle}: download, back up, then wait for confirm
+async fn firmware_install(State(state): State<Arc<WebState>>, Json(req): Json<FirmwareRequest>) -> impl IntoResponse {
+    match &state.firmware {
+        Some(f) => firmware_result(f.start_install(&req.dongle.to_uppercase()).await),
+        None => firmware_unavailable(),
+    }
+}
+
+// POST /api/firmware/confirm: flash the job in review
+async fn firmware_confirm(State(state): State<Arc<WebState>>) -> impl IntoResponse {
+    match &state.firmware {
+        Some(f) => firmware_result(f.confirm().await),
+        None => firmware_unavailable(),
+    }
+}
+
+// POST /api/firmware/cancel: drop the job in review
+async fn firmware_cancel(State(state): State<Arc<WebState>>) -> impl IntoResponse {
+    match &state.firmware {
+        Some(f) => match f.cancel() {
+            Ok(()) => (StatusCode::OK, Json(json!({ "job": f.job() }))),
+            Err(e) => (StatusCode::CONFLICT, Json(json!({ "error": e }))),
+        },
+        None => firmware_unavailable(),
+    }
+}
+
+// POST /api/firmware/restore {dongle}: stock firmware back from its backup
+async fn firmware_restore(State(state): State<Arc<WebState>>, Json(req): Json<FirmwareRequest>) -> impl IntoResponse {
+    match &state.firmware {
+        Some(f) => firmware_result(f.start_restore(&req.dongle.to_uppercase()).await),
+        None => firmware_unavailable(),
+    }
+}
+
 // --- POST /api/verify ---
 async fn verify_scanned_sensor(
     State(state): State<Arc<WebState>>,
@@ -816,6 +886,8 @@ const HTML_CONTENT: &str = concat!(r##"
     <script>
         const API = "";
         let donglesData = { dongles: [], unassociated_sensors: [] };
+        let fwData = { release: null, job: null, dongles: {} };
+        let fwDismissed = null;
         let scanState = {};
         let modalDongle = null;
 
@@ -898,6 +970,9 @@ const HTML_CONTENT: &str = concat!(r##"
                                 <span class="font-bold text-sm">🕹️ ${d.mac}</span>
                                 ${d.scanning?'<span class="tag border border-amber-900 bg-amber-950/20 text-amber-400">SCANNING</span>':''}
                                 <span class="tag border border-slate-800 text-slate-400">${n} sensor${n!==1?'s':''}</span>
+                                ${d.openwyzesense
+                                    ? `<span class="tag border border-emerald-900 bg-emerald-950/20 text-emerald-400">OpenWyzeSense ${d.openwyzesense.version||''}${d.openwyzesense.roaming?' · roaming':''}</span>`
+                                    : (d.transport !== 'bridge' ? '<span class="tag border border-slate-800 text-slate-500">Stock firmware</span>' : '')}
                             </div>
                             <div class="flex items-center gap-2 mt-0.5 flex-wrap">
                                 <span class="text-xs text-slate-500 font-mono">${d.version||'Unknown firmware'}</span>
@@ -978,6 +1053,8 @@ const HTML_CONTENT: &str = concat!(r##"
                             ${scanBtn}
                         </div>
 
+                        ${firmwareSection(d)}
+
                         <hr class="border-slate-800">
 
                         <!-- Maintenance -->
@@ -1004,11 +1081,89 @@ const HTML_CONTENT: &str = concat!(r##"
             </div>`;
         }
 
+        // ===== Firmware (OpenWyzeSense on local USB dongles) =====
+        const esc = (t) => String(t ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+        function firmwareSection(d) {
+            const f = fwData.dongles?.[d.mac];
+            if (d.transport === 'bridge' || !f) return '';
+            const busy = fwData.job && ['download','backup','review','flash','replug'].includes(fwData.job.step);
+            const ows = !!d.openwyzesense;
+            const install = ows ? `Reinstall / update to OpenWyzeSense ${esc(fwData.release)}` : `Install OpenWyzeSense ${esc(fwData.release)}`;
+            const restore = ows && f.can_restore_stock
+                ? `<button ${busy?'disabled':''} onclick="fwRestore('${d.mac}')" class="w-full mt-2 py-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-slate-300 text-sm font-semibold rounded-xl border border-slate-700 transition">Restore stock firmware</button>` : '';
+            return `<hr class="border-slate-800">
+                <div>
+                    <h3 class="text-sm font-semibold text-slate-300 mb-2">🔧 Firmware</h3>
+                    <p class="text-xs text-slate-500 mb-3">Running: <span class="text-slate-300">${esc(f.firmware)}</span>.
+                        The dongle is backed up first (the only way back to stock), then you see which sensors carry over before anything is written.
+                        It is offline for about a minute.${f.backups.length ? ` ${f.backups.length} backup${f.backups.length>1?'s':''} saved.` : ''}</p>
+                    <button ${busy?'disabled':''} onclick="fwInstall('${d.mac}')" class="w-full py-2.5 bg-emerald-700 hover:bg-emerald-600 disabled:opacity-40 text-white text-sm font-semibold rounded-xl transition">${install}</button>
+                    ${restore}
+                    ${busy ? '<p class="text-xs text-amber-400 mt-2">A firmware job is running; see the card at the top.</p>' : ''}
+                </div>`;
+        }
+
+        function fwJobCard() {
+            const j = fwData.job;
+            if (!j || j.id === fwDismissed || j.step === 'cancelled') return '';
+            const pct = j.total ? Math.floor(j.done * 100 / j.total) : null;
+            const bar = pct === null ? '' : `<div class="w-full bg-slate-800 rounded-full h-2 mt-2"><div class="bg-emerald-500 h-2 rounded-full transition-all" style="width:${pct}%"></div></div>`;
+            const what = j.kind === 'restore' ? 'Restoring stock firmware' : `Installing OpenWyzeSense ${esc(j.target||fwData.release)}`;
+            let body = '', buttons = '';
+            const dismiss = `<button onclick="fwDismissed=${j.id};render()" class="py-1.5 px-4 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-lg border border-slate-700">Dismiss</button>`;
+            switch (j.step) {
+                case 'download': body = 'Downloading and checking the firmware…'; break;
+                case 'backup': body = `Backing up the whole chip. The dongle is offline meanwhile.${pct!==null?` ${pct}%`:''}`; break;
+                case 'review': {
+                    const c = j.carried || {sensors: []};
+                    const repair = j.dropped.filter(x => x.mac);
+                    body = `Backed up (it was running <b>${esc(j.current)}</b>; saved as ${esc(j.backup)}).<br>
+                        <span class="text-emerald-400">${c.sensors.length} sensor${c.sensors.length!==1?'s':''} carry over</span>${c.sensors.length?': '+c.sensors.map(esc).join(', '):''}${c.network?'':' · <span class="text-amber-400">no network identity found</span>'}.
+                        ${j.dropped.length ? `<div class="mt-2 text-amber-400">Not carried over${repair.length ? ` (pair ${repair.map(x=>esc(x.mac)).join(', ')} again afterwards)` : ''}:<ul class="list-disc ml-5">${j.dropped.map(x => `<li>${esc(x.what)}: ${esc(x.why)}</li>`).join('')}</ul></div>` : ''}`;
+                    buttons = `<button onclick="fwConfirm()" class="py-1.5 px-4 bg-emerald-700 hover:bg-emerald-600 text-white text-xs font-semibold rounded-lg">Install now</button>
+                        <button onclick="fwCancel()" class="py-1.5 px-4 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-lg border border-slate-700">Cancel</button>`;
+                    break;
+                }
+                case 'flash': body = `Writing (${esc(j.phase||'starting')}). Don't unplug the dongle.${pct!==null?` ${pct}%`:''}`; break;
+                case 'replug': body = '<span class="text-amber-400 font-semibold">Written and verified. Unplug the dongle and plug it back in.</span>'; break;
+                case 'done': body = `<span class="text-emerald-400">Done.</span> ${j.kind==='restore' ? 'The dongle runs stock firmware again; sensors paired since the backup need pairing again.' : 'The dongle runs OpenWyzeSense; its features stay off until turned on in the openwyzesense config section.'}
+                        ${j.dropped.filter(x=>x.mac).length ? `<span class="text-amber-400">Pair ${j.dropped.filter(x=>x.mac).map(x=>esc(x.mac)).join(', ')} again.</span>` : ''}`;
+                    buttons = dismiss; break;
+                case 'failed': body = `<span class="text-rose-400">Failed: ${esc(j.message)}</span>`; buttons = dismiss; break;
+            }
+            return `<div class="bg-slate-900 rounded-2xl border border-emerald-900 shadow-xl px-5 py-4 mb-4">
+                <div class="font-bold text-sm text-emerald-400">🔧 ${what} · dongle ${esc(j.dongle)}</div>
+                <div class="text-xs text-slate-400 mt-1">${body}</div>${bar}
+                ${buttons ? `<div class="flex gap-2 mt-3">${buttons}</div>` : ''}
+            </div>`;
+        }
+
+        async function fwPost(path, body) {
+            const r = await fetch(`${API}/api/firmware/${path}`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body||{})});
+            const d = await r.json().catch(() => ({}));
+            if (!r.ok) { log(`Firmware: ${d.error || r.status}`); alertMsg(d.error || `HTTP ${r.status}`); }
+            await loadDongles();
+            return r.ok;
+        }
+        function alertMsg(t) {
+            const el = document.getElementById('fw-error');
+            if (el) { el.textContent = t; el.classList.remove('hidden'); setTimeout(() => el.classList.add('hidden'), 8000); }
+        }
+        async function fwInstall(mac) { fwDismissed = null; if (await fwPost('install', {dongle: mac})) closeModal(); }
+        async function fwConfirm() { await fwPost('confirm'); }
+        async function fwCancel() { await fwPost('cancel'); }
+        async function fwRestore(mac) {
+            fwDismissed = null;
+            if (await fwPost('restore', {dongle: mac})) closeModal();
+        }
+
         // ===== Data =====
         async function loadDongles() {
             try {
-                const r = await fetch(`${API}/api/dongles`);
+                const [r, fr] = await Promise.all([fetch(`${API}/api/dongles`), fetch(`${API}/api/firmware`)]);
                 donglesData = await r.json();
+                fwData = await fr.json().catch(() => fwData);
                 render(); updateHeader();
                 if (modalDongle) renderModal();
             } catch(e) {
@@ -1019,12 +1174,13 @@ const HTML_CONTENT: &str = concat!(r##"
         function render() {
             const c = document.getElementById("dongles-container");
             if (!donglesData.dongles.length && !(donglesData.unassociated_sensors||[]).length) {
-                c.innerHTML = `<div class="text-center py-16"><div class="text-4xl mb-3">📡</div>
+                c.innerHTML = fwJobCard() + `<div class="text-center py-16"><div class="text-4xl mb-3">📡</div>
                     <div class="text-slate-400 text-sm">No dongles connected</div>
                     <div class="text-slate-600 text-xs mt-1">Connect a USB dongle or start a WebSocket bridge</div></div>`;
                 return;
             }
-            c.innerHTML = donglesData.dongles.map((d,i) => dongleCard(d,i)).join("") + orphanCard(donglesData.unassociated_sensors);
+            c.innerHTML = `<div id="fw-error" class="hidden mb-4 text-xs text-rose-400 bg-rose-950/30 border border-rose-900 rounded-xl px-4 py-2"></div>` + fwJobCard()
+                + donglesData.dongles.map((d,i) => dongleCard(d,i)).join("") + orphanCard(donglesData.unassociated_sensors);
         }
 
         function updateHeader() {
@@ -1150,6 +1306,7 @@ mod tests {
             bridge_auth_token: None,
             bridge,
             roaming: None,
+            firmware: None,
         });
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();

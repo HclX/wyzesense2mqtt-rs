@@ -109,7 +109,7 @@ impl TestHarness {
         tokio::spawn(async move {
             if let Err(e) = start_web_server(
                 engines_server, sm_server, broadcast_server, event_tx_server, port, None,
-                tokio::sync::mpsc::channel(1).0, None,
+                tokio::sync::mpsc::channel(1).0, None, None,
             ).await {
                 panic!("Web server failed: {}", e);
             }

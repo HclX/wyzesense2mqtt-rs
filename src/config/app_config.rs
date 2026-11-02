@@ -172,11 +172,16 @@ pub struct OwsSettings {
     /// How much stronger (dB) another gateway must hear a sensor to take it over.
     #[serde(default = "default_hysteresis_db")]
     pub roam_hysteresis_db: f32,
+    /// Where the firmware for USB dongles comes from: a release download URL
+    /// (`{version}` is replaced) or a local directory holding the release's
+    /// manifest.json and image. Default: the OpenWyzeSense GitHub release.
+    #[serde(default)]
+    pub firmware_source: Option<String>,
 }
 
 impl Default for OwsSettings {
     fn default() -> Self {
-        Self { defaults: OwsFeatures::default(), gateways: Default::default(), roam_hysteresis_db: default_hysteresis_db() }
+        Self { defaults: OwsFeatures::default(), gateways: Default::default(), roam_hysteresis_db: default_hysteresis_db(), firmware_source: None }
     }
 }
 
@@ -249,6 +254,7 @@ impl AppConfig {
                              ("OWS_ANNOUNCE", &mut ows.announce), ("OWS_ROAM", &mut ows.roam)] {
             if let Some(val) = std::env::var(var).ok().and_then(|v| v.parse().ok()) { *field = Some(val); }
         }
+        if let Some(val) = std::env::var("OWS_FIRMWARE_SOURCE").ok().filter(|v| !v.is_empty()) { config.openwyzesense.firmware_source = Some(val); }
         if let Some(val) = std::env::var("BRIDGE_AUTH_TOKEN").ok().filter(|v| !v.is_empty()) { config.bridge.auth_token = Some(val); }
 
         // Ensure that if host is set, MQTT is enabled
@@ -306,6 +312,7 @@ openwyzesense:
   fix_zero_mac: false     # name v1 contacts' zero-MAC reports
   roam: false             # roaming between gateways sharing one network identity
   roam_hysteresis_db: 10  # how much stronger another gateway must hear a sensor to take it
+  # firmware_source: "/path/to/release"  # dongle firmware: a local release directory or URL (default: GitHub release)
   # gateways:
   #   "77E0000A": { roam: true, dedup: true }
 
