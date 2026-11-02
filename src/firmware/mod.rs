@@ -338,17 +338,26 @@ impl Firmware {
                 let mut list: Vec<_> = manager
                     .get_sensors()
                     .values()
-                    .filter(|s| s.dongle_mac.as_deref() == Some(mac.as_str()))
-                    .filter_map(|s| match (sensors::board_of(s.sensor_type), s.sensor_type) {
-                        (Some(b), _) => Some(serde_json::json!({ "mac": s.mac, "board": b })),
-                        // Not reported since start-up: it may be one of ours.
-                        (None, crate::protocol::telemetry::SensorType::Unknown(_)) => {
-                            Some(serde_json::json!({ "mac": s.mac, "board": null }))
-                        }
-                        _ => None,
+                    // Every candidate, not only the ones last heard here: gateways
+                    // sharing a network each hear the sensor, and the update has
+                    // to go through the one the sensor talks to.
+                    .filter_map(|s| {
+                        let board = match (sensors::board_of(s.sensor_type), s.sensor_type) {
+                            (Some(b), _) => Some(b),
+                            // Not reported since start-up: it may be one of ours.
+                            (None, crate::protocol::telemetry::SensorType::Unknown(_)) => None,
+                            _ => return None,
+                        };
+                        Some(serde_json::json!({
+                            "mac": s.mac,
+                            "board": board,
+                            "heard_here": s.dongle_mac.as_deref() == Some(mac.as_str()),
+                            "heard_by": s.dongle_mac,
+                            "rssi": s.rssi_dbm,
+                        }))
                     })
                     .collect();
-                list.sort_by(|a, b| a["mac"].as_str().cmp(&b["mac"].as_str()));
+                list.sort_by_key(|s| (!s["heard_here"].as_bool().unwrap_or(false), s["mac"].as_str().unwrap_or("").to_string()));
                 list
             };
             let entry = out.entry(mac).or_insert_with(|| serde_json::json!({}));

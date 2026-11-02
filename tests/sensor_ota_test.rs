@@ -170,7 +170,7 @@ async fn a_sensor_that_turns_it_down_is_reported() {
     c.gw.inject_ota_done(S, 2); // refused: e.g. already on this version
     let done = wait(&c.firmware, "the end", |j| !j.active()).await;
     assert_eq!(done.sensors[0].state, SensorState::Refused);
-    assert_eq!(done.sensors[0].message.as_deref(), Some("refused"));
+    assert!(done.sensors[0].message.as_deref().unwrap().contains("already runs this version"));
 }
 
 #[tokio::test]
@@ -181,6 +181,7 @@ async fn stopping_withdraws_the_offers_and_restores_the_flag() {
     c.firmware.cancel_sensor_update().unwrap();
     let j = wait(&c.firmware, "the stop", |j| !j.active()).await;
     assert_eq!(format!("{:?}", j.step), "Cancelled");
+    assert_eq!(j.sensors[0].state, SensorState::Stopped);
     tokio::time::sleep(Duration::from_millis(200)).await;
     let sim = c.gw.ows();
     assert!(sim.ota_offers.is_empty() && sim.ota_cancels >= 1);

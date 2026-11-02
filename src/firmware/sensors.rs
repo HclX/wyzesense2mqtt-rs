@@ -36,6 +36,8 @@ pub enum SensorState {
     Failed,
     /// Its button wasn't pressed in time, or it doesn't run OpenWyzeSense.
     TimedOut,
+    /// The update was stopped before it finished.
+    Stopped,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -258,17 +260,18 @@ impl Firmware {
         }
         let results = ota.results();
         self.update_sensors(|j| {
+            let stopped = j.step == SensorStep::Cancelled;
             for (mac, outcome) in &results {
                 if let Some(r) = j.row(mac) {
                     match outcome {
                         Outcome::Done(0) => r.state = SensorState::Done,
                         Outcome::Done(st) => {
                             r.state = state_of(*st);
-                            r.message = Some(ota::status_text(*st).to_string());
+                            r.message = Some(status_message(*st));
                         }
                         Outcome::Refused => r.state = SensorState::Refused,
                         Outcome::TimedOut if !matches!(r.state, SensorState::Done | SensorState::Refused | SensorState::Failed) => {
-                            r.state = SensorState::TimedOut
+                            r.state = if stopped { SensorState::Stopped } else { SensorState::TimedOut }
                         }
                         Outcome::TimedOut => {}
                     }
@@ -295,6 +298,14 @@ mod tests {
         assert_eq!(state_of(1), SensorState::Failed);
         assert_eq!(mac_bytes("777b42df").unwrap(), *b"777B42DF");
         assert!(mac_bytes("777B42").is_err());
+    }
+}
+
+/// A sensor's reported status in words.
+fn status_message(status: u8) -> String {
+    match status {
+        2 => "it already runs this version or newer, is another board, or its battery is under 2.5 V".into(),
+        _ => ota::status_text(status).to_string(),
     }
 }
 
@@ -334,7 +345,7 @@ fn apply(j: &mut SensorJob, e: &Event) {
                     r.message = None;
                 } else {
                     r.state = state_of(*status);
-                    r.message = Some(ota::status_text(*status).to_string());
+                    r.message = Some(status_message(*status));
                 }
             }
         }
