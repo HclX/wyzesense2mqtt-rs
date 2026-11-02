@@ -56,6 +56,15 @@ pub fn relay_product(chip: &str) -> Option<&'static str> {
     }
 }
 
+/// The relay's own version marker in its image (`OWS-RELAY-VERSION:<v>`),
+/// distinct from the version of the gateway image it carries.
+pub fn relay_image_version(image: &[u8]) -> Option<String> {
+    const MARK: &[u8] = b"OWS-RELAY-VERSION:";
+    let at = image.windows(MARK.len()).position(|w| w == MARK)? + MARK.len();
+    let end = image[at..].iter().position(|&b| b == 0 || b.is_ascii_whitespace()).map_or(image.len(), |n| at + n);
+    Some(String::from_utf8_lossy(&image[at..end.min(at + 64)]).to_string())
+}
+
 /// "192.168.1.5:51234" or "[fe80::1]:51234" -> the host part.
 fn host_of(addr: &str) -> &str {
     if let Some(rest) = addr.strip_prefix('[') {
@@ -135,6 +144,12 @@ impl Firmware {
 
     async fn run_relay_update(&self, job: &Job, info: &RelayInfo, product: &str, secret: Option<String>) -> Result<(), String> {
         let (version, file, image) = self.fetch_file(product).await?;
+        let built_as = relay_image_version(&image)
+            .ok_or_else(|| format!("{} is not an OpenWyzeSense relay image (no version marker)", file))?;
+        if built_as != version {
+            // v0.2.0's ESP32 images were built without their version ("unknown").
+            warn!("{} says it was built as {:?}, not {}", file, built_as, version);
+        }
         info!("Updating relay {} ({}, {}) to {}: {}", job.dongle, info.chip, info.build, version, file);
         self.update(|j| {
             j.target = Some(version.clone());
@@ -275,5 +290,9 @@ mod tests {
         assert_eq!(relay_product("ESP32-S3"), Some("relay-esp32s3-ota"));
         assert_eq!(relay_product("ESP8266"), Some("relay-esp8266"));
         assert_eq!(relay_product("RP2040"), None);
+        let mut img = vec![0xE9u8; 64];
+        img.extend_from_slice(b"OWS-RELAY-VERSION:v0.2.0\0more");
+        assert_eq!(relay_image_version(&img).as_deref(), Some("v0.2.0"));
+        assert_eq!(relay_image_version(b"no marker"), None);
     }
 }

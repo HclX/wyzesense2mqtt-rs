@@ -88,7 +88,8 @@ async fn ctx(tag: &str, password: Option<&str>, token: Option<&str>, next_build:
     let id = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
     let dir = std::env::temp_dir().join(format!("w2m_relay_{}_{}", tag, id));
     std::fs::create_dir_all(&dir).unwrap();
-    let image: Vec<u8> = (0..20_000u32).map(|i| (i * 13 + 5) as u8).collect();
+    let mut image: Vec<u8> = (0..20_000u32).map(|i| (i * 13 + 5) as u8).collect();
+    image.extend_from_slice(b"OWS-RELAY-VERSION:v0.2.0\0");
     let source = release_dir(&dir, &image);
 
     // The fake relay's web server.
