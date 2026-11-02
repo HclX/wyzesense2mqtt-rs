@@ -260,7 +260,11 @@ The dashboard can install OpenWyzeSense on a local USB dongle, update it, and pu
 2.  **Review.** The dashboard lists the sensors that carry over and any that don't (for example, two sensors sharing one address in the stock table): those need pairing again afterwards. Nothing has been written yet; **Cancel** leaves the dongle as it was.
 3.  **Install.** The firmware is written and verified, and the sensor table is converted (about 20 seconds). The dongle normally comes back on its own; if it doesn't, the dashboard asks you to unplug it and plug it back in.
 
-**Restore stock firmware** writes the newest stock backup back; sensors paired since that backup need pairing again. A bridged gateway (for example an ESP relay) is updated from its own web page instead. For a machine without internet access, set `openwyzesense.firmware_source` (or `OWS_FIRMWARE_SOURCE`) to a directory holding the release's `manifest.json` and dongle image.
+**Restore stock firmware** writes the newest stock backup back; sensors paired since that backup need pairing again.
+
+### Updating an OpenWyzeSense relay
+
+A bridged OpenWyzeSense relay (an ESP32, ESP32-S3 or ESP8266 next to a contact board) is updated with its own firmware: its Actions dialog shows the relay's chip and build and offers **Update relay**. The daemon downloads the relay image for that chip from the same release, checks it, and uploads it to the relay at the address its WebSocket connects from. The relay restarts into the new firmware, brings its contact board's radio up to the gateway firmware it carries, and reconnects; a build that can't rejoin Wi-Fi rolls back by itself, and the dashboard says so. A relay with an admin password asks for it in the dialog (it isn't stored); the bridge token (`bridge.auth_token`) is tried when no password is given. For a machine without internet access, set `openwyzesense.firmware_source` (or `OWS_FIRMWARE_SOURCE`) to a directory holding the release's `manifest.json` and dongle image.
 
 ---
 

@@ -295,29 +295,33 @@ async fn run_daemon(
     };
 
     // --- Local USB dongles: attached as they appear, detached when unplugged ---
-    let mut firmware = None;
+    // Local dongles come and go through a supervisor (unless usb.dongle is none);
+    // firmware jobs (USB flashing, relay updates) work either way.
+    let local = LocalDongles::new(
+        Arc::clone(&engines),
+        Arc::clone(&sensor_manager),
+        engine_tx.clone(),
+        dongle_status_tx.clone(),
+        broadcast_tx.clone(),
+    )
+    .with_roaming(roaming.clone());
+    let firmware = Some(
+        Firmware::new(
+            local.clone(),
+            Arc::clone(&engines),
+            roaming.clone(),
+            broadcast_tx.clone(),
+            std::path::Path::new("state"),
+            config.openwyzesense.firmware_source.clone(),
+        )
+        .with_bridge_token(config.bridge.auth_token.clone()),
+    );
     match dongle_source {
         None => {
             info!("No local USB dongle configured. Running in bridge-only mode.");
             info!("Waiting for remote dongles to connect via WebSocket at /ws/bridge");
         }
         Some(source) => {
-            let local = LocalDongles::new(
-                Arc::clone(&engines),
-                Arc::clone(&sensor_manager),
-                engine_tx.clone(),
-                dongle_status_tx.clone(),
-                broadcast_tx.clone(),
-            )
-            .with_roaming(roaming.clone());
-            firmware = Some(Firmware::new(
-                local.clone(),
-                Arc::clone(&engines),
-                roaming.clone(),
-                broadcast_tx.clone(),
-                std::path::Path::new("state"),
-                config.openwyzesense.firmware_source.clone(),
-            ));
             tokio::spawn(local.supervise(source, local_dongle::POLL_INTERVAL, local_dongle::RETRY_AFTER));
         }
     }

@@ -15,7 +15,15 @@
 //! 3. **Restore stock** writes the newest backup taken while the dongle ran
 //!    stock firmware back.
 //!
-//! Only local USB dongles: a bridged gateway is flashed by its own device.
+//! 4. **Relay update** (a bridged OpenWyzeSense relay, `relay`): the relay's
+//!    own update image for its chip is uploaded to it; it restarts, brings its
+//!    contact-board radio up to the gateway firmware it carries, and
+//!    reconnects.
+//!
+//! USB flashing is for local dongles only; relays update themselves.
+
+mod relay;
+pub use relay::RelayInfo;
 
 use crate::engine::EnginesMap;
 use crate::local_dongle::LocalDongles;
@@ -49,6 +57,8 @@ pub type Opener = Arc<dyn Fn(&Path) -> std::io::Result<Box<dyn HidTransport + Se
 pub enum JobKind {
     Install,
     Restore,
+    /// A bridged relay's own firmware, over Wi-Fi.
+    Relay,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -64,6 +74,8 @@ pub enum Step {
     Flash,
     /// Written and verified, but the dongle doesn't answer: unplug it and plug it back in.
     Replug,
+    /// A relay restarting into its new firmware, until it reconnects.
+    Restart,
     Done,
     Failed,
     Cancelled,
@@ -72,7 +84,7 @@ pub enum Step {
 impl Step {
     /// Whether the job still holds the dongle or waits for the user.
     pub fn active(self) -> bool {
-        matches!(self, Step::Download | Step::Backup | Step::Review | Step::Flash | Step::Replug)
+        matches!(self, Step::Download | Step::Backup | Step::Review | Step::Flash | Step::Replug | Step::Restart)
     }
 }
 
@@ -135,6 +147,13 @@ pub struct Firmware {
     source: String,
     opener: Opener,
     job: Arc<Mutex<Option<Job>>>,
+    /// Sent as the relay's password when the dashboard gives none (a relay
+    /// takes its bridge token too).
+    bridge_token: Option<String>,
+    /// The relays' web port (80; tests change it).
+    relay_port: u16,
+    /// Relay status by address, fetched at most every few seconds.
+    relay_cache: Mutex<std::collections::HashMap<String, (std::time::Instant, Option<RelayInfo>)>>,
     /// The release fetched for the job in review.
     release: Mutex<Option<Release>>,
     next_id: Mutex<u64>,
@@ -191,6 +210,9 @@ impl Firmware {
             source: source.unwrap_or_else(|| DEFAULT_SOURCE.to_string()),
             opener: default_opener(),
             job: Arc::new(Mutex::new(None)),
+            bridge_token: None,
+            relay_port: 80,
+            relay_cache: Mutex::new(Default::default()),
             release: Mutex::new(None),
             next_id: Mutex::new(1),
         })
@@ -200,6 +222,20 @@ impl Firmware {
     pub fn with_opener(self: Arc<Self>, opener: Opener) -> Arc<Self> {
         let mut me = Arc::try_unwrap(self).ok().expect("with_opener before the firmware is shared");
         me.opener = opener;
+        Arc::new(me)
+    }
+
+    /// The bridge token, tried as a relay's password.
+    pub fn with_bridge_token(self: Arc<Self>, token: Option<String>) -> Arc<Self> {
+        let mut me = Arc::try_unwrap(self).ok().expect("with_bridge_token before the firmware is shared");
+        me.bridge_token = token;
+        Arc::new(me)
+    }
+
+    /// For tests: relays' web port.
+    pub fn with_relay_port(self: Arc<Self>, port: u16) -> Arc<Self> {
+        let mut me = Arc::try_unwrap(self).ok().expect("with_relay_port before the firmware is shared");
+        me.relay_port = port;
         Arc::new(me)
     }
 
@@ -242,14 +278,26 @@ impl Firmware {
 
     /// The dashboard's view: the release, the job, and each local dongle's firmware and backups.
     pub async fn status(&self) -> serde_json::Value {
-        let dongles: Vec<(String, Option<String>)> = {
+        let (dongles, bridged): (Vec<(String, Option<String>)>, Vec<(String, Option<String>)>) = {
             let map = self.engines.lock().await;
-            map.iter()
+            let local = map
+                .iter()
                 .filter(|(_, e)| e.transport_label == "local")
                 .map(|(mac, e)| (mac.clone(), e.device_path.clone()))
-                .collect()
+                .collect();
+            let bridged = map
+                .iter()
+                .filter(|(_, e)| e.transport_label == "bridge")
+                .map(|(mac, e)| (mac.clone(), e.remote_addr.clone()))
+                .collect();
+            (local, bridged)
         };
         let mut out = serde_json::Map::new();
+        for (mac, addr) in bridged {
+            if let Some(info) = self.relay_info(addr.as_deref()).await {
+                out.insert(mac, serde_json::json!({ "relay": info }));
+            }
+        }
         for (mac, path) in dongles {
             let firmware = match self.roaming.as_ref().map(|r| r.gateway_json(&mac)) {
                 Some(Some(g)) => format!("OpenWyzeSense {}", g["version"].as_str().unwrap_or("")).trim().to_string(),
@@ -298,10 +346,14 @@ impl Firmware {
         let path = {
             let map = self.engines.lock().await;
             let engine = map.get(mac).ok_or_else(|| format!("dongle {} is not connected", mac))?;
-            if engine.transport_label != "local" {
-                return Err("only local USB dongles can be flashed here; a bridged gateway is updated from its own device".into());
+            match (kind, engine.transport_label.as_str()) {
+                (JobKind::Relay, "bridge") => engine.remote_addr.clone().ok_or("the relay's address is unknown")?,
+                (JobKind::Relay, _) => return Err("only a bridged relay updates over Wi-Fi".into()),
+                (_, "local") => engine.device_path.clone().ok_or("the dongle has no device path")?,
+                _ => {
+                    return Err("only local USB dongles can be flashed here; a relay is updated with its own firmware".into())
+                }
             }
-            engine.device_path.clone().ok_or("the dongle has no device path")?
         };
         let mut slot = self.job.lock().unwrap();
         if let Some(j) = slot.as_ref().filter(|j| j.step.active()) {
@@ -317,7 +369,7 @@ impl Firmware {
             kind,
             dongle: mac.to_string(),
             device_path: path,
-            step: if kind == JobKind::Install { Step::Download } else { Step::Flash },
+            step: if kind == JobKind::Restore { Step::Flash } else { Step::Download },
             phase: None,
             done: 0,
             total: 0,
@@ -548,6 +600,14 @@ impl Firmware {
     /// The dongle image of [`RELEASE_VERSION`], from the cache, a local
     /// directory, or the release page; checked against its manifest.
     async fn fetch_release(&self) -> Result<Release, String> {
+        let (version, file, image) = self.fetch_file(PRODUCT).await?;
+        let (_, bi) = ows_host::image::check_product(&image, PRODUCT).map_err(|e| e.to_string())?;
+        info!("OpenWyzeSense release {} ready: {} ({})", version, file, bi.version);
+        Ok(Release { version, image: Arc::new(image) })
+    }
+
+    /// One file of [`RELEASE_VERSION`] by product: (release version, file name, bytes), checked against the manifest.
+    async fn fetch_file(&self, product: &str) -> Result<(String, String, Vec<u8>), String> {
         let base = self.source.replace("{version}", RELEASE_VERSION);
         let cache = self.cache_dir.join(RELEASE_VERSION);
         let remote = base.starts_with("http://") || base.starts_with("https://");
@@ -564,8 +624,8 @@ impl Firmware {
         };
         let manifest = Manifest::from_json(&manifest_text).map_err(|e| e.to_string())?;
         let file = manifest
-            .product(PRODUCT)
-            .ok_or_else(|| format!("release {} has no {} image", manifest.version, PRODUCT))?
+            .product(product)
+            .ok_or_else(|| format!("release {} has no {} image", manifest.version, product))?
             .clone();
         let image = match read(&cache, &file.file) {
             Ok(b) if remote && file.verify(&b).is_ok() => b,
@@ -573,14 +633,12 @@ impl Firmware {
             _ => read(Path::new(&base), &file.file).map_err(|e| format!("{}/{}: {}", base, file.file, e))?,
         };
         file.verify(&image).map_err(|e| e.to_string())?;
-        let (_, bi) = ows_host::image::check_product(&image, PRODUCT).map_err(|e| e.to_string())?;
         if remote {
             let _ = std::fs::create_dir_all(&cache);
             let _ = std::fs::write(cache.join("manifest.json"), &manifest_text);
             let _ = std::fs::write(cache.join(&file.file), &image);
         }
-        info!("OpenWyzeSense release {} ready: {} ({})", manifest.version, file.file, bi.version);
-        Ok(Release { version: manifest.version, image: Arc::new(image) })
+        Ok((manifest.version, file.file, image))
     }
 }
 
