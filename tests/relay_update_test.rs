@@ -17,7 +17,7 @@ use wyzesense2mqtt_rs::protocol::sensor::SensorManager;
 use wyzesense2mqtt_rs::transport::virtual_dongle::VirtualDongle;
 
 const RELAY: &str = "7788CCF6";
-const IMAGE_FILE: &str = "ows-relay-esp32-ota-v0.2.0.bin";
+const IMAGE_FILE: &str = "ows-relay-esp32-ota-v0.2.1.bin";
 
 #[derive(Default)]
 struct FakeRelay {
@@ -73,7 +73,7 @@ fn release_dir(root: &Path, image: &[u8]) -> PathBuf {
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join(IMAGE_FILE), image).unwrap();
     let manifest = serde_json::json!({
-        "format": "openwyzesense-release", "version": "v0.2.0",
+        "format": "openwyzesense-release", "version": "v0.2.1",
         "files": [{
             "file": IMAGE_FILE, "device": "classic ESP32 (LOLIN32)", "what": "relay: update",
             "product": "relay-esp32-ota", "size": image.len(),
@@ -89,7 +89,7 @@ async fn ctx(tag: &str, password: Option<&str>, token: Option<&str>, next_build:
     let dir = std::env::temp_dir().join(format!("w2m_relay_{}_{}", tag, id));
     std::fs::create_dir_all(&dir).unwrap();
     let mut image: Vec<u8> = (0..20_000u32).map(|i| (i * 13 + 5) as u8).collect();
-    image.extend_from_slice(b"OWS-RELAY-VERSION:v0.2.0\0");
+    image.extend_from_slice(b"OWS-RELAY-VERSION:v0.2.1\0");
     let source = release_dir(&dir, &image);
 
     // The fake relay's web server.
@@ -147,7 +147,7 @@ fn contains(hay: &[u8], needle: &[u8]) -> bool {
 
 #[tokio::test]
 async fn a_relay_takes_its_own_firmware_and_comes_back_on_it() {
-    let c = ctx("ok", None, None, "v0.2.0 (ota_0)").await;
+    let c = ctx("ok", None, None, "v0.2.1 (ota_0)").await;
     let status = c.firmware.status().await;
     assert_eq!(status["dongles"][RELAY]["relay"]["chip"], "ESP32");
     assert_eq!(status["dongles"][RELAY]["relay"]["product"], "relay-esp32-ota");
@@ -156,7 +156,7 @@ async fn a_relay_takes_its_own_firmware_and_comes_back_on_it() {
     assert_eq!(job.kind, JobKind::Relay);
     let done = wait_end(&c.firmware).await;
     assert_eq!(done.step, Step::Done, "{:?}", done.message);
-    assert_eq!(done.current.as_deref(), Some("ESP32 v0.2.0 (ota_0)"));
+    assert_eq!(done.current.as_deref(), Some("ESP32 v0.2.1 (ota_0)"));
     let uploads = &c.relay.lock().unwrap().uploads;
     assert_eq!(uploads.len(), 1);
     assert!(contains(&uploads[0], b"name=\"image\""), "a multipart field named image");
@@ -165,7 +165,7 @@ async fn a_relay_takes_its_own_firmware_and_comes_back_on_it() {
 
 #[tokio::test]
 async fn a_relay_with_a_password_needs_it() {
-    let c = ctx("auth", Some("s3cret"), None, "v0.2.0 (ota_0)").await;
+    let c = ctx("auth", Some("s3cret"), None, "v0.2.1 (ota_0)").await;
     let err = c.firmware.start_relay_update(RELAY, None).await.unwrap_err();
     assert!(err.contains("password"), "{}", err);
 
@@ -180,14 +180,14 @@ async fn a_relay_with_a_password_needs_it() {
 
 #[tokio::test]
 async fn the_bridge_token_serves_as_the_password() {
-    let c = ctx("token", Some("bridge-token"), Some("bridge-token"), "v0.2.0 (ota_0)").await;
+    let c = ctx("token", Some("bridge-token"), Some("bridge-token"), "v0.2.1 (ota_0)").await;
     c.firmware.start_relay_update(RELAY, None).await.unwrap();
     assert_eq!(wait_end(&c.firmware).await.step, Step::Done);
 }
 
 #[tokio::test]
 async fn a_usb_flash_is_refused_for_a_relay() {
-    let c = ctx("guard", None, None, "v0.2.0 (ota_0)").await;
+    let c = ctx("guard", None, None, "v0.2.1 (ota_0)").await;
     assert!(c.firmware.start_install(RELAY).await.unwrap_err().contains("relay"));
 }
 

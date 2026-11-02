@@ -41,7 +41,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::{error, info, warn};
 
 /// The OpenWyzeSense release this build installs (the `ows-host` tag).
-pub const RELEASE_VERSION: &str = "v0.2.0";
+pub const RELEASE_VERSION: &str = "v0.2.1";
 /// Where releases are downloaded from; `{version}` is replaced.
 pub const DEFAULT_SOURCE: &str = "https://github.com/HclX/openwyzesense/releases/download/{version}";
 /// The release file for the USB dongle.
@@ -673,7 +673,10 @@ impl Firmware {
         pick: impl Fn(&ows_host::manifest::ManifestFile) -> bool,
     ) -> Result<(String, String, Vec<u8>), String> {
         let base = self.source.replace("{version}", RELEASE_VERSION);
-        let cache = self.cache_dir.join(RELEASE_VERSION);
+        // Cached per source: the pinned release, or whatever firmware_source names.
+        let cache = self.cache_dir.join(
+            base.trim_end_matches('/').rsplit('/').next().filter(|v| !v.is_empty()).unwrap_or(RELEASE_VERSION),
+        );
         let remote = base.starts_with("http://") || base.starts_with("https://");
 
         let read = |dir: &Path, name: &str| std::fs::read(dir.join(name));
