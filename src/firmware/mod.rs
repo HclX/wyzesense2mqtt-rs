@@ -339,7 +339,14 @@ impl Firmware {
                     .get_sensors()
                     .values()
                     .filter(|s| s.dongle_mac.as_deref() == Some(mac.as_str()))
-                    .filter_map(|s| sensors::board_of(s.sensor_type).map(|b| serde_json::json!({ "mac": s.mac, "board": b })))
+                    .filter_map(|s| match (sensors::board_of(s.sensor_type), s.sensor_type) {
+                        (Some(b), _) => Some(serde_json::json!({ "mac": s.mac, "board": b })),
+                        // Not reported since start-up: it may be one of ours.
+                        (None, crate::protocol::telemetry::SensorType::Unknown(_)) => {
+                            Some(serde_json::json!({ "mac": s.mac, "board": null }))
+                        }
+                        _ => None,
+                    })
                     .collect();
                 list.sort_by(|a, b| a["mac"].as_str().cmp(&b["mac"].as_str()));
                 list
