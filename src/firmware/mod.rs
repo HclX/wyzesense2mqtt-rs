@@ -359,7 +359,7 @@ impl Firmware {
         let mut progress = Self::progress_sink(Arc::clone(&self.job), self.broadcast_tx.clone());
         let backup = tokio::task::spawn_blocking(move || -> Result<Backup, String> {
             let mut t = opener(&path).map_err(|e| format!("open {}: {}", path.display(), e))?;
-            dongle::backup(&mut *t, &mut progress).map_err(|e| format!("backup: {}", e))
+            dongle::backup(&mut *t, &mut progress).map_err(|e| explain(&e, "backup"))
         })
         .await
         .map_err(|e| e.to_string())?;
@@ -582,6 +582,17 @@ impl Firmware {
         info!("OpenWyzeSense release {} ready: {} ({})", manifest.version, file.file, bi.version);
         Ok(Release { version: manifest.version, image: Arc::new(image) })
     }
+}
+
+/// A bootloader error in words a user can act on.
+fn explain(e: &ows_host::Error, step: &str) -> String {
+    let text = e.to_string();
+    if text.contains("no bootloader") {
+        return "this dongle's bootloader can't be reached (it is turned off in the chip's configuration), \
+                so it can't be flashed over USB. Nothing was changed, and the dongle keeps working as before."
+            .to_string();
+    }
+    format!("{}: {}", step, text)
 }
 
 async fn download(url: &str) -> Result<Vec<u8>, String> {
