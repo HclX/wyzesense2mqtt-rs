@@ -1,5 +1,6 @@
 use wyzesense2mqtt_rs::engine::Engine;
 use wyzesense2mqtt_rs::transport::hidraw::HidrawTransport;
+use wyzesense2mqtt_rs::local_dongle::{self, DongleSource, LocalDongles};
 use wyzesense2mqtt_rs::transport::{AsyncTransport, GatewayTransport};
 use wyzesense2mqtt_rs::protocol::telemetry::{TelemetryData, DongleEvent, SensorType};
 use wyzesense2mqtt_rs::web::start_web_server;
@@ -173,37 +174,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     info!("===============================================================");
     info!("Configuration loaded successfully. Log Level set to: {}", config.logging.level);
 
-    // 5. Resolve USB Dongle device paths into a Vec
+    // 5. Where local USB dongles come from
     let dongle_setting = config.usb.dongle.to_lowercase();
-    let device_paths: Vec<String> = if dongle_setting == "none" {
-        info!("USB Dongle set to 'none'. Running in bridge-only mode.");
-        Vec::new()
+    let dongle_source = if dongle_setting == "none" {
+        None
     } else if dongle_setting == "auto" {
-        info!("USB Dongle path set to 'auto'. Scanning Linux sysfs class...");
-        match wyzesense2mqtt_rs::transport::hidraw::discover_all_dongle_devices() {
-            Ok(paths) if paths.is_empty() => {
-                error!("Auto-Discovery: No Wyze Sense USB dongles found!");
-                return Err("No Wyze Sense USB dongles found".into());
-            }
-            Ok(paths) => {
-                for p in &paths {
-                    info!("Auto-Discovery: Found Wyze Sense Bridge on {}", p);
-                }
-                paths
-            }
-            Err(e) => {
-                error!("Auto-Discovery failed: {}", e);
-                return Err(e);
-            }
-        }
+        Some(DongleSource::Auto)
     } else {
-        // Specific device path provided
-        vec![config.usb.dongle.clone()]
+        Some(DongleSource::Path(config.usb.dongle.clone()))
     };
 
     if args.len() > 1 {
         // A subcommand was passed! Run CLI Subcommand Client mode
         // For CLI mode, use the first available dongle path
+        let device_paths: Vec<String> = match &dongle_source {
+            None => Vec::new(),
+            Some(DongleSource::Auto) => wyzesense2mqtt_rs::transport::hidraw::discover_all_dongle_devices().unwrap_or_default(),
+            Some(DongleSource::Path(p)) => vec![p.clone()],
+        };
         let cli_dongle = device_paths.first().cloned().unwrap_or_else(|| "none".to_string());
         if cli_dongle != "none" {
             config.usb.dongle = cli_dongle;
@@ -231,36 +219,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // 5. Default Mode: Start the Unified Daemon
     info!("Initializing Wyze Sense to MQTT Bridge (Rust) Daemon mode...");
 
-    if device_paths.is_empty() {
-        info!("  USB Device: DISABLED (bridge-only mode)");
-        info!("  Web Console: http://localhost:{}", config.web.port);
-        return run_daemon(vec![], config).await;
-    }
-
-    // Open all Hidraw transports
-    let mut transports: Vec<GatewayTransport> = Vec::new();
-    for path in &device_paths {
-        info!("  USB Device: {}", path);
-        match HidrawTransport::open(path).await {
-            Ok(t) => transports.push(GatewayTransport::Hidraw(t)),
-            Err(e) => {
-                error!("Failed to open USB hidraw device [{}]: {}", path, e);
-                return Err(e.into());
-            }
-        }
+    match &dongle_source {
+        None => info!("  USB Device: DISABLED (bridge-only mode)"),
+        Some(DongleSource::Auto) => info!("  USB Device: auto (attached as they are plugged in)"),
+        Some(DongleSource::Path(p)) => info!("  USB Device: {} (attached whenever present)", p),
     }
     info!("  Web Console: http://localhost:{}", config.web.port);
 
-    return run_daemon(transports, config).await;
+    run_daemon(dongle_source, config).await
 }
 
 async fn run_daemon(
-    transports: Vec<GatewayTransport>,
+    dongle_source: Option<DongleSource>,
     config: AppConfig,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-
-    // Persistent storage for engine exit handles — prevents worker tasks from being killed
-    let mut engine_exit_handles: Vec<tokio::sync::oneshot::Sender<()>> = Vec::new();
 
     // Setup central events channel (shared across all engines)
     let (event_tx, event_rx) = mpsc::channel::<DongleEvent>(128);
@@ -295,104 +267,21 @@ async fn run_daemon(
         }
     }
 
-    // --- Local USB Dongle Engines (supports multiple dongles) ---
-    if transports.is_empty() {
-        info!("No local USB dongle configured. Running in bridge-only mode.");
-        info!("Waiting for remote dongles to connect via WebSocket at /ws/bridge");
-    }
-
-    for transport in transports {
-        let device_path = match &transport {
-            GatewayTransport::Hidraw(h) => h.device_path().to_string(),
-            _ => "unknown".to_string(),
-        };
-
-        let mut engine = Engine::new(transport, event_tx.clone());
-        engine.transport_label = "local".to_string();
-        engine.device_path = Some(device_path.clone());
-
-            // Start background worker loop
-            let exit_tx = engine.start();
-
-            // Perform dongle unlock handshake
-            match tokio::time::timeout(wyzesense2mqtt_rs::engine::HANDSHAKE_TIMEOUT, engine.initialize_handshake()).await {
-                Ok(Ok(_)) => {
-                    info!("Dongle on {} successfully unlocked and authenticated!", device_path);
-                    engine.set_auto_verify(true);
-
-                    let dongle_mac = engine.dongle_mac().unwrap_or("unknown").to_string();
-                    info!("Registering dongle {} ({}) in engines registry", dongle_mac, device_path);
-
-                    // Warm up paired sensors cache from NVRAM and merge with saved configs
-                    info!("Warming up paired sensors cache from NVRAM for dongle {}...", dongle_mac);
-                    match engine.get_sensor_list().await {
-                        Ok(sensors_list) => {
-                            let mut manager = sensor_manager.lock().unwrap();
-                            if let Err(e) = manager.load_sensors(&sensors_list) {
-                                error!("Failed to load/bootstrap sensors for dongle {}: {}", dongle_mac, e);
-                            } else {
-                                info!("Sensors memory cache for dongle {} successfully warmed up!", dongle_mac);
-
-                                // Inject dummy events for each cached sensor to trigger initial MQTT discovery & state sync
-                                let sensor_macs: Vec<String> = manager.get_sensors().keys().cloned().collect();
-                                for mac in &sensor_macs {
-                                    if let Some(sensor) = manager.get_sensors().get(mac.as_str()) {
-                                        let dummy = DongleEvent {
-                                            mac: sensor.mac.clone(),
-                                            timestamp: std::time::SystemTime::now(),
-                                            sensor_type: sensor.sensor_type,
-                                            event_type: 0xFF,
-                                            data: TelemetryData::UnknownEvent(Vec::new()),
-                                            dongle_mac: None,
-                                        };
-                                        let _ = event_tx.try_send(dummy);
-                                    }
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            warn!("Failed to warm up sensors cache for dongle {} on startup: {}", dongle_mac, e);
-                        }
-                    }
-
-                    // Clone disconnect_notify BEFORE moving engine into the map
-                    let disconnect_notify = engine.disconnect_notify.clone();
-
-                    // Insert into registry
-                    {
-                        let mut map = engines.lock().await;
-                        map.insert(dongle_mac.clone(), engine);
-                    }
-
-                    // Spawn disconnect watcher for this local USB dongle
-                    {
-                        let engines_disconnect = Arc::clone(&engines);
-                        let sensor_manager_disconnect = Arc::clone(&sensor_manager);
-                        let mac_clone = dongle_mac.clone();
-                        let broadcast_tx_clone = broadcast_tx.clone();
-                        tokio::spawn(async move {
-                            disconnect_notify.notified().await;
-                            warn!("Local USB dongle {} disconnected! Cleaning up...", mac_clone);
-                            engines_disconnect.lock().await.remove(&mac_clone);
-                            {
-                                let mut manager = sensor_manager_disconnect.lock().unwrap();
-                                manager.unassign_dongle(&mac_clone);
-                            }
-                            let _ = broadcast_tx_clone.send(());
-                        });
-                    }
-
-                    // Store exit handle so the engine worker stays alive
-                    engine_exit_handles.push(exit_tx);
-                }
-            Ok(Err(e)) => {
-                error!("Failed during dongle handshake on {}: {}. Skipping.", device_path, e);
-                continue;
-            }
-            Err(_) => {
-                error!("Dongle handshake timed out on {}! Skipping.", device_path);
-                continue;
-            }
+    // --- Local USB dongles: attached as they appear, detached when unplugged ---
+    match dongle_source {
+        None => {
+            info!("No local USB dongle configured. Running in bridge-only mode.");
+            info!("Waiting for remote dongles to connect via WebSocket at /ws/bridge");
+        }
+        Some(source) => {
+            let local = LocalDongles::new(
+                Arc::clone(&engines),
+                Arc::clone(&sensor_manager),
+                event_tx.clone(),
+                dongle_status_tx.clone(),
+                broadcast_tx.clone(),
+            );
+            tokio::spawn(local.supervise(source, local_dongle::POLL_INTERVAL, local_dongle::RETRY_AFTER));
         }
     }
 

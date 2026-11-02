@@ -203,6 +203,8 @@ wyzesense2mqtt-rs [SUBCOMMAND] [OPTIONS]
 ### 2. Multiple `/dev/hidraw` devices
 With `usb.dongle: "auto"`, the gateway auto-discovers **all** matching Wyze Sense dongles via sysfs and creates an engine for each. If you want to restrict to a specific dongle, set `dongle: "/dev/hidrawX"` explicitly. To disable local USB entirely (WebSocket bridges only), set `dongle: "none"`.
 
+Local dongles can be plugged in and out while the daemon runs. It checks for them every 2 seconds: a dongle plugged in (or back in) is attached, and an unplugged one is detached and its sensors are marked as having no dongle until it returns. The daemon also starts with no dongle plugged in and waits for one. A dongle that doesn't answer the handshake is retried when it is replugged, or after 60 seconds.
+
 ### 3. Capturing raw data for debugging
 To capture raw USB packet logs, increase log verbosity in `config.yaml`:
 ```yaml

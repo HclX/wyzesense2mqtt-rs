@@ -4,3 +4,4 @@ pub mod engine;
 pub mod config;
 pub mod gateway;
 pub mod web;
+pub mod local_dongle;
