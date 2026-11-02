@@ -151,6 +151,10 @@ pub struct DongleEvent {
     /// Which dongle generated this event (set by the engine's reader loop).
     /// Used to associate newly discovered sensors with the correct dongle.
     pub dongle_mac: Option<String>,
+    /// Set when the report was not the reporting gateway's own but one it
+    /// overheard (OpenWyzeSense roaming, `0x53F1` sub `0x20`): the sensor's
+    /// short address, which names it when the report carries a zero MAC.
+    pub overheard_short: Option<u16>,
 }
 
 impl DongleEvent {
@@ -186,7 +190,7 @@ impl DongleEvent {
             sensor_type,
             event_type,
             data: TelemetryData::Scanned { version },
-            dongle_mac: None,
+            dongle_mac: None, overheard_short: None,
         })
     }
 
@@ -316,7 +320,7 @@ impl DongleEvent {
             sensor_type,
             event_type,
             data,
-            dongle_mac: None,
+            dongle_mac: None, overheard_short: None,
         })
     }
 
@@ -363,7 +367,7 @@ impl DongleEvent {
             sensor_type,
             event_type,
             data,
-            dongle_mac: None,
+            dongle_mac: None, overheard_short: None,
         })
     }
 }

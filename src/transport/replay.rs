@@ -18,7 +18,13 @@ pub struct ReplayTransport {
     notify: Arc<Notify>,
     // When true, read() returns BrokenPipe immediately
     poisoned: Arc<Mutex<bool>>,
+    // Optional stateful responder, asked before the registered responses
+    handler: Arc<Mutex<Option<Handler>>>,
 }
+
+/// Answers a packet the host wrote with bytes to read back, or `None` to fall
+/// back to the registered responses.
+pub type Handler = Box<dyn FnMut(&Packet) -> Option<Vec<u8>> + Send>;
 
 impl ReplayTransport {
     pub fn new() -> Self {
@@ -28,7 +34,13 @@ impl ReplayTransport {
             responses: Arc::new(Mutex::new(HashMap::new())),
             notify: Arc::new(Notify::new()),
             poisoned: Arc::new(Mutex::new(false)),
+            handler: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// Installs a stateful responder (e.g. an emulated gateway).
+    pub fn set_handler(&self, handler: Handler) {
+        *self.handler.lock().unwrap() = Some(handler);
     }
 
     /// Poison the transport so that all future reads return BrokenPipe.
@@ -114,8 +126,8 @@ impl AsyncTransport for ReplayTransport {
         // Try to parse packet and trigger automatic response
         if let Ok((pkt, _)) = Packet::parse(buf) {
             let cmd = pkt.cmd();
-            let mut resp_to_enqueue = None;
-            {
+            let mut resp_to_enqueue = self.handler.lock().unwrap().as_mut().and_then(|h| h(&pkt));
+            if resp_to_enqueue.is_none() {
                 if let Ok(mut resps) = self.responses.lock() {
                     if let Some(queue) = resps.get_mut(&cmd) {
                         resp_to_enqueue = queue.pop_front();

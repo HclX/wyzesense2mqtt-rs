@@ -114,6 +114,80 @@ impl Default for BridgeConfig {
     }
 }
 
+fn default_hysteresis_db() -> f32 { 10.0 }
+
+/// OpenWyzeSense gateway features, each off unless turned on here. Gateways
+/// are detected on every connect (a stock dongle ignores the probe and never
+/// gets a flag).
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq)]
+pub struct OwsFeatures {
+    /// Forward each sensor resend once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dedup: Option<bool>,
+    /// Give v1 contacts' zero-MAC reports their real MAC.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fix_zero_mac: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub announce: Option<bool>,
+    /// Roaming: only the owner ACKs a sensor; the host hands sensors between
+    /// gateways sharing one network identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub roam: Option<bool>,
+}
+
+impl OwsFeatures {
+    /// `self` with `over`'s settings taking precedence.
+    pub fn merged(&self, over: &OwsFeatures) -> OwsFeatures {
+        OwsFeatures {
+            dedup: over.dedup.or(self.dedup),
+            fix_zero_mac: over.fix_zero_mac.or(self.fix_zero_mac),
+            announce: over.announce.or(self.announce),
+            roam: over.roam.or(self.roam),
+        }
+    }
+
+    /// As `0x53F0` flag bits.
+    pub fn flags(&self) -> u32 {
+        use crate::protocol::ows;
+        [
+            (self.dedup, ows::FLAG_DEDUP),
+            (self.fix_zero_mac, ows::FLAG_FIX_ZERO_MAC),
+            (self.announce, ows::FLAG_ANNOUNCE),
+            (self.roam, ows::FLAG_ROAM),
+        ]
+        .iter()
+        .filter(|(on, _)| *on == Some(true))
+        .fold(0, |acc, (_, bit)| acc | bit)
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct OwsSettings {
+    /// Features for every OpenWyzeSense gateway...
+    #[serde(flatten)]
+    pub defaults: OwsFeatures,
+    /// ... and per gateway (keyed by its MAC), overriding the defaults.
+    #[serde(default)]
+    pub gateways: std::collections::HashMap<String, OwsFeatures>,
+    /// How much stronger (dB) another gateway must hear a sensor to take it over.
+    #[serde(default = "default_hysteresis_db")]
+    pub roam_hysteresis_db: f32,
+}
+
+impl Default for OwsSettings {
+    fn default() -> Self {
+        Self { defaults: OwsFeatures::default(), gateways: Default::default(), roam_hysteresis_db: default_hysteresis_db() }
+    }
+}
+
+impl OwsSettings {
+    /// The flags configured for one gateway.
+    pub fn flags_for(&self, gateway_mac: &str) -> u32 {
+        let over = self.gateways.iter().find(|(k, _)| k.eq_ignore_ascii_case(gateway_mac)).map(|(_, v)| v);
+        over.map_or_else(|| self.defaults.flags(), |o| self.defaults.merged(o).flags())
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct AppConfig {
     #[serde(default)]
@@ -126,6 +200,8 @@ pub struct AppConfig {
     pub logging: LoggingConfig,
     #[serde(default)]
     pub bridge: BridgeConfig,
+    #[serde(default)]
+    pub openwyzesense: OwsSettings,
 }
 
 impl AppConfig {
@@ -168,6 +244,11 @@ impl AppConfig {
         if let Some(val) = std::env::var("LOG_LEVEL").ok().filter(|v| !v.is_empty()) { config.logging.level = val; }
         if let Ok(val) = std::env::var("LOG_NO_ANSI") { config.logging.no_ansi = val.parse().unwrap_or(config.logging.no_ansi); }
         if let Ok(val) = std::env::var("BRIDGE_ENABLED") { config.bridge.enabled = val.parse().unwrap_or(config.bridge.enabled); }
+        let ows = &mut config.openwyzesense.defaults;
+        for (var, field) in [("OWS_DEDUP", &mut ows.dedup), ("OWS_FIX_ZERO_MAC", &mut ows.fix_zero_mac),
+                             ("OWS_ANNOUNCE", &mut ows.announce), ("OWS_ROAM", &mut ows.roam)] {
+            if let Some(val) = std::env::var(var).ok().and_then(|v| v.parse().ok()) { *field = Some(val); }
+        }
         if let Some(val) = std::env::var("BRIDGE_AUTH_TOKEN").ok().filter(|v| !v.is_empty()) { config.bridge.auth_token = Some(val); }
 
         // Ensure that if host is set, MQTT is enabled
@@ -217,6 +298,16 @@ mqtt:
 bridge:
   enabled: false
   # auth_token: "your_secret_token"
+
+# OpenWyzeSense gateway features (all off unless turned on; stock dongles are
+# detected and never touched). Per-gateway settings override the defaults.
+openwyzesense:
+  dedup: false            # forward each sensor resend once
+  fix_zero_mac: false     # name v1 contacts' zero-MAC reports
+  roam: false             # roaming between gateways sharing one network identity
+  roam_hysteresis_db: 10  # how much stronger another gateway must hear a sensor to take it
+  # gateways:
+  #   "77E0000A": { roam: true, dedup: true }
 
 # Diagnostics Structural Logging Level
 # (Options: trace, debug, info, warn, error)

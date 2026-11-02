@@ -40,6 +40,8 @@ pub struct WebState {
     /// Optional auth token required for WebSocket bridge connections.
     pub bridge_auth_token: Option<String>,
     pub bridge: BridgeSettings,
+    /// Roaming coordinator, when roaming is enabled.
+    pub roaming: Option<Arc<crate::roaming::Roaming>>,
 }
 
 /// Timing for `/ws/bridge` connections.
@@ -123,6 +125,7 @@ pub async fn start_web_server(
     port: u16,
     bridge_auth_token: Option<String>,
     dongle_status_tx: tokio::sync::mpsc::Sender<DongleStatus>,
+    roaming: Option<Arc<crate::roaming::Roaming>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let shared_state = Arc::new(WebState {
         engines,
@@ -132,6 +135,7 @@ pub async fn start_web_server(
         dongle_status_tx,
         bridge_auth_token,
         bridge: BridgeSettings::default(),
+        roaming,
     });
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
@@ -161,6 +165,7 @@ fn router(shared_state: Arc<WebState>) -> Router {
         .route("/api/fix", post(fix_sensors))
         .route("/api/raw", post(send_raw_packet))
         .route("/api/events", get(sse_handler))
+        .route("/api/roaming", get(roaming_status))
         .route("/ws/bridge", get(ws_bridge_handler))
         .layer(cors)
         .with_state(shared_state)
@@ -257,6 +262,11 @@ async fn handle_bridge_connection(
     state.engines.lock().await.insert(mac.clone(), engine);
     let _ = state.dongle_status_tx.try_send(DongleStatus { mac: mac.clone(), online: true, version });
     let _ = state.broadcast_tx.send(());
+    if let Some(r) = &state.roaming {
+        // In the background: the heartbeat below must start right away.
+        let (r, mac) = (Arc::clone(r), mac.clone());
+        tokio::spawn(async move { r.gateway_connected(&mac).await });
+    }
 
     // Wait for the transport to die (WebSocket close / broken pipe; the reader
     // loop fires disconnect_notify) or for the client to stop answering pings,
@@ -285,6 +295,10 @@ async fn handle_bridge_connection(
     if !still_ours {
         info!("Bridge dongle {} already re-registered by a newer connection", mac);
         return;
+    }
+
+    if let Some(r) = &state.roaming {
+        r.gateway_disconnected(&mac);
     }
 
     // Cleanup: unassign sensors from disconnected dongle
@@ -356,7 +370,7 @@ fn inject_discovery_events(
                 sensor_type: sensor.sensor_type,
                 event_type: 0xFF,
                 data: crate::protocol::telemetry::TelemetryData::UnknownEvent(Vec::new()),
-                dongle_mac: None,
+                dongle_mac: None, overheard_short: None,
             };
             let _ = event_tx.try_send(dummy);
         }
@@ -424,6 +438,8 @@ async fn list_dongles(
             "remote_addr": engine.remote_addr,
             "sensors": sensors,
             "sensor_count": sensor_count,
+            // OpenWyzeSense firmware details, null for a stock dongle
+            "openwyzesense": state.roaming.as_ref().and_then(|r| r.gateway_json(mac)),
         })
     }).collect();
 
@@ -567,6 +583,14 @@ async fn toggle_scan(
             }
         }
     };
+    if let (true, Some(r)) = (payload.enable, &state.roaming) {
+        if let Err(e) = r.prepare_pairing(&dongle_mac).await {
+            return (
+                StatusCode::CONFLICT,
+                Json(json!({ "error": format!("Cannot pair on dongle {}: {}", dongle_mac, e) })),
+            ).into_response();
+        }
+    }
     match engine.set_scan(payload.enable).await {
         Ok(_) => {
             let _ = state.broadcast_tx.send(());
@@ -579,6 +603,14 @@ async fn toggle_scan(
                 .into_response()
         },
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+// --- GET /api/roaming ---
+async fn roaming_status(State(state): State<Arc<WebState>>) -> impl IntoResponse {
+    match &state.roaming {
+        Some(r) => (StatusCode::OK, Json(json!({ "enabled": true, "status": r.status_json() }))),
+        None => (StatusCode::OK, Json(json!({ "enabled": false }))),
     }
 }
 
@@ -934,6 +966,7 @@ const HTML_CONTENT: &str = concat!(r##"
                         <div>
                             <div class="font-bold text-base text-teal-400">⚙️ Dongle ${d.mac}</div>
                             <div class="text-xs text-slate-500 mt-0.5">${d.transport === 'bridge' ? '🌐 Bridge' : '🔌 Local'} · ${d.device_path||'?'}${d.remote_addr ? ' · '+d.remote_addr.split(':')[0] : ''}</div>
+                            ${d.openwyzesense ? `<div class="text-xs text-emerald-600 mt-0.5">OpenWyzeSense ${d.openwyzesense.version||''} · flags supported ${d.openwyzesense.flags_supported} / enabled ${d.openwyzesense.flags_enabled}${d.openwyzesense.roaming ? ' · roaming' : ''}</div>` : ''}
                         </div>
                         <button onclick="closeModal()" class="text-slate-500 hover:text-slate-300 text-xl leading-none px-1">✕</button>
                     </div>
@@ -1116,6 +1149,7 @@ mod tests {
             dongle_status_tx,
             bridge_auth_token: None,
             bridge,
+            roaming: None,
         });
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();

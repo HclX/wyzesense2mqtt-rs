@@ -18,7 +18,23 @@
 use super::replay::ReplayTransport;
 use super::GatewayTransport;
 use crate::protocol::packet::{commands, Packet};
+use crate::protocol::ows::{self, NetworkIdentity, NvSensor};
 use crate::protocol::telemetry::{DongleEvent, SensorType};
+use std::sync::{Arc, Mutex};
+
+/// State of an emulated OpenWyzeSense gateway (see [`VirtualDongle::with_ows`]).
+#[derive(Debug, Clone)]
+pub struct OwsSim {
+    pub flags: u32,
+    pub supported: u32,
+    pub range: (u16, u16),
+    pub network: NetworkIdentity,
+    pub table: Vec<NvSensor>,
+    /// Table changes in order: "delete <mac>", "add <mac> <short>".
+    pub log: Vec<String>,
+    /// Lost power: answers nothing (the connection may look alive).
+    pub dead: bool,
+}
 
 /// A virtual Wyze Sense dongle for integration testing.
 ///
@@ -31,6 +47,7 @@ pub struct VirtualDongle {
     #[allow(dead_code)]
     version: String,
     nvram_sensors: Vec<String>,
+    ows: Option<Arc<Mutex<OwsSim>>>,
 }
 
 impl VirtualDongle {
@@ -96,7 +113,145 @@ impl VirtualDongle {
             mac: mac.to_string(),
             version: version.to_string(),
             nvram_sensors: Vec::new(),
+            ows: None,
         }
+    }
+
+    /// Makes this dongle answer like an OpenWyzeSense gateway with roaming
+    /// support: flags, network identity, sensor table (get / add, and the
+    /// stock delete), address range. The table also feeds the stock sensor list.
+    pub fn with_ows(self, network: NetworkIdentity, table: Vec<NvSensor>) -> Self {
+        let mut me = self.with_sensors(table.iter().map(|s| s.mac.clone()).collect());
+        let sim = Arc::new(Mutex::new(OwsSim {
+            flags: 0,
+            supported: ows::FLAG_DEDUP | ows::FLAG_FIX_ZERO_MAC | ows::FLAG_ROAM,
+            range: (ows::ADDR_FIRST, ows::ADDR_LAST),
+            network,
+            table,
+            log: Vec::new(),
+            dead: false,
+        }));
+        let state = Arc::clone(&sim);
+        me.transport.set_handler(Box::new(move |pkt| Self::ows_answer(&mut state.lock().unwrap(), pkt)));
+        me.ows = Some(sim);
+        me
+    }
+
+    /// The emulated gateway restarts without the host noticing: flags and
+    /// address range go back to their defaults, the table (flash) stays.
+    pub fn ows_restart(&self) {
+        let mut sim = self.ows.as_ref().expect("not an OWS dongle").lock().unwrap();
+        sim.flags = 0;
+        sim.range = (ows::ADDR_FIRST, ows::ADDR_LAST);
+    }
+
+    /// A snapshot of the emulated gateway's state.
+    pub fn ows(&self) -> OwsSim {
+        self.ows.as_ref().expect("not an OWS dongle").lock().unwrap().clone()
+    }
+
+    /// The emulated gateway loses power but its connection stays up (as a
+    /// relay's half-open WebSocket does until the heartbeat notices).
+    pub fn ows_power_off(&self) {
+        self.ows.as_ref().expect("not an OWS dongle").lock().unwrap().dead = true;
+    }
+
+    fn ows_answer(sim: &mut OwsSim, pkt: &Packet) -> Option<Vec<u8>> {
+        if sim.dead {
+            return Some(Vec::new());
+        }
+        let p = pkt.payload_bytes()?;
+        if pkt.cmd() == commands::CMD_DELETE_SENSOR {
+            let mac = String::from_utf8_lossy(p).to_string();
+            sim.table.retain(|s| s.mac != mac);
+            sim.log.push(format!("delete {}", mac));
+            return Some(Packet::new_async(0x26, vec![0x01]).to_bytes());
+        }
+        if pkt.cmd() != ows::CMD_OWS || p.is_empty() {
+            return None;
+        }
+        let count = sim.table.len() as u8;
+        let reply = match (p[0], p.len()) {
+            (ows::SUB_FLAGS, n) => {
+                if n == 5 {
+                    sim.flags = u32::from_be_bytes([p[1], p[2], p[3], p[4]]) & sim.supported;
+                }
+                let mut r = vec![ows::SUB_FLAGS];
+                r.extend_from_slice(&sim.flags.to_be_bytes());
+                r.extend_from_slice(&sim.supported.to_be_bytes());
+                r
+            }
+            (ows::SUB_NETWORK, 1) => {
+                let mut r = vec![ows::SUB_NETWORK, ows::STATUS_OK];
+                r.extend_from_slice(&sim.network.pan.to_le_bytes());
+                r.extend_from_slice(&sim.network.short.to_le_bytes());
+                r.extend_from_slice(&sim.network.ext.to_le_bytes());
+                r
+            }
+            (ows::SUB_NV, 3) if p[1] == ows::NV_GET_SENSOR => match sim.table.get(p[2] as usize) {
+                Some(s) => {
+                    let mut r = vec![ows::SUB_NV, ows::NV_GET_SENSOR, ows::STATUS_OK, count, p[2], p[2], 0];
+                    r.extend_from_slice(s.mac.as_bytes());
+                    r.extend_from_slice(&s.short.to_le_bytes());
+                    r.push(s.sensor_type);
+                    r
+                }
+                None => vec![ows::SUB_NV, ows::NV_GET_SENSOR, 0xE0, count, p[2]],
+            },
+            (ows::SUB_NV, 13) if p[1] == ows::NV_ADD_SENSOR => {
+                let mac = String::from_utf8_lossy(&p[2..10]).to_string();
+                let short = u16::from_le_bytes([p[10], p[11]]);
+                if sim.table.iter().any(|s| s.short == short && s.mac != mac) {
+                    vec![ows::SUB_NV, ows::NV_ADD_SENSOR, 0xE0, count]
+                } else {
+                    sim.table.retain(|s| s.mac != mac);
+                    sim.table.push(NvSensor { mac: mac.clone(), short, sensor_type: p[12] });
+                    sim.log.push(format!("add {} {:04X}", mac, short));
+                    vec![ows::SUB_NV, ows::NV_ADD_SENSOR, ows::STATUS_OK, sim.table.len() as u8]
+                }
+            }
+            (ows::SUB_ADDR_RANGE, n) => {
+                let mut status = ows::STATUS_OK;
+                if n == 5 {
+                    let (first, last) = (u16::from_le_bytes([p[1], p[2]]), u16::from_le_bytes([p[3], p[4]]));
+                    if (ows::ADDR_FIRST..=ows::ADDR_LAST).contains(&first) && first <= last && last <= ows::ADDR_LAST {
+                        sim.range = (first, last);
+                    } else {
+                        status = 0xE0;
+                    }
+                }
+                let mut r = vec![ows::SUB_ADDR_RANGE, status];
+                r.extend_from_slice(&sim.range.0.to_le_bytes());
+                r.extend_from_slice(&sim.range.1.to_le_bytes());
+                r
+            }
+            _ => return None,
+        };
+        Some(Packet::new_async((ows::CMD_OWS_RESPONSE & 0xFF) as u8, reply).to_bytes())
+    }
+
+    /// Inject the gateway's own report (`0x5319`) with an event counter.
+    pub fn inject_report(&self, mac: &str, sensor_type: SensorType, state: u8, seq: u16, rssi: u8) {
+        let payload = self.report_payload(mac, sensor_type, state, seq, rssi);
+        self.transport.enqueue_read(&Packet::new_async(0x19, payload).to_bytes());
+    }
+
+    /// Inject a report this gateway overheard (`0x53F1` sub `0x20`).
+    pub fn inject_overheard(&self, short: u16, mac: &str, sensor_type: SensorType, state: u8, seq: u16, rssi: u8) {
+        let mut payload = vec![ows::SUB_OVERHEARD];
+        payload.extend_from_slice(&short.to_le_bytes());
+        payload.extend_from_slice(&self.report_payload(mac, sensor_type, state, seq, rssi));
+        self.transport.enqueue_read(&Packet::new_async((ows::CMD_OWS_RESPONSE & 0xFF) as u8, payload).to_bytes());
+    }
+
+    fn report_payload(&self, mac: &str, sensor_type: SensorType, state: u8, seq: u16, rssi: u8) -> Vec<u8> {
+        let [hi, lo] = seq.to_be_bytes();
+        self.build_alarm1_payload(
+            DongleEvent::EVENT_TYPE_ALARM,
+            mac,
+            sensor_type,
+            &[0x01, 0x5A, 0x00, 0x01, state, hi, lo, rssi],
+        )
     }
 
     /// Pre-populate the dongle's NVRAM with paired sensor MACs.

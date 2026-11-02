@@ -12,6 +12,7 @@
 use crate::engine::{Engine, EnginesMap, HANDSHAKE_TIMEOUT};
 use crate::gateway::mqtt::DongleStatus;
 use crate::protocol::sensor::SensorManager;
+use crate::roaming::Roaming;
 use crate::protocol::telemetry::{DongleEvent, TelemetryData};
 use crate::transport::hidraw::{discover_all_dongle_devices, HidrawTransport};
 use crate::transport::GatewayTransport;
@@ -53,6 +54,9 @@ pub struct LocalDongles {
     pub event_tx: mpsc::Sender<DongleEvent>,
     pub dongle_status_tx: mpsc::Sender<DongleStatus>,
     pub broadcast_tx: broadcast::Sender<()>,
+    /// OpenWyzeSense detection, feature flags and roaming, told about each
+    /// dongle that comes and goes.
+    pub roaming: Option<Arc<Roaming>>,
     /// Dongle MACs attached at least once since start-up.
     seen: Arc<Mutex<HashSet<String>>>,
 }
@@ -80,8 +84,14 @@ impl LocalDongles {
             event_tx,
             dongle_status_tx,
             broadcast_tx,
+            roaming: None,
             seen: Arc::new(Mutex::new(HashSet::new())),
         }
+    }
+
+    pub fn with_roaming(mut self, roaming: Option<Arc<Roaming>>) -> Self {
+        self.roaming = roaming;
+        self
     }
 
     /// Runs one dongle from handshake to disconnect.
@@ -112,6 +122,9 @@ impl LocalDongles {
 
         let disconnect_notify = Arc::clone(&engine.disconnect_notify);
         self.engines.lock().await.insert(mac.clone(), engine);
+        if let Some(r) = &self.roaming {
+            r.gateway_connected(&mac).await;
+        }
         let _ = self.dongle_status_tx.try_send(DongleStatus { mac: mac.clone(), online: true, version });
         let _ = self.broadcast_tx.send(());
 
@@ -130,6 +143,9 @@ impl LocalDongles {
             ours
         };
         if still_ours {
+            if let Some(r) = &self.roaming {
+                r.gateway_disconnected(&mac);
+            }
             self.sensor_manager.lock().unwrap().unassign_dongle(&mac);
             let _ = self.dongle_status_tx.try_send(DongleStatus { mac: mac.clone(), online: false, version: None });
             let _ = self.broadcast_tx.send(());
@@ -168,6 +184,7 @@ impl LocalDongles {
                     event_type: 0xFF,
                     data: TelemetryData::UnknownEvent(Vec::new()),
                     dongle_mac: None,
+                    overheard_short: None,
                 });
             }
         }

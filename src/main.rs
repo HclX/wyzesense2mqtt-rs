@@ -8,6 +8,7 @@ use wyzesense2mqtt_rs::config::app_config::AppConfig;
 use wyzesense2mqtt_rs::gateway::mqtt::{MqttGateway, GatewayCommand, DongleStatus};
 use wyzesense2mqtt_rs::protocol::sensor::SensorManager;
 use wyzesense2mqtt_rs::config::monitor::AvailabilityMonitor;
+use wyzesense2mqtt_rs::roaming::{Roaming, RoamingConfig};
 use std::sync::Mutex;
 
 use std::time::Duration;
@@ -267,6 +268,31 @@ async fn run_daemon(
         }
     }
 
+    // OpenWyzeSense gateways: detected on connect, configured feature flags
+    // applied, and roaming between them. Engines report into it, and it
+    // forwards the merged stream (one copy of each report) to `event_tx`.
+    let ows = &config.openwyzesense;
+    let roaming = Some(Roaming::new(
+        RoamingConfig {
+            hysteresis_db: ows.roam_hysteresis_db,
+            default_flags: ows.defaults.flags(),
+            gateway_flags: ows.gateways.keys().map(|mac| (mac.to_ascii_uppercase(), ows.flags_for(mac))).collect(),
+            owners_path: Some(std::path::PathBuf::from("state/roaming.yaml")),
+            ..RoamingConfig::default()
+        },
+        Arc::clone(&engines),
+        Arc::clone(&sensor_manager),
+        broadcast_tx.clone(),
+    ));
+    let engine_tx = match &roaming {
+        Some(r) => {
+            let (raw_tx, raw_rx) = mpsc::channel::<DongleEvent>(128);
+            r.spawn(raw_rx, event_tx.clone());
+            raw_tx
+        }
+        None => event_tx.clone(),
+    };
+
     // --- Local USB dongles: attached as they appear, detached when unplugged ---
     match dongle_source {
         None => {
@@ -277,10 +303,11 @@ async fn run_daemon(
             let local = LocalDongles::new(
                 Arc::clone(&engines),
                 Arc::clone(&sensor_manager),
-                event_tx.clone(),
+                engine_tx.clone(),
                 dongle_status_tx.clone(),
                 broadcast_tx.clone(),
-            );
+            )
+            .with_roaming(roaming.clone());
             tokio::spawn(local.supervise(source, local_dongle::POLL_INTERVAL, local_dongle::RETRY_AFTER));
         }
     }
@@ -315,7 +342,7 @@ async fn run_daemon(
                 sensor_type: s_type,
                 event_type: 0x00,
                 data: TelemetryData::Offline,
-                dongle_mac: None,
+                dongle_mac: None, overheard_short: None,
             };
             let _ = event_tx_timeout.send(offline_evt).await;
         }
@@ -402,6 +429,7 @@ async fn run_daemon(
     // Spawn gateway callback command listener task (multi-engine aware)
     let engines_cmd = Arc::clone(&engines);
     let sensor_manager_cmd_clone = Arc::clone(&sensor_manager);
+    let roaming_cmd = roaming.clone();
     tokio::spawn(async move {
         while let Some(cmd) = gateway_cmd_rx.recv().await {
             match cmd {
@@ -412,6 +440,12 @@ async fn run_daemon(
                         map.get(&dongle_mac).cloned()
                     };
                     if let Some(mut engine) = engine {
+                        if let (true, Some(r)) = (enable, &roaming_cmd) {
+                            if let Err(e) = r.prepare_pairing(&dongle_mac).await {
+                                error!("Not pairing on dongle {}: {}", dongle_mac, e);
+                                continue;
+                            }
+                        }
                         let _ = engine.set_scan(enable).await;
                     } else {
                         warn!("Scan command for unknown dongle: {}", dongle_mac);
@@ -441,7 +475,7 @@ async fn run_daemon(
 
     // Route B: Web REST Control Server (if enabled)
     if config.web.enabled {
-        start_web_server(Arc::clone(&engines), Arc::clone(&sensor_manager), broadcast_tx.clone(), event_tx.clone(), config.web.port, config.bridge.auth_token.clone(), dongle_status_tx.clone()).await?;
+        start_web_server(Arc::clone(&engines), Arc::clone(&sensor_manager), broadcast_tx.clone(), engine_tx.clone(), config.web.port, config.bridge.auth_token.clone(), dongle_status_tx.clone(), roaming.clone()).await?;
     } else {
         info!("Web Panel is disabled. Running in headless daemon mode.");
         if let Some(handle) = mqtt_gateway_handle {
