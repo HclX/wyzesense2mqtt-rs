@@ -674,6 +674,7 @@ impl SensorManager {
                         sensor.battery_pct = Some(b);
                     }
                     sensor.rssi_dbm = cached.signal;
+                    sensor.heard = cached.heard.iter().map(|(g, h)| (g.clone(), (h.rssi, h.at))).collect();
                     sensor.last_seen = cached.last_seen;
                     sensor.state = cached.state.clone();
                     sensor.dongle_mac = cached.dongle_mac.clone();
@@ -799,6 +800,7 @@ impl SensorManager {
                             sensor.event_sequence = Some(seq);
                         }
                         sensor.rssi_dbm = cached.signal;
+                    sensor.heard = cached.heard.iter().map(|(g, h)| (g.clone(), (h.rssi, h.at))).collect();
                         sensor.last_seen = cached.last_seen;
                         sensor.state = cached.state.clone(); // Full type-specific state restored!
                     }
@@ -840,6 +842,7 @@ impl SensorManager {
                         sensor.battery_pct = Some(b);
                     }
                     sensor.rssi_dbm = cached.signal;
+                    sensor.heard = cached.heard.iter().map(|(g, h)| (g.clone(), (h.rssi, h.at))).collect();
                     sensor.last_seen = cached.last_seen;
                     sensor.state = cached.state.clone();
                     self.sensors.insert(mac.clone(), sensor);
@@ -868,6 +871,11 @@ impl SensorManager {
                 event_sequence: sensor.event_sequence,
                 state: sensor.state.clone(),
                 dongle_mac: sensor.dongle_mac.clone(),
+                heard: sensor
+                    .heard
+                    .iter()
+                    .map(|(g, (rssi, at))| (g.clone(), crate::config::state::HeardBy { rssi: *rssi, at: *at }))
+                    .collect(),
             });
         }
         system_state.save_to_yaml_atomic(&self.state_path)?;

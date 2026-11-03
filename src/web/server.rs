@@ -497,6 +497,7 @@ async fn list_sensors(
             event_sequence: sensor.event_sequence,
             state: sensor.state.clone(),
             dongle_mac: sensor.dongle_mac.clone(),
+            heard: Default::default(),
         })
         .collect();
     sensors.sort_by_key(|s| s.mac.clone());
@@ -520,6 +521,7 @@ async fn list_cached_sensors(
             event_sequence: sensor.event_sequence,
             state: sensor.state.clone(),
             dongle_mac: sensor.dongle_mac.clone(),
+            heard: Default::default(),
         }
     }).collect();
     sensors.sort_by_key(|s| s.mac.clone());

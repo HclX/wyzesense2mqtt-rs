@@ -2,7 +2,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use wyzesense2mqtt_rs::config::state::{SystemState, PersistedSensorState};
+use wyzesense2mqtt_rs::config::state::{HeardBy, SystemState, PersistedSensorState};
 use wyzesense2mqtt_rs::protocol::sensor::{SensorManager, SensorState, WyzeSensor};
 use wyzesense2mqtt_rs::protocol::telemetry::SensorType;
 
@@ -132,6 +132,7 @@ fn test_dongle_mac_persistence_roundtrip() {
             event_sequence: None,
             state: SensorState::Contact { is_open: true },
             dongle_mac: Some("DONGLE01".to_string()),
+            heard: [("DONGLE01".to_string(), HeardBy { rssi: -48, at: 1620000000 })].into(),
         },
     );
     state.save_to_yaml_atomic(&state_path).unwrap();
@@ -141,6 +142,7 @@ fn test_dongle_mac_persistence_roundtrip() {
     let sensor = loaded.sensors.get("AABB1234").unwrap();
     assert_eq!(sensor.dongle_mac.as_deref(), Some("DONGLE01"));
     assert_eq!(sensor.state, SensorState::Contact { is_open: true });
+    assert_eq!(sensor.heard["DONGLE01"], HeardBy { rssi: -48, at: 1620000000 });
 
     // 3. Verify backward compat: missing dongle_mac defaults to None
     let yaml_no_dongle = r#"

@@ -75,6 +75,7 @@ fn test_system_state_persistence() {
             event_sequence: None,
             state: wyzesense2mqtt_rs::protocol::sensor::SensorState::Unknown,
             dongle_mac: None,
+            heard: Default::default(),
         },
     );
 
