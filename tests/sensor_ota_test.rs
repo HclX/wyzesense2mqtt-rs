@@ -39,14 +39,14 @@ fn release_dir(root: &Path, a: &[u8], b: &[u8]) -> PathBuf {
     let dir = root.join("release");
     std::fs::create_dir_all(&dir).unwrap();
     let mut files = Vec::new();
-    for (name, img) in [("ows-sensor-contact-v1-slot-a-v0.2.1.img", a), ("ows-sensor-contact-v1-slot-b-v0.2.1.img", b)] {
+    for (name, img) in [("ows-sensor-contact-v1-slot-a-v0.2.2.img", a), ("ows-sensor-contact-v1-slot-b-v0.2.2.img", b)] {
         std::fs::write(dir.join(name), img).unwrap();
         files.push(serde_json::json!({
             "file": name, "device": "Wyze v1 contact", "what": "sensor", "board": "wyze_contact_v1",
             "product": "sensor-contact-v1", "size": img.len(), "sha256": ows_host::manifest::sha256_hex(img),
         }));
     }
-    let manifest = serde_json::json!({ "format": "openwyzesense-release", "version": "v0.2.1", "files": files });
+    let manifest = serde_json::json!({ "format": "openwyzesense-release", "version": "v0.2.2", "files": files });
     std::fs::write(dir.join("manifest.json"), manifest.to_string()).unwrap();
     dir
 }
@@ -126,7 +126,7 @@ async fn a_sensor_takes_its_update_block_by_block() {
     let c = ctx("ok", true).await;
     c.firmware.start_sensor_update(GW, vec![S.into()], "contact-v1").await.unwrap();
     let staged = wait(&c.firmware, "the offer", |j| j.sensors[0].state == SensorState::PressButton).await;
-    assert_eq!(staged.target, "v0.2.1");
+    assert_eq!(staged.target, "v0.2.2");
     assert_eq!(c.gw.ows().ota_offers, vec![S.to_string()]);
     assert_ne!(c.gw.ows().flags & ows::FLAG_OTA, 0, "the update flag is on while it runs");
 

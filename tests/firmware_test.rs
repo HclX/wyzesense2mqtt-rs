@@ -54,7 +54,7 @@ fn tmp_dir(tag: &str) -> PathBuf {
 fn release_dir(root: &Path, image: &[u8], tamper: bool) -> PathBuf {
     let dir = root.join("release");
     std::fs::create_dir_all(&dir).unwrap();
-    let file = "ows-gateway-dongle-v0.2.1.bin";
+    let file = "ows-gateway-dongle-v0.2.2.bin";
     std::fs::write(dir.join(file), image).unwrap();
     let mut sha = ows_host::manifest::sha256_hex(image);
     if tamper {
@@ -62,7 +62,7 @@ fn release_dir(root: &Path, image: &[u8], tamper: bool) -> PathBuf {
     }
     let manifest = serde_json::json!({
         "format": "openwyzesense-release",
-        "version": "v0.2.1",
+        "version": "v0.2.2",
         "files": [{
             "file": file, "device": "Wyze Sense USB dongle", "what": "gateway firmware",
             "board": "wyze_dongle", "product": "gateway-dongle", "size": image.len(), "sha256": sha,
@@ -85,7 +85,7 @@ async fn ctx(tag: &str, chip: SimDongle, tamper: bool) -> Ctx {
         dir.join("state.yaml").to_string_lossy().to_string(),
     )));
     let local = LocalDongles::new(Arc::clone(&engines), sm, event_tx, status_tx, broadcast_tx.clone());
-    let source = release_dir(&dir, &sim::gateway_image("v0.2.1"), tamper);
+    let source = release_dir(&dir, &sim::gateway_image("v0.2.2"), tamper);
     let chip = Arc::new(Mutex::new(chip));
     let shared = Arc::clone(&chip);
     let opener: Opener = Arc::new(move |_p: &Path| Ok(Box::new(Shared(Arc::clone(&shared))) as Box<dyn HidTransport + Send>));
@@ -147,7 +147,7 @@ async fn install_on_a_stock_dongle_then_restore_stock() {
     assert_eq!(job.kind, JobKind::Install);
     let review = wait_step(&c.firmware, &[Step::Review]).await;
     assert_eq!(review.current.as_deref(), Some("stock"));
-    assert_eq!(review.target.as_deref(), Some("v0.2.1"));
+    assert_eq!(review.target.as_deref(), Some("v0.2.2"));
     let carried = review.carried.clone().unwrap();
     assert_eq!(carried.sensors.len(), 2);
     assert!(carried.network);
@@ -169,7 +169,7 @@ async fn install_on_a_stock_dongle_then_restore_stock() {
     assert_eq!(done.dropped.iter().filter(|d| d.mac.is_some()).count(), 1);
     {
         let chip = c.chip.lock().unwrap();
-        assert_eq!(chip.ows_version().as_deref(), Some("v0.2.1"));
+        assert_eq!(chip.ows_version().as_deref(), Some("v0.2.2"));
         assert!(ows_host::nv::is_ows(chip.nv_page()));
         assert_eq!(chip.flash[0x1F000..], stock_flash[0x1F000..], "page 31 untouched");
     }
@@ -196,7 +196,7 @@ async fn update_an_ows_dongle_keeps_its_sensors() {
 
     c.firmware.confirm().await.unwrap();
     wait_step(&c.firmware, &[Step::Done]).await;
-    assert_eq!(c.chip.lock().unwrap().ows_version().as_deref(), Some("v0.2.1"));
+    assert_eq!(c.chip.lock().unwrap().ows_version().as_deref(), Some("v0.2.2"));
 
     // Its only backup ran our firmware: no stock to restore.
     attach(&c).await;

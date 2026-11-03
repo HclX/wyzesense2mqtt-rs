@@ -23,8 +23,8 @@ futures-util = "0.3"
 tokio-tungstenite = { version = "0.24", features = ["connect"] }
 # OpenWyzeSense host tools: dongle backup, flash and restore. Keep the tag in
 # step with firmware::RELEASE_VERSION.
-ows-host = { git = "https://github.com/HclX/openwyzesense", tag = "v0.2.1" }
+ows-host = { git = "https://github.com/HclX/openwyzesense", tag = "v0.2.2" }
 
 [dev-dependencies]
 crc32fast = "1"
-ows-host = { git = "https://github.com/HclX/openwyzesense", tag = "v0.2.1", features = ["sim"] }
+ows-host = { git = "https://github.com/HclX/openwyzesense", tag = "v0.2.2", features = ["sim"] }
