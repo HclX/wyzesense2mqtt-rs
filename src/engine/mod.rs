@@ -1,4 +1,5 @@
 use crate::protocol::packet::{Packet, CommandType, PacketPayload, commands};
+use crate::protocol::ows;
 use crate::protocol::telemetry::{DongleEvent, SensorType, TelemetryData};
 use crate::transport::GatewayTransport;
 use crate::transport::AsyncTransport;
@@ -18,9 +19,17 @@ pub type EnginesMap = std::sync::Arc<tokio::sync::Mutex<std::collections::HashMa
 /// Overall time allowed for `initialize_handshake`, Inquiry retries included.
 pub const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
+/// How long a byte-identical async packet counts as the dongle's resend of
+/// one already received. The OpenWyzeSense gateway re-sends after 160 ms;
+/// distinct packets (sensor retries, new replies) differ or come later.
+pub const RESEND_WINDOW: std::time::Duration = std::time::Duration::from_millis(300);
+
 /// How many times the handshake sends the Inquiry before giving up. One lost
 /// packet on a serial line should not cost the whole handshake.
 const INQUIRY_ATTEMPTS: u32 = 3;
+
+/// How long an OpenWyzeSense command waits for its 0x53F1 reply.
+const OWS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 
 type PendingRequests = Arc<Mutex<HashMap<u16, oneshot::Sender<Packet>>>>;
 
@@ -143,7 +152,7 @@ impl Engine {
                         sensor_type: s_type,
                         event_type: 0xFE, // synthetic
                         data: TelemetryData::Paired { version },
-                        dongle_mac: engine_clone.shared_dongle_mac.lock().unwrap().clone(),
+                        dongle_mac: engine_clone.shared_dongle_mac.lock().unwrap().clone(), overheard_short: None,
                     };
                     let _ = engine_clone.event_tx.send(paired_evt).await;
                 }
@@ -186,6 +195,7 @@ impl Engine {
         tokio::spawn(async move {
             let mut buffer = Vec::new();
             let mut read_buf = [0u8; 1024];
+            let mut recent: std::collections::VecDeque<(Vec<u8>, std::time::Instant)> = Default::default();
 
             loop {
                 tokio::select! {
@@ -212,6 +222,10 @@ impl Engine {
                                     match Packet::parse(&buffer) {
                                         Ok((pkt, consumed)) => {
                                             buffer.drain(..consumed);
+                                            if Self::is_resend(&mut recent, &pkt, &pending_requests) {
+                                                debug!("Dropping a resend of {} (already handled and ACKed)", pkt);
+                                                continue;
+                                            }
                                             Self::handle_packet(
                                                 pkt,
                                                 &pending_requests,
@@ -255,6 +269,54 @@ impl Engine {
         self.exit_tx.take().unwrap()
     }
 
+    /// The pending-request key a packet completes, if any.
+    fn pending_key(pkt: &Packet) -> Option<u16> {
+        let cmd = match &pkt.payload {
+            PacketPayload::Ack(ack_cmd) => *ack_cmd,
+            _ => pkt.cmd(),
+        };
+        // OpenWyzeSense replies all share 0x53F1 and are told apart by sub-ID.
+        // An overheard report (sub 0x20) is unsolicited and completes nothing.
+        match (cmd, pkt.payload_bytes().and_then(|b| b.first())) {
+            (ows::CMD_OWS_RESPONSE, Some(&ows::SUB_OVERHEARD)) => None,
+            (ows::CMD_OWS_RESPONSE, Some(&sub)) => Some(ows::response_key(sub)),
+            _ => Some(cmd),
+        }
+    }
+
+    /// Whether `pkt` is the dongle re-sending a reply it already sent, because
+    /// it hadn't seen our ACK yet: a byte-identical copy of a reply received in
+    /// the last [`RESEND_WINDOW`], with no request waiting for it. The first
+    /// copy was handled and ACKed. ACKing the copy too would be harmful: an
+    /// ACK names only the command, so the dongle takes the second ACK for its
+    /// next packet of that command (a newer reply) and stops re-sending it.
+    ///
+    /// Sensor reports are never dropped here: their copies are the sensor's
+    /// own retries, which roaming counts.
+    fn is_resend(
+        recent: &mut std::collections::VecDeque<(Vec<u8>, std::time::Instant)>,
+        pkt: &Packet,
+        pending: &PendingRequests,
+    ) -> bool {
+        if pkt.cmd_type != CommandType::Async || pkt.command_id == (commands::CMD_ASYNC_ACK & 0xFF) as u8 {
+            return false;
+        }
+        let Some(key) = Self::pending_key(pkt) else { return false };
+        if matches!(pkt.cmd(), commands::CMD_ALARM1 | commands::CMD_ALARM2) {
+            return false;
+        }
+        let now = std::time::Instant::now();
+        while recent.front().is_some_and(|(_, t)| now.duration_since(*t) > RESEND_WINDOW) {
+            recent.pop_front();
+        }
+        let bytes = pkt.to_bytes();
+        if recent.iter().any(|(b, _)| *b == bytes) && !pending.lock().unwrap().contains_key(&key) {
+            return true;
+        }
+        recent.push_back((bytes, now));
+        false
+    }
+
     fn find_magic_prefix(buf: &[u8]) -> Option<usize> {
         for i in 0..buf.len().saturating_sub(1) {
             let val = ((buf[i] as u16) << 8) | (buf[i+1] as u16);
@@ -281,9 +343,9 @@ impl Engine {
             PacketPayload::Ack(ack_cmd) => *ack_cmd,
             _ => pkt.cmd(),
         };
-        {
+        if let Some(key) = Self::pending_key(&pkt) {
             let mut pending_map = pending.lock().unwrap();
-            if let Some(tx) = pending_map.remove(&pkt_cmd) {
+            if let Some(tx) = pending_map.remove(&key) {
                 let _ = tx.send(pkt.clone());
             }
         }
@@ -337,6 +399,21 @@ impl Engine {
                             let _ = event_tx.send(evt).await;
                         }
                         Err(e) => warn!("Failed to parse alarm2 telemetry event: {}", e),
+                    }
+                }
+            }
+            ows::CMD_OWS_RESPONSE => {
+                // A roaming gateway's report of another gateway's sensor.
+                if let Some(bytes) = pkt.payload_bytes().filter(|b| b.first() == Some(&ows::SUB_OVERHEARD)) {
+                    match ows::parse_overheard(bytes)
+                        .and_then(|(short, alarm)| Ok((short, DongleEvent::parse_alarm1(alarm).map_err(|e| e.to_string())?)))
+                    {
+                        Ok((short, mut evt)) => {
+                            evt.dongle_mac = shared_dongle_mac.lock().unwrap().clone();
+                            evt.overheard_short = Some(short);
+                            let _ = event_tx.send(evt).await;
+                        }
+                        Err(e) => warn!("Failed to parse overheard report: {}", e),
                     }
                 }
             }
@@ -657,6 +734,106 @@ impl Engine {
 
         info!("Successfully retrieved {} paired sensors", sensors.len());
         Ok(sensors)
+    }
+
+    // --- OpenWyzeSense extensions (0x53F0 / 0x53F1) ---
+
+    /// Sends `0x53F0 [sub, payload...]` and returns the `0x53F1` reply payload
+    /// (sub-ID included). A stock dongle never answers, so this times out.
+    pub async fn ows_command(&mut self, payload: Vec<u8>, timeout: std::time::Duration) -> Result<Vec<u8>> {
+        let sub = *payload.first().ok_or_else(|| Error::new(ErrorKind::InvalidInput, "empty 0x53F0 payload"))?;
+        let pkt = Packet::new_async((ows::CMD_OWS & 0xFF) as u8, payload);
+        let resp = self.do_command_with_timeout(pkt, ows::response_key(sub), timeout).await?;
+        match resp.payload {
+            PacketPayload::Bytes(bytes) => Ok(bytes),
+            PacketPayload::Ack(_) => Err(Error::new(ErrorKind::InvalidData, "0x53F1 reply without payload")),
+        }
+    }
+
+    /// Reads the gateway's feature flags. `None` means the gateway did not
+    /// answer in time: a stock dongle, which ignores 0x53F0.
+    pub async fn ows_probe(&mut self, timeout: std::time::Duration) -> Result<Option<ows::Flags>> {
+        match self.ows_command(vec![ows::SUB_FLAGS], timeout).await {
+            Ok(p) => ows::parse_flags(&p).map(Some).map_err(|e| Error::new(ErrorKind::InvalidData, e)),
+            Err(e) if e.kind() == ErrorKind::TimedOut => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Reads what the gateway says about its firmware.
+    pub async fn ows_build_info(&mut self) -> Result<ows::BuildInfo> {
+        let p0 = self.ows_command(vec![ows::SUB_BUILD_INFO, 0], OWS_TIMEOUT).await?;
+        let p1 = self.ows_command(vec![ows::SUB_BUILD_INFO, 1], OWS_TIMEOUT).await?;
+        // Older builds have no page 2.
+        let p2 = self.ows_command(vec![ows::SUB_BUILD_INFO, 2], OWS_TIMEOUT).await.ok();
+        ows::parse_build_info(&p0, &p1, p2.as_deref()).map_err(|e| Error::new(ErrorKind::InvalidData, e))
+    }
+
+    /// Sets the gateway's feature flags; returns what it reports back.
+    pub async fn ows_set_flags(&mut self, flags: u32) -> Result<ows::Flags> {
+        let mut payload = vec![ows::SUB_FLAGS];
+        payload.extend_from_slice(&flags.to_be_bytes());
+        let p = self.ows_command(payload, OWS_TIMEOUT).await?;
+        ows::parse_flags(&p).map_err(|e| Error::new(ErrorKind::InvalidData, e))
+    }
+
+    /// Reads the network identity the gateway presents to sensors.
+    pub async fn ows_network(&mut self) -> Result<ows::NetworkIdentity> {
+        let p = self.ows_command(vec![ows::SUB_NETWORK], OWS_TIMEOUT).await?;
+        ows::parse_network(&p).map_err(|e| Error::new(ErrorKind::InvalidData, e))
+    }
+
+    /// Reads the gateway's whole sensor table (MAC, short address, type).
+    pub async fn ows_sensor_table(&mut self) -> Result<Vec<ows::NvSensor>> {
+        let mut table = Vec::new();
+        let mut index: u8 = 0;
+        loop {
+            // A late resend of the previous reply would carry the wrong index:
+            // ask again rather than take it.
+            let mut reply = None;
+            for _ in 0..2 {
+                let p = self.ows_command(ows::build_get_sensor(index), OWS_TIMEOUT).await?;
+                let parsed = ows::parse_get_sensor(&p).map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
+                if parsed.1 == index {
+                    reply = Some(parsed);
+                    break;
+                }
+            }
+            let (count, _, entry) = reply
+                .ok_or_else(|| Error::new(ErrorKind::InvalidData, format!("sensor table index {} kept mismatching", index)))?;
+            match entry {
+                Some(s) => table.push(s),
+                None => break,
+            }
+            if table.len() >= count as usize || index == u8::MAX {
+                break;
+            }
+            index += 1;
+        }
+        Ok(table)
+    }
+
+    /// Adds a sensor to the gateway's table under a given short address (a
+    /// roaming handover: the sensor keeps its address and notices nothing).
+    pub async fn ows_add_sensor(&mut self, mac: &str, short: u16, sensor_type: u8) -> Result<()> {
+        let payload = ows::build_add_sensor(mac, short, sensor_type).map_err(|e| Error::new(ErrorKind::InvalidInput, e))?;
+        let p = self.ows_command(payload, OWS_TIMEOUT).await?;
+        match ows::parse_add_sensor(&p).map_err(|e| Error::new(ErrorKind::InvalidData, e))? {
+            ows::STATUS_OK => Ok(()),
+            status => Err(Error::new(ErrorKind::Other, format!("gateway refused to add {} at {:04X} (status {:02X})", mac, short, status))),
+        }
+    }
+
+    /// Sets the range the gateway hands new sensors' short addresses from.
+    pub async fn ows_set_addr_range(&mut self, first: u16, last: u16) -> Result<()> {
+        let p = self.ows_command(ows::build_addr_range(first, last), OWS_TIMEOUT).await?;
+        match ows::parse_addr_range(&p).map_err(|e| Error::new(ErrorKind::InvalidData, e))? {
+            (ows::STATUS_OK, f, l) if (f, l) == (first, last) => Ok(()),
+            (status, f, l) => Err(Error::new(
+                ErrorKind::Other,
+                format!("gateway refused address range {:04X}-{:04X} (status {:02X}, has {:04X}-{:04X})", first, last, status, f, l),
+            )),
+        }
     }
 
     /// Requests chime/alarm execution on a device.

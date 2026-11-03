@@ -12,13 +12,14 @@
 use crate::engine::{Engine, EnginesMap, HANDSHAKE_TIMEOUT};
 use crate::gateway::mqtt::DongleStatus;
 use crate::protocol::sensor::SensorManager;
+use crate::roaming::Roaming;
 use crate::protocol::telemetry::{DongleEvent, TelemetryData};
 use crate::transport::hidraw::{discover_all_dongle_devices, HidrawTransport};
 use crate::transport::GatewayTransport;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::{broadcast, mpsc, Notify};
 use tracing::{debug, error, info, warn};
 
 /// How often the supervisor looks for dongles.
@@ -53,8 +54,34 @@ pub struct LocalDongles {
     pub event_tx: mpsc::Sender<DongleEvent>,
     pub dongle_status_tx: mpsc::Sender<DongleStatus>,
     pub broadcast_tx: broadcast::Sender<()>,
+    /// OpenWyzeSense detection, feature flags and roaming, told about each
+    /// dongle that comes and goes.
+    pub roaming: Option<Arc<Roaming>>,
     /// Dongle MACs attached at least once since start-up.
     seen: Arc<Mutex<HashSet<String>>>,
+    /// Device nodes with a session running, and how to stop each.
+    sessions: Arc<Mutex<HashMap<String, Arc<Notify>>>>,
+    /// Device nodes taken for maintenance (e.g. flashing): no session starts on them.
+    reserved: Arc<Mutex<HashSet<String>>>,
+}
+
+/// A device node taken away from its session; given back when dropped.
+pub struct Reservation {
+    reserved: Arc<Mutex<HashSet<String>>>,
+    path: String,
+}
+
+impl Reservation {
+    pub fn path(&self) -> &str {
+        &self.path
+    }
+}
+
+impl Drop for Reservation {
+    fn drop(&mut self) {
+        self.reserved.lock().unwrap().remove(&self.path);
+        info!("{} given back to the dongle supervisor", self.path);
+    }
 }
 
 /// Why a session ended.
@@ -80,12 +107,54 @@ impl LocalDongles {
             event_tx,
             dongle_status_tx,
             broadcast_tx,
+            roaming: None,
             seen: Arc::new(Mutex::new(HashSet::new())),
+            sessions: Arc::new(Mutex::new(HashMap::new())),
+            reserved: Arc::new(Mutex::new(HashSet::new())),
         }
+    }
+
+    /// Stops the session on `path` (if any) and keeps new ones off it until
+    /// the returned reservation is dropped. Fails if the session doesn't end
+    /// within `timeout`.
+    pub async fn reserve(&self, path: &str, timeout: Duration) -> Result<Reservation, String> {
+        if !self.reserved.lock().unwrap().insert(path.to_string()) {
+            return Err(format!("{} is already in use for maintenance", path));
+        }
+        let reservation = Reservation { reserved: Arc::clone(&self.reserved), path: path.to_string() };
+        if let Some(stop) = self.sessions.lock().unwrap().get(path) {
+            stop.notify_one();
+        }
+        let deadline = Instant::now() + timeout;
+        while self.sessions.lock().unwrap().contains_key(path) {
+            if Instant::now() > deadline {
+                return Err(format!("the session on {} did not stop", path));
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        info!("{} taken from the dongle supervisor", path);
+        Ok(reservation)
+    }
+
+    pub fn is_reserved(&self, path: &str) -> bool {
+        self.reserved.lock().unwrap().contains(path)
+    }
+
+    pub fn with_roaming(mut self, roaming: Option<Arc<Roaming>>) -> Self {
+        self.roaming = roaming;
+        self
     }
 
     /// Runs one dongle from handshake to disconnect.
     pub async fn run_session(&self, device_path: &str, transport: GatewayTransport) -> SessionEnd {
+        let stop = Arc::new(Notify::new());
+        self.sessions.lock().unwrap().insert(device_path.to_string(), Arc::clone(&stop));
+        let end = self.session(device_path, transport, &stop).await;
+        self.sessions.lock().unwrap().remove(device_path);
+        end
+    }
+
+    async fn session(&self, device_path: &str, transport: GatewayTransport, stop: &Notify) -> SessionEnd {
         let mut engine = Engine::new(transport, self.event_tx.clone());
         engine.transport_label = "local".to_string();
         engine.device_path = Some(device_path.to_string());
@@ -112,11 +181,20 @@ impl LocalDongles {
 
         let disconnect_notify = Arc::clone(&engine.disconnect_notify);
         self.engines.lock().await.insert(mac.clone(), engine);
+        if let Some(r) = &self.roaming {
+            r.gateway_connected(&mac).await;
+        }
         let _ = self.dongle_status_tx.try_send(DongleStatus { mac: mac.clone(), online: true, version });
         let _ = self.broadcast_tx.send(());
 
-        disconnect_notify.notified().await;
-        warn!("Local USB dongle {} ({}) disconnected", mac, device_path);
+        tokio::select! {
+            _ = disconnect_notify.notified() => {
+                warn!("Local USB dongle {} ({}) disconnected", mac, device_path);
+            }
+            _ = stop.notified() => {
+                info!("Local USB dongle {} ({}) detached for maintenance", mac, device_path);
+            }
+        }
         drop(exit_tx);
 
         // The same dongle may already be back on another node: leave its new
@@ -130,6 +208,9 @@ impl LocalDongles {
             ours
         };
         if still_ours {
+            if let Some(r) = &self.roaming {
+                r.gateway_disconnected(&mac);
+            }
             self.sensor_manager.lock().unwrap().unassign_dongle(&mac);
             let _ = self.dongle_status_tx.try_send(DongleStatus { mac: mac.clone(), online: false, version: None });
             let _ = self.broadcast_tx.send(());
@@ -168,6 +249,7 @@ impl LocalDongles {
                     event_type: 0xFF,
                     data: TelemetryData::UnknownEvent(Vec::new()),
                     dongle_mac: None,
+                    overheard_short: None,
                 });
             }
         }
@@ -192,7 +274,9 @@ impl LocalDongles {
             failed.lock().unwrap().retain(|p, at| present.contains(p) && at.elapsed() < retry_after);
 
             for path in present {
-                if failed.lock().unwrap().contains_key(&path) || !attached.lock().unwrap().insert(path.clone()) {
+                if self.is_reserved(&path)
+                    || failed.lock().unwrap().contains_key(&path)
+                    || !attached.lock().unwrap().insert(path.clone()) {
                     continue;
                 }
                 info!("USB dongle found on {}", path);

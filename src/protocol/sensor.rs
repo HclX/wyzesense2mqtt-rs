@@ -1052,7 +1052,7 @@ mod tests {
             sensor_type: SensorType::Unknown(0),
             event_type: DongleEvent::EVENT_TYPE_ALARM,
             data: TelemetryData::Alarm { battery: 90, rssi: -40, state, die_temperature_c: 22, event_sequence: 0 },
-            dongle_mac: None,
+            dongle_mac: None, overheard_short: None,
         }
     }
 
@@ -1063,7 +1063,7 @@ mod tests {
             sensor_type: SensorType::Unknown(0),
             event_type: DongleEvent::EVENT_TYPE_CLIMATE,
             data: TelemetryData::Climate { battery: 95, rssi: -50, temperature: temp, humidity: hum, die_temperature_c: 22, event_sequence: 0 },
-            dongle_mac: None,
+            dongle_mac: None, overheard_short: None,
         }
     }
 
@@ -1074,7 +1074,7 @@ mod tests {
             sensor_type: SensorType::Unknown(0),
             event_type: DongleEvent::EVENT_TYPE_ALARM,
             data: TelemetryData::Leak { battery: 96, rssi: -60, state, probe_state, probe_available },
-            dongle_mac: None,
+            dongle_mac: None, overheard_short: None,
         }
     }
 
@@ -1085,7 +1085,7 @@ mod tests {
             sensor_type: SensorType::Unknown(0),
             event_type: DongleEvent::EVENT_TYPE_HEARTBEAT,
             data: TelemetryData::Heartbeat { battery: 90, rssi: -40, die_temperature_c: 22, event_sequence: 0 },
-            dongle_mac: None,
+            dongle_mac: None, overheard_short: None,
         }
     }
 

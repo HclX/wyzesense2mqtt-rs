@@ -134,6 +134,16 @@ mqtt:
   self_topic_root: "wyzesense2mqtt"      # State publish root
   hass_topic_root: "homeassistant"      # Auto-Discovery root
 
+# OpenWyzeSense gateway features: all off unless turned on here. Stock dongles
+# are detected and never touched. Env: OWS_DEDUP, OWS_FIX_ZERO_MAC, OWS_ANNOUNCE, OWS_ROAM
+openwyzesense:
+  dedup: false                          # Forward each sensor resend once
+  fix_zero_mac: false                   # Give v1 contacts' zero-MAC reports their real MAC
+  roam: false                           # Roaming between gateways sharing one network identity
+  roam_hysteresis_db: 10                # How much stronger another gateway must hear a sensor to take it
+  # gateways:                           # Per-gateway overrides, keyed by gateway MAC
+  #   "77E0000A": { roam: true, dedup: true }
+
 # Diagnostics Structural Logging Level
 # (Options: trace, debug, info, warn, error)
 logging:
@@ -227,6 +237,30 @@ Optional flags:
 *   `--token SECRET` — Authenticate with the gateway (requires `bridge.auth_token` in gateway config)
 
 The bridge is a transparent byte-level relay (~200 lines) with automatic reconnection. Multiple bridges can connect simultaneously for whole-home coverage.
+
+---
+
+## 🛰️ OpenWyzeSense Gateways & Roaming
+
+On every connect the daemon checks whether a gateway runs [OpenWyzeSense](https://github.com/HclX/openwyzesense) firmware (a stock dongle ignores the check). For ours, the dashboard and `GET /api/dongles` show the firmware version and its supported and enabled feature flags. The features in the `openwyzesense` config section are off unless you turn them on, either for all gateways or per gateway. They are applied after the handshake, and re-applied whenever a gateway loses them (they reset when the gateway restarts).
+
+With `roam: true`, gateways can share one network identity (for example, several migrated from the same stock dongle). A sensor is then heard by every gateway in range without re-pairing. Roaming takes effect once two connected gateways with `roam` on carry the same identity:
+
+*   **One owner per sensor.** Only the owning gateway ACKs a sensor. The others forward what they overhear, and the daemon merges all copies into one event.
+*   **Automatic handover.** A sensor moves when its owner keeps missing reports that others hear, or (while the owner is cut off from the daemon) when every report in a row arrives retried because nobody answers it, or when another gateway hears it at least `hysteresis_db` stronger over many reports. A gateway that only lost its link to the daemon keeps its sensors, because its radio still answers them. The sensor keeps its address and never notices.
+*   **Pairing.** The pairing gateway gets an address range above every address in use, and only one gateway of the network pairs at a time.
+
+`GET /api/roaming` shows each gateway's table and how strongly each gateway hears each sensor. Design notes: [docs/roaming.md](docs/roaming.md).
+
+### Installing OpenWyzeSense on a USB dongle
+
+The dashboard can install OpenWyzeSense on a local USB dongle, update it, and put the stock firmware back: open the dongle's **Actions** dialog and use the **Firmware** section. The firmware comes from the [OpenWyzeSense release](https://github.com/HclX/openwyzesense/releases) this build is pinned to, and is checked against the release's SHA-256 before it is used.
+
+1.  **Backup.** The whole chip is read and saved under `state/backups/<dongle MAC>-<time>/`. A backup taken while the dongle runs stock firmware is the only way back to stock, so keep it. The dongle is offline for about a minute and then comes back by itself.
+2.  **Review.** The dashboard lists the sensors that carry over and any that don't (for example, two sensors sharing one address in the stock table): those need pairing again afterwards. Nothing has been written yet; **Cancel** leaves the dongle as it was.
+3.  **Install.** The firmware is written and verified, and the sensor table is converted (about 20 seconds). The dongle normally comes back on its own; if it doesn't, the dashboard asks you to unplug it and plug it back in.
+
+**Restore stock firmware** writes the newest stock backup back; sensors paired since that backup need pairing again. A bridged gateway (for example an ESP relay) is updated from its own web page instead. For a machine without internet access, set `openwyzesense.firmware_source` (or `OWS_FIRMWARE_SOURCE`) to a directory holding the release's `manifest.json` and dongle image.
 
 ---
 

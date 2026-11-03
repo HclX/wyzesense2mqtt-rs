@@ -5,3 +5,5 @@ pub mod config;
 pub mod gateway;
 pub mod web;
 pub mod local_dongle;
+pub mod roaming;
+pub mod firmware;

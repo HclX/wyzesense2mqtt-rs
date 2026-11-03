@@ -117,7 +117,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // 8. Start HTTP REST Web UI blocking thread
     // No MQTT here, so nothing consumes dongle status updates.
     let (dongle_status_tx, _) = mpsc::channel(1);
-    start_web_server(engines, sensor_manager, broadcast_tx, event_tx.clone(), port, None, dongle_status_tx).await?;
+    start_web_server(engines, sensor_manager, broadcast_tx, event_tx.clone(), port, None, dongle_status_tx, None, None).await?;
 
     Ok(())
 }
