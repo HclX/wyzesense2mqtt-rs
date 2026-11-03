@@ -860,6 +860,13 @@ impl Roaming {
     /// of no gateway of ours). May also ask for a handover or a table reload.
     fn process(&self, mut evt: DongleEvent, now: Instant) -> (Option<DongleEvent>, Vec<Action>) {
         let Some(gateway) = evt.dongle_mac.clone() else { return (Some(evt), vec![]) };
+        // The sensors this host knows, taken before the roaming state: never
+        // hold both locks (the dashboard takes the sensors, then asks roaming).
+        let known: HashSet<String> = if evt.overheard_short.is_some() {
+            self.sensors.lock().unwrap().get_sensors().keys().cloned().collect()
+        } else {
+            HashSet::new()
+        };
         let mut st = self.state.lock().unwrap();
         let Some(identity) = st.roaming_identity(&gateway) else {
             // Not a roaming gateway (stock, or alone on its network).
@@ -909,7 +916,7 @@ impl Roaming {
                 }
                 let owner = st.owner_of(&evt.mac, identity);
                 match owner {
-                    Some(o) if self.sensors.lock().unwrap().get_sensors().contains_key(&evt.mac) => o,
+                    Some(o) if known.contains(&evt.mac) => o,
                     _ => {
                         // A sensor no table holds, on a short address another
                         // sensor holds: the two share an address (a migration

@@ -439,6 +439,12 @@ async fn list_dongles(
         j
     };
     let engines = state.engines.lock().await;
+    // Roaming's view of each gateway, asked before the sensor manager is locked:
+    // roaming takes its own lock and then the sensors', so never the reverse.
+    let ows: std::collections::HashMap<String, Option<serde_json::Value>> = engines
+        .keys()
+        .map(|mac| (mac.clone(), state.roaming.as_ref().and_then(|r| r.gateway_json(mac))))
+        .collect();
     let manager = state.sensor_manager.lock().unwrap();
 
     // Group sensors by dongle_mac from the single source of truth (SensorManager)
@@ -459,7 +465,7 @@ async fn list_dongles(
             "sensors": sensors,
             "sensor_count": sensor_count,
             // OpenWyzeSense firmware details, null for a stock dongle
-            "openwyzesense": state.roaming.as_ref().and_then(|r| r.gateway_json(mac)),
+            "openwyzesense": ows.get(mac).cloned().flatten(),
         })
     }).collect();
 
