@@ -53,6 +53,7 @@ fn release_dir(root: &Path, a: &[u8], b: &[u8]) -> PathBuf {
 
 struct Ctx {
     firmware: Arc<Firmware>,
+    sm: Arc<Mutex<SensorManager>>,
     gw: VirtualDongle,
     image_a: Vec<u8>,
     dir: PathBuf,
@@ -102,10 +103,10 @@ async fn ctx(tag: &str, ours: bool) -> Ctx {
     engines.lock().await.insert(GW.into(), engine);
     roaming.gateway_connected(GW).await;
 
-    let local = LocalDongles::new(Arc::clone(&engines), sm, event_tx, status_tx, broadcast_tx.clone());
+    let local = LocalDongles::new(Arc::clone(&engines), Arc::clone(&sm), event_tx, status_tx, broadcast_tx.clone());
     let firmware =
         Firmware::new(local, engines, Some(roaming), broadcast_tx, &dir.join("state"), Some(source.to_string_lossy().to_string()));
-    Ctx { firmware, gw, image_a: a, dir, _exit: exit }
+    Ctx { firmware, sm, gw, image_a: a, dir, _exit: exit }
 }
 
 async fn wait(f: &Firmware, what: &str, cond: impl Fn(&SensorJob) -> bool) -> SensorJob {
@@ -193,4 +194,22 @@ async fn only_through_our_gateway() {
     let c = ctx("stock", false).await;
     let err = c.firmware.start_sensor_update(GW, vec![S.into()], "contact-v1").await.unwrap_err();
     assert!(err.contains("OpenWyzeSense"), "{}", err);
+}
+
+#[tokio::test]
+async fn a_sensor_heard_far_better_elsewhere_is_sent_there() {
+    let c = ctx("where", true).await;
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+    {
+        let mut sm = c.sm.lock().unwrap();
+        let s = sm.get_sensors_mut().get_mut(S).unwrap();
+        s.heard.insert("77A85A36".into(), (-48, now));
+        s.heard.insert(GW.into(), (-94, now));
+    }
+    let err = c.firmware.start_sensor_update(GW, vec![S.into()], "contact-v1").await.unwrap_err();
+    assert!(err.contains("talks to gateway 77A85A36"), "{}", err);
+
+    // Heard about as well here: allowed.
+    c.sm.lock().unwrap().get_sensors_mut().get_mut(S).unwrap().heard.insert(GW.into(), (-52, now));
+    c.firmware.start_sensor_update(GW, vec![S.into()], "contact-v1").await.unwrap();
 }

@@ -348,12 +348,14 @@ impl Firmware {
                             (None, crate::protocol::telemetry::SensorType::Unknown(_)) => None,
                             _ => return None,
                         };
+                        let best = sensors::best_gateway(s);
                         Some(serde_json::json!({
                             "mac": s.mac,
                             "board": board,
-                            "heard_here": s.dongle_mac.as_deref() == Some(mac.as_str()),
-                            "heard_by": s.dongle_mac,
-                            "rssi": s.rssi_dbm,
+                            "heard_here": best.as_ref().map(|(g, _)| g == &mac).unwrap_or(s.dongle_mac.as_deref() == Some(mac.as_str())),
+                            "heard_by": best.as_ref().map(|(g, _)| g.clone()).or_else(|| s.dongle_mac.clone()),
+                            "rssi_here": sensors::recent(s, &mac),
+                            "rssi_best": best.map(|(_, r)| r),
                         }))
                     })
                     .collect();

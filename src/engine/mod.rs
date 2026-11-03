@@ -128,6 +128,12 @@ impl Engine {
                 if !engine_clone.auto_verify.load(Ordering::SeqCst) {
                     continue;
                 }
+                // Only the gateway the user put into pairing mode pairs: gateways
+                // sharing a network identity also report the join.
+                if !engine_clone.is_scanning() {
+                    info!("Auto-Pairing: {} joined, but this gateway isn't pairing; ignored", mac);
+                    continue;
+                }
                 info!("Auto-Pairing: Scanned sensor {} detected (type={:?}, version={}). Exchanging R1 token...", mac, s_type, version);
 
                 // Step 1: Exchange crypto token (R1) with the sensor

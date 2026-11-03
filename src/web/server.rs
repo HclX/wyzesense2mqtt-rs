@@ -1260,13 +1260,19 @@ const HTML_CONTENT: &str = concat!(r##"
         async function fwPost(path, body) {
             const r = await fetch(`${API}/api/firmware/${path}`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body||{})});
             const d = await r.json().catch(() => ({}));
-            if (!r.ok) { log(`Firmware: ${d.error || r.status}`); alertMsg(d.error || `HTTP ${r.status}`); }
             await loadDongles();
+            // After the reload: the page re-renders the message box.
+            if (!r.ok) { log(`Firmware: ${d.error || r.status}`); alertMsg(d.error || `HTTP ${r.status}`); }
             return r.ok;
         }
         function alertMsg(t) {
-            const el = document.getElementById('fw-error');
-            if (el) { el.textContent = t; el.classList.remove('hidden'); setTimeout(() => el.classList.add('hidden'), 8000); }
+            // A toast above everything (the dialog included).
+            const el = document.createElement('div');
+            el.className = 'fixed top-4 left-1/2 -translate-x-1/2 z-[100] max-w-lg w-[calc(100%-2rem)] text-sm text-rose-200 bg-rose-950 border border-rose-800 rounded-xl px-4 py-3 shadow-2xl';
+            el.textContent = t;
+            el.onclick = () => el.remove();
+            document.body.appendChild(el);
+            setTimeout(() => el.remove(), 10000);
         }
         async function fwInstall(mac) { fwDismissed = null; if (await fwPost('install', {dongle: mac})) closeModal(); }
         async function fwConfirm() { await fwPost('confirm'); }

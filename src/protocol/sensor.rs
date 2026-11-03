@@ -72,6 +72,21 @@ pub struct WyzeSensor {
 
     // --- Dongle assignment ---
     pub dongle_mac: Option<String>, // Which dongle owns this sensor (None = unassociated)
+    /// How strongly each gateway heard it last, and when (unix seconds); not
+    /// persisted. Gateways sharing a network all hear a sensor.
+    pub heard: std::collections::HashMap<String, (i8, u64)>,
+}
+
+/// The signal strength a report carries, if any.
+pub fn report_rssi(data: &TelemetryData) -> Option<i8> {
+    match data {
+        TelemetryData::Heartbeat { rssi, .. }
+        | TelemetryData::Alarm { rssi, .. }
+        | TelemetryData::AlarmData { rssi, .. }
+        | TelemetryData::Climate { rssi, .. }
+        | TelemetryData::Leak { rssi, .. } => Some(*rssi),
+        _ => None,
+    }
 }
 
 // Helper to build standard Home Assistant discovery device metadata
@@ -204,6 +219,7 @@ impl WyzeSensor {
                 .as_secs(),
             state,
             dongle_mac: None,
+            heard: Default::default(),
         }
     }
 
@@ -974,6 +990,10 @@ impl SensorManager {
         // Associate sensor with its source dongle (if the event carries dongle identity)
         if let Some(ref dmac) = event.dongle_mac {
             if let Some(sensor) = self.sensors.get_mut(&event.mac) {
+                if let Some(rssi) = report_rssi(&event.data) {
+                    let at = event.timestamp.duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs();
+                    sensor.heard.insert(dmac.clone(), (rssi, at));
+                }
                 if sensor.dongle_mac.as_ref() != Some(dmac) {
                     info!("Associating sensor {} with dongle {}", event.mac, dmac);
                     sensor.dongle_mac = Some(dmac.clone());

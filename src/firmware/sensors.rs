@@ -92,6 +92,30 @@ pub fn board_of(sensor_type: crate::protocol::telemetry::SensorType) -> Option<&
     }
 }
 
+/// How long a gateway's reading of a sensor counts.
+const HEARD_FOR: Duration = Duration::from_secs(3600);
+/// How much better another gateway must hear a sensor before the update is
+/// refused here (the sensor talks to the one that hears it best).
+const BETTER_DB: i16 = 10;
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
+}
+
+/// How strongly `gateway` heard the sensor within the last hour.
+pub fn recent(s: &crate::protocol::sensor::WyzeSensor, gateway: &str) -> Option<i8> {
+    let (rssi, at) = s.heard.get(gateway)?;
+    (now_secs().saturating_sub(*at) <= HEARD_FOR.as_secs()).then_some(*rssi)
+}
+
+/// The gateway that heard the sensor best within the last hour.
+pub fn best_gateway(s: &crate::protocol::sensor::WyzeSensor) -> Option<(String, i8)> {
+    s.heard
+        .keys()
+        .filter_map(|g| recent(s, g).map(|r| (g.clone(), r)))
+        .max_by_key(|(_, r)| *r)
+}
+
 fn mac_bytes(mac: &str) -> Result<[u8; 8], String> {
     let up = mac.to_ascii_uppercase();
     up.as_bytes().try_into().map_err(|_| format!("{} is not a sensor MAC", mac))
@@ -135,6 +159,24 @@ impl Firmware {
         }
         if let Some(j) = self.job().filter(|j| j.step.active()) {
             return Err(format!("a firmware job is running on dongle {}", j.dongle));
+        }
+        // The sensor fetches its update from the gateway it talks to: the one
+        // that hears it best. Offered elsewhere, it would never see the offer.
+        {
+            let manager = self.local.sensor_manager.lock().unwrap();
+            for mac in &macs {
+                let Some(s) = manager.get_sensors().get(&mac.to_ascii_uppercase()) else { continue };
+                let (Some((best, best_rssi)), here) = (best_gateway(s), recent(s, gateway)) else { continue };
+                if best != gateway && here.is_none_or(|h| best_rssi as i16 >= h as i16 + BETTER_DB) {
+                    return Err(format!(
+                        "{} talks to gateway {} ({} dBm there, {} here): update it from that gateway",
+                        s.mac,
+                        best,
+                        best_rssi,
+                        here.map_or("not heard".to_string(), |h| format!("{} dBm", h))
+                    ));
+                }
+            }
         }
         let job = {
             let mut slot = self.sensor_job.lock().unwrap();
