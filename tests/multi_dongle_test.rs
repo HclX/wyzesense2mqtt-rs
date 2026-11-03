@@ -228,3 +228,32 @@ fn test_scan_request_dongle_mac_is_required() {
     assert_eq!(req.dongle_mac, "DONGLE01");
     assert!(req.enable);
 }
+
+#[test]
+fn a_sensor_heard_by_two_gateways_stays_with_the_one_that_hears_it_best() {
+    use wyzesense2mqtt_rs::protocol::telemetry::{DongleEvent, TelemetryData};
+    let config_path = get_temp_file("best_cfg.yaml");
+    let state_path = get_temp_file("best_state.yaml");
+    let mut mgr = SensorManager::new(config_path.to_string_lossy().to_string(), state_path.to_string_lossy().to_string());
+    mgr.assign_dongle("NEAR0001", &["777B42DF".to_string()]);
+    let report = |gw: &str, rssi: i8| DongleEvent {
+        mac: "777B42DF".into(),
+        timestamp: std::time::SystemTime::now(),
+        sensor_type: SensorType::ContactV1,
+        event_type: 0xA2,
+        data: TelemetryData::Heartbeat { battery: 100, rssi, die_temperature_c: 20, event_sequence: 1 },
+        dongle_mac: Some(gw.into()),
+        overheard_short: None,
+    };
+    // Each report comes through both gateways; the far one's copy comes last.
+    for _ in 0..3 {
+        mgr.dispatch_event(&report("NEAR0001", -48));
+        mgr.dispatch_event(&report("FAR00001", -94));
+        assert_eq!(mgr.get_sensors()["777B42DF"].dongle_mac.as_deref(), Some("NEAR0001"));
+    }
+    // It moves once the other gateway hears it better.
+    mgr.dispatch_event(&report("FAR00001", -40));
+    assert_eq!(mgr.get_sensors()["777B42DF"].dongle_mac.as_deref(), Some("FAR00001"));
+    let _ = fs::remove_file(config_path);
+    let _ = fs::remove_file(state_path);
+}

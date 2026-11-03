@@ -77,6 +77,15 @@ pub struct WyzeSensor {
     pub heard: std::collections::HashMap<String, (i8, u64)>,
 }
 
+/// The gateway that heard a sensor best within the last 10 minutes before `now`.
+pub fn best_recent(heard: &std::collections::HashMap<String, (i8, u64)>, now: u64) -> Option<String> {
+    heard
+        .iter()
+        .filter(|(_, (_, at))| now.saturating_sub(*at) <= 600)
+        .max_by(|a, b| (a.1).0.cmp(&(b.1).0).then_with(|| b.0.cmp(a.0)))
+        .map(|(g, _)| g.clone())
+}
+
 /// The signal strength a report carries, if any.
 pub fn report_rssi(data: &TelemetryData) -> Option<i8> {
     match data {
@@ -998,13 +1007,17 @@ impl SensorManager {
         // Associate sensor with its source dongle (if the event carries dongle identity)
         if let Some(ref dmac) = event.dongle_mac {
             if let Some(sensor) = self.sensors.get_mut(&event.mac) {
+                let at = event.timestamp.duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs();
                 if let Some(rssi) = report_rssi(&event.data) {
-                    let at = event.timestamp.duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs();
                     sensor.heard.insert(dmac.clone(), (rssi, at));
                 }
-                if sensor.dongle_mac.as_ref() != Some(dmac) {
-                    info!("Associating sensor {} with dongle {}", event.mac, dmac);
-                    sensor.dongle_mac = Some(dmac.clone());
+                // Gateways sharing a network each pass the report on: the sensor
+                // belongs with the one that hears it best lately, not with
+                // whichever copy came last.
+                let home = best_recent(&sensor.heard, at).unwrap_or_else(|| dmac.clone());
+                if sensor.dongle_mac.as_ref() != Some(&home) {
+                    info!("Associating sensor {} with dongle {}", event.mac, home);
+                    sensor.dongle_mac = Some(home);
                 }
             }
         }
