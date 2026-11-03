@@ -469,6 +469,9 @@ struct State {
     busy: HashSet<String>,
     /// The owner each sensor was last given (see `RoamingConfig::owners_path`).
     owners: HashMap<String, String>,
+    /// Sensors heard on a short address another sensor holds in a table
+    /// (sensor -> (short, the sensor holding it, the gateway holding it), when).
+    conflicts: HashMap<String, ((u16, String, String), Instant)>,
 }
 
 impl State {
@@ -886,7 +889,27 @@ impl Roaming {
                 match owner {
                     Some(o) if self.sensors.lock().unwrap().get_sensors().contains_key(&evt.mac) => o,
                     _ => {
-                        debug!("Roaming: gateway {} overheard {}, which no gateway of ours owns", gateway, evt.mac);
+                        // A sensor no table holds, on a short address another
+                        // sensor holds: the two share an address (a migration
+                        // dropped one, say), so the gateway holding the address
+                        // answers this sensor as the other one, and roaming can't
+                        // move it (by address it would move the other).
+                        let holder = st.mac_of_short(short, identity).filter(|m| *m != evt.mac);
+                        match holder {
+                            Some(other) => {
+                                let at = st.owner_of(&other, identity).unwrap_or_default();
+                                let fresh = st.conflicts.get(&evt.mac).is_none_or(|(_, t)| now.duration_since(*t) > Duration::from_secs(3600));
+                                if fresh {
+                                    warn!(
+                                        "Roaming: {} uses short address {:04X}, which {} holds on gateway {}: they share an address, \
+                                         so {} answers it as {} and it can't roam. Pair {} again.",
+                                        evt.mac, short, other, at, at, other, evt.mac
+                                    );
+                                }
+                                st.conflicts.insert(evt.mac.clone(), ((short, other, at), now));
+                            }
+                            None => debug!("Roaming: gateway {} overheard {}, which no gateway of ours owns", gateway, evt.mac),
+                        }
                         return (None, vec![]);
                     }
                 }
@@ -1162,7 +1185,15 @@ impl Roaming {
                 }))
             })
             .collect();
-        serde_json::json!({ "gateways": gateways, "heard": links, "evidence": evidence })
+        let conflicts: serde_json::Map<String, serde_json::Value> = st
+            .conflicts
+            .iter()
+            .filter(|(_, (_, t))| now.duration_since(*t) < Duration::from_secs(24 * 3600))
+            .map(|(sensor, ((short, other, gw), _))| {
+                (sensor.clone(), serde_json::json!({ "short": format!("{:04X}", short), "held_by": other, "gateway": gw }))
+            })
+            .collect();
+        serde_json::json!({ "gateways": gateways, "heard": links, "evidence": evidence, "address_conflicts": conflicts })
     }
 }
 

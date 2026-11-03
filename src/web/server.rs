@@ -430,6 +430,14 @@ async fn get_dongle_state(
 async fn list_dongles(
     State(state): State<Arc<WebState>>,
 ) -> impl IntoResponse {
+    // Sensors sharing a short address with another (they can't roam; pair them again)
+    let conflicts = state.roaming.as_ref().map(|r| r.status_json()["address_conflicts"].clone()).unwrap_or_default();
+    let with_conflict = |mut j: serde_json::Value| {
+        if let Some(c) = j["mac"].as_str().and_then(|m| conflicts.get(m)).cloned() {
+            j["address_conflict"] = c;
+        }
+        j
+    };
     let engines = state.engines.lock().await;
     let manager = state.sensor_manager.lock().unwrap();
 
@@ -437,7 +445,7 @@ async fn list_dongles(
     let dongles: Vec<serde_json::Value> = engines.iter().map(|(mac, engine)| {
         let sensors: Vec<serde_json::Value> = manager.get_sensors().values()
             .filter(|s| s.dongle_mac.as_deref() == Some(mac.as_str()))
-            .map(|s| sensor_info_to_json(s))
+            .map(|s| with_conflict(sensor_info_to_json(s)))
             .collect();
         let sensor_count = sensors.len();
 
@@ -975,7 +983,7 @@ const HTML_CONTENT: &str = concat!(r##"
 
             return `<tr class="hover:bg-slate-800/30 transition text-xs">
                 <td class="py-2 px-3 font-mono font-semibold text-teal-400">${s.mac}</td>
-                <td class="py-2 px-3">${tt}</td><td class="py-2 px-3">${st}</td>
+                <td class="py-2 px-3">${tt}${s.address_conflict ? ` <span class="tag border border-amber-900 bg-amber-950/30 text-amber-400" title="It uses short address ${s.address_conflict.short}, which ${s.address_conflict.held_by} holds on ${s.address_conflict.gateway}: the gateway answers it as that sensor, and it can't roam. Pair it again.">⚠ shares an address: pair again</span>` : ''}</td><td class="py-2 px-3">${st}</td>
                 <td class="py-2 px-3">${batt}</td>
                 <td class="py-2 px-3"><span class="font-mono ${sig}">${s.signal} dBm</span></td>
                 <td class="py-2 px-3 text-slate-400">${seen}</td>

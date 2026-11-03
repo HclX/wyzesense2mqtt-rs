@@ -433,3 +433,20 @@ async fn a_report_first_overheard_far_away_carries_the_owners_signal() {
     a.inject_report(S, SensorType::ContactV2, 0, 8, 50);
     assert!(w.next_event().await.is_none(), "the owner's copy is the duplicate");
 }
+
+#[tokio::test]
+async fn a_sensor_sharing_another_ones_short_address_is_flagged() {
+    // GWAAAAAA holds S at S_SHORT; "77A8C793" isn't in any table but uses the same short.
+    let (a, b) = gateways(vec![entry(S, S_SHORT)], vec![]);
+    let mut w = World::new(roam()).await;
+    w.connect(&a).await;
+    w.connect(&b).await;
+    w.sensors.lock().unwrap().assign_dongle("GWAAAAAA", &["77A8C793".to_string()]);
+    b.inject_overheard(S_SHORT, "77A8C793", SensorType::ContactV2, 1, 7, 60);
+    let e = w.next_event().await;
+    assert!(e.is_none(), "not passed on as another sensor's report: {:?}", e);
+    let c = &w.roaming.status_json()["address_conflicts"]["77A8C793"];
+    assert_eq!(c["held_by"], S);
+    assert_eq!(c["gateway"], "GWAAAAAA");
+    assert_eq!(c["short"], format!("{:04X}", S_SHORT));
+}
