@@ -305,12 +305,13 @@ bridge:
   enabled: false
   # auth_token: "your_secret_token"
 
-# OpenWyzeSense gateway features (all off unless turned on; stock dongles are
-# detected and never touched). Per-gateway settings override the defaults.
+# OpenWyzeSense gateway features (off unless turned on, except roaming, which
+# is automatic; stock dongles are detected and never touched). Per-gateway
+# settings override the defaults.
 openwyzesense:
   dedup: false            # forward each sensor resend once
   fix_zero_mac: false     # name v1 contacts' zero-MAC reports
-  roam: false             # roaming between gateways sharing one network identity
+  # roam: true            # roaming between gateways sharing one network identity: automatic when unset
   roam_hysteresis_db: 10  # how much stronger another gateway must hear a sensor to take it
   # firmware_source: "/path/to/release"  # dongle firmware: a local release directory or URL (default: GitHub release)
   # gateways:

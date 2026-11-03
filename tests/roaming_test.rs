@@ -102,17 +102,37 @@ fn gateways(a_table: Vec<NvSensor>, b_table: Vec<NvSensor>) -> (VirtualDongle, V
 }
 
 #[tokio::test]
-async fn no_flag_is_sent_unless_configured() {
+async fn a_single_gateway_gets_no_flag_unless_configured() {
+    let a = VirtualDongle::new("GWAAAAAA", "OWS").with_ows(NET, vec![entry(S, S_SHORT)]);
+    let mut w = World::new(RoamingConfig::default()).await;
+    w.connect(&a).await;
+    assert_eq!(a.ows().flags, 0);
+    let info = w.roaming.gateway_json("GWAAAAAA").expect("detected as ours");
+    assert_eq!(info["flags_supported"], "00000017");
+    assert_eq!(info["roaming"], false);
+}
+
+#[tokio::test]
+async fn gateways_sharing_a_network_roam_automatically() {
     let (a, b) = gateways(vec![entry(S, S_SHORT)], vec![]);
     let mut w = World::new(RoamingConfig::default()).await;
     w.connect(&a).await;
+    assert_eq!(a.ows().flags, 0, "alone on its network: no roaming");
     w.connect(&b).await;
-    assert_eq!((a.ows().flags, b.ows().flags), (0, 0));
+    // The second gateway on the network turns roaming on for both.
+    assert_eq!((a.ows().flags, b.ows().flags), (ows::FLAG_ROAM, ows::FLAG_ROAM));
     let status = w.roaming.status_json();
-    assert!(status["gateways"].as_array().unwrap().iter().all(|g| g["roaming"] == false));
-    let info = w.roaming.gateway_json("GWAAAAAA").expect("detected as ours");
-    assert_eq!(info["flags_supported"], "00000017");
+    assert!(status["gateways"].as_array().unwrap().iter().all(|g| g["roaming"] == true));
+}
 
+#[tokio::test]
+async fn roam_false_keeps_a_gateway_out() {
+    let (a, b) = gateways(vec![entry(S, S_SHORT)], vec![]);
+    let cfg = RoamingConfig { roam_gateways: [("GWBBBBBB".to_string(), false)].into(), ..Default::default() };
+    let mut w = World::new(cfg).await;
+    w.connect(&a).await;
+    w.connect(&b).await;
+    assert_eq!((a.ows().flags, b.ows().flags), (0, 0), "one of two opted out: no roaming group");
     // overheard reports are not merged without roaming
     b.inject_overheard(S_SHORT, S, SensorType::ContactV2, 1, 7, 80);
     assert!(w.next_event().await.is_none());

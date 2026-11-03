@@ -197,19 +197,22 @@ async fn only_through_our_gateway() {
 }
 
 #[tokio::test]
-async fn a_sensor_heard_far_better_elsewhere_is_sent_there() {
+async fn a_sensor_heard_far_better_elsewhere_goes_through_that_gateway() {
     let c = ctx("where", true).await;
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
     {
         let mut sm = c.sm.lock().unwrap();
         let s = sm.get_sensors_mut().get_mut(S).unwrap();
-        s.heard.insert("77A85A36".into(), (-48, now));
+        s.heard.insert("GWBEST00".into(), (-48, now));
         s.heard.insert(GW.into(), (-94, now));
     }
+    assert_eq!(c.firmware.gateway_for(GW, S), "GWBEST00");
+    // Started from GW, it goes to the better gateway (not connected here).
     let err = c.firmware.start_sensor_update(GW, vec![S.into()], "contact-v1").await.unwrap_err();
-    assert!(err.contains("talks to gateway 77A85A36"), "{}", err);
+    assert!(err.contains("GWBEST00"), "{}", err);
 
-    // Heard about as well here: allowed.
+    // Heard about as well here: it stays here.
     c.sm.lock().unwrap().get_sensors_mut().get_mut(S).unwrap().heard.insert(GW.into(), (-52, now));
+    assert_eq!(c.firmware.gateway_for(GW, S), GW);
     c.firmware.start_sensor_update(GW, vec![S.into()], "contact-v1").await.unwrap();
 }

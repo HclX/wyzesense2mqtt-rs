@@ -80,6 +80,11 @@ pub struct RoamingConfig {
     pub default_flags: u32,
     /// Feature flags per gateway MAC (upper case).
     pub gateway_flags: HashMap<String, u32>,
+    /// `roam` as configured for all gateways: `None` means automatic (on
+    /// once two of our gateways share a network identity).
+    pub roam_default: Option<bool>,
+    /// `roam` as configured per gateway MAC (upper case), where set.
+    pub roam_gateways: HashMap<String, bool>,
     /// Where the owner each sensor was last given is kept across restarts
     /// (sensor MAC → gateway MAC), so that when two gateways both hold a
     /// sensor the rightful one keeps it. `None`: in memory only.
@@ -87,6 +92,11 @@ pub struct RoamingConfig {
 }
 
 impl RoamingConfig {
+    /// Roaming as configured for a gateway: on, off, or automatic (`None`).
+    pub fn roam_setting(&self, gateway: &str) -> Option<bool> {
+        self.roam_gateways.get(&gateway.to_ascii_uppercase()).copied().or(self.roam_default)
+    }
+
     /// The flags configured for a gateway.
     pub fn configured_flags(&self, gateway: &str) -> u32 {
         self.gateway_flags.get(&gateway.to_ascii_uppercase()).copied().unwrap_or(self.default_flags)
@@ -125,6 +135,8 @@ impl Default for RoamingConfig {
             probe_timeout: Duration::from_millis(1500),
             default_flags: 0,
             gateway_flags: HashMap::new(),
+            roam_default: None,
+            roam_gateways: HashMap::new(),
             owners_path: None,
         }
     }
@@ -448,6 +460,39 @@ struct State {
 }
 
 impl State {
+    /// Automatic roaming: once two of our gateways that support it share a
+    /// network identity, roaming goes on for each whose `roam` isn't set
+    /// (they would otherwise all answer every sensor of the network, and all
+    /// report every join). It stays on. Returns the gateways turned on now.
+    fn auto_roam(&mut self, identity: NetworkIdentity, cfg: &RoamingConfig) -> Vec<String> {
+        let group: Vec<String> = self
+            .gateways
+            .iter()
+            .filter(|(m, g)| g.identity == identity && g.supported & ows::FLAG_ROAM != 0 && cfg.roam_setting(m) != Some(false))
+            .map(|(m, _)| m.clone())
+            .collect();
+        if group.len() < 2 {
+            return Vec::new();
+        }
+        let mut turned_on = Vec::new();
+        for m in &group {
+            let g = self.gateways.get_mut(m).unwrap();
+            if cfg.roam_setting(m).is_none() && g.wanted & ows::FLAG_ROAM == 0 {
+                g.wanted = (g.wanted | ows::FLAG_ROAM) & !ows::FLAG_DEDUP;
+                turned_on.push(m.clone());
+            }
+        }
+        if !turned_on.is_empty() {
+            info!(
+                "Roaming: gateways {} share network {}; roaming on for {}",
+                group.join(", "),
+                identity,
+                turned_on.join(", ")
+            );
+        }
+        turned_on
+    }
+
     /// Gateways that can roam, sharing `identity`.
     fn members(&self, identity: NetworkIdentity) -> impl Iterator<Item = (&String, &Gateway)> {
         self.gateways.iter().filter(move |(_, g)| g.identity == identity && g.can_roam())
@@ -659,6 +704,7 @@ impl Roaming {
         // there: the newcomer (back from an outage, typically, after its
         // sensors were handed over) forgets them.
         // (sensor, gateway that keeps it, gateway that forgets it)
+        let mut auto_roam = Vec::new();
         let duplicates: Vec<(String, String, String)> = {
             let mut st = self.state.lock().unwrap();
             st.gateways.insert(
@@ -675,6 +721,7 @@ impl Roaming {
                     last_flag_check: Instant::now(),
                 },
             );
+            auto_roam = st.auto_roam(identity, &self.cfg);
             let mut dups = Vec::new();
             for s in &table {
                 for (other, g) in st.members(identity) {
@@ -714,7 +761,21 @@ impl Roaming {
             }
         }
 
+        // Gateways already connected that roaming just turned on for.
+        for other in auto_roam.iter().filter(|g| g.as_str() != gateway) {
+            self.ensure_flags(other).await;
+        }
         self.ensure_flags(gateway).await;
+    }
+
+    /// On a roaming network: the gateway that owns `sensor` (the one that
+    /// answers it), found from any gateway of that network. `None` without
+    /// roaming, or when no online gateway holds it.
+    pub fn roaming_owner(&self, any_gateway: &str, sensor: &str) -> Option<String> {
+        let st = self.state.lock().unwrap();
+        let identity = st.roaming_identity(any_gateway)?;
+        let owner = st.owner_of(sensor, identity)?;
+        st.gateways.get(&owner).is_some_and(|g| g.online).then_some(owner)
     }
 
     /// Call when a gateway's connection is gone.

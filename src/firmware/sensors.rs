@@ -133,8 +133,40 @@ impl Firmware {
         let _ = self.broadcast_tx.send(());
     }
 
-    /// Updates these sensors (all of one board) through `gateway`.
-    pub async fn start_sensor_update(self: &Arc<Self>, gateway: &str, macs: Vec<String>, board: &str) -> Result<SensorJob, String> {
+    /// The gateway a sensor talks to, starting from the one the user picked:
+    /// its owner on a roaming network, else the gateway that hears it clearly
+    /// best (by [`BETTER_DB`], within the last hour), else the one picked.
+    pub fn gateway_for(&self, picked: &str, sensor: &str) -> String {
+        if let Some(owner) = self.roaming.as_ref().and_then(|r| r.roaming_owner(picked, sensor)) {
+            return owner;
+        }
+        let manager = self.local.sensor_manager.lock().unwrap();
+        if let Some(s) = manager.get_sensors().get(sensor) {
+            if let Some((best, best_rssi)) = best_gateway(s) {
+                let here = recent(s, picked);
+                if best != picked && here.is_none_or(|h| best_rssi as i16 >= h as i16 + BETTER_DB) {
+                    return best;
+                }
+            }
+        }
+        picked.to_string()
+    }
+
+    /// Updates these sensors (all of one board) through the gateway they talk
+    /// to (see [`Firmware::gateway_for`]); `picked` is where the user started.
+    pub async fn start_sensor_update(self: &Arc<Self>, picked: &str, macs: Vec<String>, board: &str) -> Result<SensorJob, String> {
+        let macs: Vec<String> = macs.iter().map(|m| m.to_ascii_uppercase()).collect();
+        let mut routes: Vec<(String, String)> = macs.iter().map(|m| (m.clone(), self.gateway_for(picked, m))).collect();
+        routes.sort_by(|a, b| a.1.cmp(&b.1));
+        let gateway_owned = routes.first().map(|(_, g)| g.clone()).unwrap_or_else(|| picked.to_string());
+        if routes.iter().any(|(_, g)| *g != gateway_owned) {
+            let list: Vec<String> = routes.iter().map(|(m, g)| format!("{} via {}", m, g)).collect();
+            return Err(format!("these sensors talk to different gateways ({}): update them one gateway at a time", list.join(", ")));
+        }
+        if gateway_owned != picked {
+            info!("Sensor update: {} talk(s) to gateway {}, not {}; going through it", macs.join(", "), gateway_owned, picked);
+        }
+        let gateway = gateway_owned.as_str();
         if !matches!(board, "contact-v1" | "motion-v1") {
             return Err(format!("no sensor firmware for board {}", board));
         }
@@ -159,24 +191,6 @@ impl Firmware {
         }
         if let Some(j) = self.job().filter(|j| j.step.active()) {
             return Err(format!("a firmware job is running on dongle {}", j.dongle));
-        }
-        // The sensor fetches its update from the gateway it talks to: the one
-        // that hears it best. Offered elsewhere, it would never see the offer.
-        {
-            let manager = self.local.sensor_manager.lock().unwrap();
-            for mac in &macs {
-                let Some(s) = manager.get_sensors().get(&mac.to_ascii_uppercase()) else { continue };
-                let (Some((best, best_rssi)), here) = (best_gateway(s), recent(s, gateway)) else { continue };
-                if best != gateway && here.is_none_or(|h| best_rssi as i16 >= h as i16 + BETTER_DB) {
-                    return Err(format!(
-                        "{} talks to gateway {} ({} dBm there, {} here): update it from that gateway",
-                        s.mac,
-                        best,
-                        best_rssi,
-                        here.map_or("not heard".to_string(), |h| format!("{} dBm", h))
-                    ));
-                }
-            }
         }
         let job = {
             let mut slot = self.sensor_job.lock().unwrap();

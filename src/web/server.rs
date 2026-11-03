@@ -1163,7 +1163,7 @@ const HTML_CONTENT: &str = concat!(r##"
                 const opt = (v, t) => `<option value="${v}" ${known[0]===v?'selected':''}>${t}</option>`;
                 body = `<p class="text-xs text-slate-500 mb-2">For sensors running OpenWyzeSense (stock sensors never take an update). After you start, briefly press each sensor's button (under a second; a long press pairs). Each takes about 3 minutes; the others keep reporting.</p>
                 <div class="space-y-1 mb-2">${o.sensors.map(x => `<label class="flex items-center gap-2 text-xs text-slate-300"><input type="checkbox" class="ota-pick" value="${esc(x.mac)}" data-board="${esc(x.board||'')}"> <span class="font-mono">${esc(x.mac)}</span> <span class="text-slate-500">${x.board ? esc(x.board) : 'type not reported yet'}${x.heard_here ? '' : ` · last heard by ${esc(x.heard_by||'none')}`}</span></label>`).join('')}</div>
-                <p class="text-xs text-slate-600 mb-2">Use the gateway the sensor talks to (usually the one that hears it best).</p>
+                <p class="text-xs text-slate-600 mb-2">Each update goes through the gateway the sensor talks to (its owner when roaming, else the one that hears it best), whichever dialog you start from.</p>
                 <select id="ota-board" class="w-full mb-3 bg-slate-950 border border-slate-800 text-sm rounded-xl px-3 py-2">${opt('contact-v1','Firmware: v1 contact')}${opt('motion-v1','Firmware: v1 motion')}</select>`;
                 body += `<button ${running?'disabled':''} onclick="fwSensors('${d.mac}')" class="w-full py-2.5 bg-emerald-700 hover:bg-emerald-600 disabled:opacity-40 text-white text-sm font-semibold rounded-xl transition">Update selected sensors to OpenWyzeSense ${esc(fwData.release)}</button>`;
             }

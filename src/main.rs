@@ -279,6 +279,12 @@ async fn run_daemon(
             default_flags: ows.defaults.flags(),
             gateway_flags: ows.gateways.keys().map(|mac| (mac.to_ascii_uppercase(), ows.flags_for(mac))).collect(),
             owners_path: Some(std::path::PathBuf::from("state/roaming.yaml")),
+            roam_default: ows.defaults.roam,
+            roam_gateways: ows
+                .gateways
+                .iter()
+                .filter_map(|(mac, f)| f.roam.map(|r| (mac.to_ascii_uppercase(), r)))
+                .collect(),
             ..RoamingConfig::default()
         },
         Arc::clone(&engines),
