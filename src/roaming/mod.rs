@@ -704,7 +704,7 @@ impl Roaming {
         // there: the newcomer (back from an outage, typically, after its
         // sensors were handed over) forgets them.
         // (sensor, gateway that keeps it, gateway that forgets it)
-        let mut auto_roam = Vec::new();
+        let auto_roam;
         let duplicates: Vec<(String, String, String)> = {
             let mut st = self.state.lock().unwrap();
             st.gateways.insert(
