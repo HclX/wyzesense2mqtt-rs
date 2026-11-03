@@ -175,6 +175,9 @@ fn router(shared_state: Arc<WebState>) -> Router {
         .route("/api/firmware/confirm", post(firmware_confirm))
         .route("/api/firmware/cancel", post(firmware_cancel))
         .route("/api/firmware/restore", post(firmware_restore))
+        .route("/api/firmware/relay", post(firmware_relay))
+        .route("/api/firmware/sensors", post(firmware_sensors))
+        .route("/api/firmware/sensors/cancel", post(firmware_sensors_cancel))
         .route("/ws/bridge", get(ws_bridge_handler))
         .layer(cors)
         .with_state(shared_state)
@@ -427,14 +430,28 @@ async fn get_dongle_state(
 async fn list_dongles(
     State(state): State<Arc<WebState>>,
 ) -> impl IntoResponse {
+    // Sensors sharing a short address with another (they can't roam; pair them again)
+    let conflicts = state.roaming.as_ref().map(|r| r.status_json()["address_conflicts"].clone()).unwrap_or_default();
+    let with_conflict = |mut j: serde_json::Value| {
+        if let Some(c) = j["mac"].as_str().and_then(|m| conflicts.get(m)).cloned() {
+            j["address_conflict"] = c;
+        }
+        j
+    };
     let engines = state.engines.lock().await;
+    // Roaming's view of each gateway, asked before the sensor manager is locked:
+    // roaming takes its own lock and then the sensors', so never the reverse.
+    let ows: std::collections::HashMap<String, Option<serde_json::Value>> = engines
+        .keys()
+        .map(|mac| (mac.clone(), state.roaming.as_ref().and_then(|r| r.gateway_json(mac))))
+        .collect();
     let manager = state.sensor_manager.lock().unwrap();
 
     // Group sensors by dongle_mac from the single source of truth (SensorManager)
     let dongles: Vec<serde_json::Value> = engines.iter().map(|(mac, engine)| {
         let sensors: Vec<serde_json::Value> = manager.get_sensors().values()
             .filter(|s| s.dongle_mac.as_deref() == Some(mac.as_str()))
-            .map(|s| sensor_info_to_json(s))
+            .map(|s| with_conflict(sensor_info_to_json(s)))
             .collect();
         let sensor_count = sensors.len();
 
@@ -448,7 +465,7 @@ async fn list_dongles(
             "sensors": sensors,
             "sensor_count": sensor_count,
             // OpenWyzeSense firmware details, null for a stock dongle
-            "openwyzesense": state.roaming.as_ref().and_then(|r| r.gateway_json(mac)),
+            "openwyzesense": ows.get(mac).cloned().flatten(),
         })
     }).collect();
 
@@ -494,6 +511,7 @@ async fn list_sensors(
             event_sequence: sensor.event_sequence,
             state: sensor.state.clone(),
             dongle_mac: sensor.dongle_mac.clone(),
+            heard: Default::default(),
         })
         .collect();
     sensors.sort_by_key(|s| s.mac.clone());
@@ -517,6 +535,7 @@ async fn list_cached_sensors(
             event_sequence: sensor.event_sequence,
             state: sensor.state.clone(),
             dongle_mac: sensor.dongle_mac.clone(),
+            heard: Default::default(),
         }
     }).collect();
     sensors.sort_by_key(|s| s.mac.clone());
@@ -628,6 +647,9 @@ async fn roaming_status(State(state): State<Arc<WebState>>) -> impl IntoResponse
 #[derive(Deserialize)]
 struct FirmwareRequest {
     dongle: String,
+    /// A relay's admin password, when it has one (never stored).
+    #[serde(default)]
+    password: Option<String>,
 }
 
 fn firmware_result(r: Result<crate::firmware::Job, String>) -> (StatusCode, Json<serde_json::Value>) {
@@ -638,7 +660,7 @@ fn firmware_result(r: Result<crate::firmware::Job, String>) -> (StatusCode, Json
 }
 
 fn firmware_unavailable() -> (StatusCode, Json<serde_json::Value>) {
-    (StatusCode::NOT_FOUND, Json(json!({ "error": "firmware updates need local USB dongles (usb.dongle is none)" })))
+    (StatusCode::NOT_FOUND, Json(json!({ "error": "firmware updates are not available here" })))
 }
 
 // GET /api/firmware
@@ -680,6 +702,43 @@ async fn firmware_cancel(State(state): State<Arc<WebState>>) -> impl IntoRespons
 async fn firmware_restore(State(state): State<Arc<WebState>>, Json(req): Json<FirmwareRequest>) -> impl IntoResponse {
     match &state.firmware {
         Some(f) => firmware_result(f.start_restore(&req.dongle.to_uppercase()).await),
+        None => firmware_unavailable(),
+    }
+}
+
+// POST /api/firmware/relay {dongle, password?}: a bridged relay's own firmware
+async fn firmware_relay(State(state): State<Arc<WebState>>, Json(req): Json<FirmwareRequest>) -> impl IntoResponse {
+    match &state.firmware {
+        Some(f) => firmware_result(f.start_relay_update(&req.dongle.to_uppercase(), req.password).await),
+        None => firmware_unavailable(),
+    }
+}
+
+#[derive(Deserialize)]
+struct SensorUpdateRequest {
+    gateway: String,
+    sensors: Vec<String>,
+    board: String,
+}
+
+// POST /api/firmware/sensors {gateway, sensors, board}: sensors over the air through an OpenWyzeSense gateway
+async fn firmware_sensors(State(state): State<Arc<WebState>>, Json(req): Json<SensorUpdateRequest>) -> impl IntoResponse {
+    match &state.firmware {
+        Some(f) => match f.start_sensor_update(&req.gateway.to_uppercase(), req.sensors, &req.board).await {
+            Ok(job) => (StatusCode::OK, Json(json!({ "sensor_job": job }))),
+            Err(e) => (StatusCode::CONFLICT, Json(json!({ "error": e }))),
+        },
+        None => firmware_unavailable(),
+    }
+}
+
+// POST /api/firmware/sensors/cancel
+async fn firmware_sensors_cancel(State(state): State<Arc<WebState>>) -> impl IntoResponse {
+    match &state.firmware {
+        Some(f) => match f.cancel_sensor_update() {
+            Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))),
+            Err(e) => (StatusCode::CONFLICT, Json(json!({ "error": e }))),
+        },
         None => firmware_unavailable(),
     }
 }
@@ -930,7 +989,7 @@ const HTML_CONTENT: &str = concat!(r##"
 
             return `<tr class="hover:bg-slate-800/30 transition text-xs">
                 <td class="py-2 px-3 font-mono font-semibold text-teal-400">${s.mac}</td>
-                <td class="py-2 px-3">${tt}</td><td class="py-2 px-3">${st}</td>
+                <td class="py-2 px-3">${tt}${s.address_conflict ? ` <span class="tag border border-amber-900 bg-amber-950/30 text-amber-400" title="${s.address_conflict.held_by ? `It uses short address ${s.address_conflict.short}, which ${s.address_conflict.held_by} holds on ${s.address_conflict.gateway}` : `Gateway ${s.address_conflict.gateway} answers it without holding it in its table`}: it shares an address with another sensor and can't roam. Pair it again.">⚠ shares an address: pair again</span>` : ''}</td><td class="py-2 px-3">${st}</td>
                 <td class="py-2 px-3">${batt}</td>
                 <td class="py-2 px-3"><span class="font-mono ${sig}">${s.signal} dBm</span></td>
                 <td class="py-2 px-3 text-slate-400">${seen}</td>
@@ -1054,6 +1113,7 @@ const HTML_CONTENT: &str = concat!(r##"
                         </div>
 
                         ${firmwareSection(d)}
+                        ${sensorOtaSection(d)}
 
                         <hr class="border-slate-800">
 
@@ -1086,8 +1146,9 @@ const HTML_CONTENT: &str = concat!(r##"
 
         function firmwareSection(d) {
             const f = fwData.dongles?.[d.mac];
-            if (d.transport === 'bridge' || !f) return '';
-            const busy = fwData.job && ['download','backup','review','flash','replug'].includes(fwData.job.step);
+            if (!f) return '';
+            const busy = fwData.job && ['download','backup','review','flash','replug','restart'].includes(fwData.job.step);
+            if (d.transport === 'bridge') return relaySection(d, f.relay, busy);
             const ows = !!d.openwyzesense;
             const install = ows ? `Reinstall / update to OpenWyzeSense ${esc(fwData.release)}` : `Install OpenWyzeSense ${esc(fwData.release)}`;
             const restore = ows && f.can_restore_stock
@@ -1104,12 +1165,82 @@ const HTML_CONTENT: &str = concat!(r##"
                 </div>`;
         }
 
+        function sensorOtaSection(d) {
+            const o = fwData.dongles?.[d.mac]?.ota;
+            if (!o) return '';
+            const running = fwData.sensor_job && ['download','running'].includes(fwData.sensor_job.step);
+            let body;
+            if (!o.supported) body = `<p class="text-xs text-slate-500">This gateway's firmware can't update sensors; update the gateway first.</p>`;
+            else if (!o.sensors.length) body = `<p class="text-xs text-slate-500">No v1 contact or v1 motion sensors on this gateway.</p>`;
+            else {
+                const known = [...new Set(o.sensors.map(x => x.board).filter(Boolean))];
+                const opt = (v, t) => `<option value="${v}" ${known[0]===v?'selected':''}>${t}</option>`;
+                body = `<p class="text-xs text-slate-500 mb-2">For sensors running OpenWyzeSense (stock sensors never take an update). After you start, briefly press each sensor's button (under a second; a long press pairs). Each takes about 3 minutes; the others keep reporting.</p>
+                <div class="space-y-1 mb-2">${o.sensors.map(x => `<label class="flex items-center gap-2 text-xs text-slate-300"><input type="checkbox" class="ota-pick" value="${esc(x.mac)}" data-board="${esc(x.board||'')}"> <span class="font-mono">${esc(x.mac)}</span> <span class="text-slate-500">${x.board ? esc(x.board) : 'type not reported yet'}${x.heard_here ? '' : ` · last heard by ${esc(x.heard_by||'none')}`}</span></label>`).join('')}</div>
+                <p class="text-xs text-slate-600 mb-2">Each update goes through the gateway the sensor talks to (its owner when roaming, else the one that hears it best), whichever dialog you start from.</p>
+                <select id="ota-board" class="w-full mb-3 bg-slate-950 border border-slate-800 text-sm rounded-xl px-3 py-2">${opt('contact-v1','Firmware: v1 contact')}${opt('motion-v1','Firmware: v1 motion')}</select>`;
+                body += `<button ${running?'disabled':''} onclick="fwSensors('${d.mac}')" class="w-full py-2.5 bg-emerald-700 hover:bg-emerald-600 disabled:opacity-40 text-white text-sm font-semibold rounded-xl transition">Update selected sensors to OpenWyzeSense ${esc(fwData.release)}</button>`;
+            }
+            return `<hr class="border-slate-800"><div><h3 class="text-sm font-semibold text-slate-300 mb-2">📶 Sensor updates</h3>${body}</div>`;
+        }
+
+        function sensorJobCard() {
+            const j = fwData.sensor_job;
+            if (!j || j.id === fwDismissed) return '';
+            const active = ['download','running'].includes(j.step);
+            const label = {queued:'Waiting for its turn', press_button:'Press its button briefly now (under 1 s)', updating:'Updating', done:'Done', refused:'Turned down', failed:'Failed', timed_out:'Timed out (button not pressed, or not running OpenWyzeSense)', stopped:'Stopped'};
+            const color = {done:'text-emerald-400', refused:'text-amber-400', failed:'text-rose-400', timed_out:'text-amber-400', press_button:'text-teal-300 font-semibold'};
+            const rows = j.sensors.map(r => {
+                const pct = r.total ? Math.floor(r.done * 100 / r.total) : null;
+                return `<div class="py-1"><div class="flex justify-between text-xs"><span class="font-mono text-slate-300">${esc(r.mac)}</span>
+                    <span class="${color[r.state]||'text-slate-400'}">${label[r.state]||esc(r.state)}${r.state==='updating'&&pct!==null?` ${pct}%`:''}${r.message?`: ${esc(r.message)}`:''}</span></div>
+                    ${r.state==='updating'&&pct!==null?`<div class="w-full bg-slate-800 rounded-full h-1.5 mt-1"><div class="bg-emerald-500 h-1.5 rounded-full" style="width:${pct}%"></div></div>`:''}</div>`;
+            }).join('');
+            const head = j.step === 'download' ? 'Downloading the sensor firmware…'
+                : j.step === 'running' ? 'Offers are up for 6 minutes after the last activity.'
+                : j.step === 'failed' ? `<span class="text-rose-400">Failed: ${esc(j.message)}</span>`
+                : j.step === 'cancelled' ? 'Cancelled.' : 'Finished.';
+            const btn = active
+                ? `<button onclick="fwPost('sensors/cancel')" class="py-1.5 px-4 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-lg border border-slate-700">Stop</button>`
+                : `<button onclick="fwDismissed=${j.id};render()" class="py-1.5 px-4 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-lg border border-slate-700">Dismiss</button>`;
+            return `<div class="bg-slate-900 rounded-2xl border border-emerald-900 shadow-xl px-5 py-4 mb-4">
+                <div class="font-bold text-sm text-emerald-400">📶 Updating ${esc(j.board)} sensors to ${esc(j.target)} · gateway ${esc(j.gateway)}</div>
+                <div class="text-xs text-slate-400 mt-1 mb-2">${head}</div>${rows}
+                <div class="flex gap-2 mt-3">${btn}</div></div>`;
+        }
+
+        async function fwSensors(gw) {
+            const picks = [...document.querySelectorAll('.ota-pick:checked')];
+            if (!picks.length) { alertMsg('Choose at least one sensor.'); return; }
+            const board = document.getElementById('ota-board').value;
+            if (picks.some(p => p.dataset.board && p.dataset.board !== board)) { alertMsg('Update one kind of sensor at a time (contact or motion).'); return; }
+            fwDismissed = null;
+            if (await fwPost('sensors', {gateway: gw, sensors: picks.map(p => p.value), board})) closeModal();
+        }
+
+        function relaySection(d, r, busy) {
+            if (!r) return '';
+            const current = r.build && fwData.release && r.build.startsWith(fwData.release);
+            const pw = r.auth ? `<input id="relay-pass" type="password" placeholder="Relay admin password (not stored)" class="w-full mb-2 bg-slate-950 border border-slate-800 text-sm rounded-xl px-3 py-2 focus:outline-none focus:border-teal-500">` : '';
+            return `<hr class="border-slate-800">
+                <div>
+                    <h3 class="text-sm font-semibold text-slate-300 mb-2">🔧 Relay firmware</h3>
+                    <p class="text-xs text-slate-500 mb-3">${esc(r.name)}: <span class="text-slate-300">${esc(r.chip)} · ${esc(r.build)}</span>.
+                        The relay restarts into the new firmware and updates its contact board's radio, then reconnects (about a minute).
+                        A build that can't rejoin Wi-Fi rolls back by itself.</p>
+                    ${r.product ? `${pw}<button ${busy?'disabled':''} onclick="fwRelay('${d.mac}')" class="w-full py-2.5 bg-emerald-700 hover:bg-emerald-600 disabled:opacity-40 text-white text-sm font-semibold rounded-xl transition">${current ? 'Reinstall' : 'Update relay to'} OpenWyzeSense ${esc(fwData.release)}</button>`
+                        : `<p class="text-xs text-amber-400">No relay firmware for a ${esc(r.chip)}.</p>`}
+                </div>`;
+        }
+
         function fwJobCard() {
             const j = fwData.job;
             if (!j || j.id === fwDismissed || j.step === 'cancelled') return '';
             const pct = j.total ? Math.floor(j.done * 100 / j.total) : null;
             const bar = pct === null ? '' : `<div class="w-full bg-slate-800 rounded-full h-2 mt-2"><div class="bg-emerald-500 h-2 rounded-full transition-all" style="width:${pct}%"></div></div>`;
-            const what = j.kind === 'restore' ? 'Restoring stock firmware' : `Installing OpenWyzeSense ${esc(j.target||fwData.release)}`;
+            const what = j.kind === 'restore' ? 'Restoring stock firmware'
+                : j.kind === 'relay' ? `Updating relay firmware to ${esc(j.target||fwData.release)}`
+                : `Installing OpenWyzeSense ${esc(j.target||fwData.release)}`;
             let body = '', buttons = '';
             const dismiss = `<button onclick="fwDismissed=${j.id};render()" class="py-1.5 px-4 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-lg border border-slate-700">Dismiss</button>`;
             switch (j.step) {
@@ -1125,9 +1256,12 @@ const HTML_CONTENT: &str = concat!(r##"
                         <button onclick="fwCancel()" class="py-1.5 px-4 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-lg border border-slate-700">Cancel</button>`;
                     break;
                 }
-                case 'flash': body = `Writing (${esc(j.phase||'starting')}). Don't unplug the dongle.${pct!==null?` ${pct}%`:''}`; break;
+                case 'flash': body = j.kind === 'relay'
+                    ? `Uploading to the relay (it was running ${esc(j.current)}).${pct!==null?` ${pct}%`:''}`
+                    : `Writing (${esc(j.phase||'starting')}). Don't unplug the dongle.${pct!==null?` ${pct}%`:''}`; break;
+                case 'restart': body = 'The relay is restarting into the new firmware and updating its radio; it reconnects in about a minute.'; break;
                 case 'replug': body = '<span class="text-amber-400 font-semibold">Written and verified. Unplug the dongle and plug it back in.</span>'; break;
-                case 'done': body = `<span class="text-emerald-400">Done.</span> ${j.kind==='restore' ? 'The dongle runs stock firmware again; sensors paired since the backup need pairing again.' : 'The dongle runs OpenWyzeSense; its features stay off until turned on in the openwyzesense config section.'}
+                case 'done': body = `<span class="text-emerald-400">Done.</span> ${j.kind==='relay' ? `The relay runs ${esc(j.current)}.` : j.kind==='restore' ? 'The dongle runs stock firmware again; sensors paired since the backup need pairing again.' : 'The dongle runs OpenWyzeSense; its features stay off until turned on in the openwyzesense config section.'}
                         ${j.dropped.filter(x=>x.mac).length ? `<span class="text-amber-400">Pair ${j.dropped.filter(x=>x.mac).map(x=>esc(x.mac)).join(', ')} again.</span>` : ''}`;
                     buttons = dismiss; break;
                 case 'failed': body = `<span class="text-rose-400">Failed: ${esc(j.message)}</span>`; buttons = dismiss; break;
@@ -1142,17 +1276,28 @@ const HTML_CONTENT: &str = concat!(r##"
         async function fwPost(path, body) {
             const r = await fetch(`${API}/api/firmware/${path}`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body||{})});
             const d = await r.json().catch(() => ({}));
-            if (!r.ok) { log(`Firmware: ${d.error || r.status}`); alertMsg(d.error || `HTTP ${r.status}`); }
             await loadDongles();
+            // After the reload: the page re-renders the message box.
+            if (!r.ok) { log(`Firmware: ${d.error || r.status}`); alertMsg(d.error || `HTTP ${r.status}`); }
             return r.ok;
         }
         function alertMsg(t) {
-            const el = document.getElementById('fw-error');
-            if (el) { el.textContent = t; el.classList.remove('hidden'); setTimeout(() => el.classList.add('hidden'), 8000); }
+            // A toast above everything (the dialog included).
+            const el = document.createElement('div');
+            el.className = 'fixed top-4 left-1/2 -translate-x-1/2 z-[100] max-w-lg w-[calc(100%-2rem)] text-sm text-rose-200 bg-rose-950 border border-rose-800 rounded-xl px-4 py-3 shadow-2xl';
+            el.textContent = t;
+            el.onclick = () => el.remove();
+            document.body.appendChild(el);
+            setTimeout(() => el.remove(), 10000);
         }
         async function fwInstall(mac) { fwDismissed = null; if (await fwPost('install', {dongle: mac})) closeModal(); }
         async function fwConfirm() { await fwPost('confirm'); }
         async function fwCancel() { await fwPost('cancel'); }
+        async function fwRelay(mac) {
+            fwDismissed = null;
+            const password = document.getElementById('relay-pass')?.value || null;
+            if (await fwPost('relay', {dongle: mac, password})) closeModal();
+        }
         async function fwRestore(mac) {
             fwDismissed = null;
             if (await fwPost('restore', {dongle: mac})) closeModal();
@@ -1174,12 +1319,12 @@ const HTML_CONTENT: &str = concat!(r##"
         function render() {
             const c = document.getElementById("dongles-container");
             if (!donglesData.dongles.length && !(donglesData.unassociated_sensors||[]).length) {
-                c.innerHTML = fwJobCard() + `<div class="text-center py-16"><div class="text-4xl mb-3">📡</div>
+                c.innerHTML = fwJobCard() + sensorJobCard() + `<div class="text-center py-16"><div class="text-4xl mb-3">📡</div>
                     <div class="text-slate-400 text-sm">No dongles connected</div>
                     <div class="text-slate-600 text-xs mt-1">Connect a USB dongle or start a WebSocket bridge</div></div>`;
                 return;
             }
-            c.innerHTML = `<div id="fw-error" class="hidden mb-4 text-xs text-rose-400 bg-rose-950/30 border border-rose-900 rounded-xl px-4 py-2"></div>` + fwJobCard()
+            c.innerHTML = `<div id="fw-error" class="hidden mb-4 text-xs text-rose-400 bg-rose-950/30 border border-rose-900 rounded-xl px-4 py-2"></div>` + fwJobCard() + sensorJobCard()
                 + donglesData.dongles.map((d,i) => dongleCard(d,i)).join("") + orphanCard(donglesData.unassociated_sensors);
         }
 

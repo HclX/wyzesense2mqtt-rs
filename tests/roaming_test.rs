@@ -102,17 +102,37 @@ fn gateways(a_table: Vec<NvSensor>, b_table: Vec<NvSensor>) -> (VirtualDongle, V
 }
 
 #[tokio::test]
-async fn no_flag_is_sent_unless_configured() {
+async fn a_single_gateway_gets_no_flag_unless_configured() {
+    let a = VirtualDongle::new("GWAAAAAA", "OWS").with_ows(NET, vec![entry(S, S_SHORT)]);
+    let mut w = World::new(RoamingConfig::default()).await;
+    w.connect(&a).await;
+    assert_eq!(a.ows().flags, 0);
+    let info = w.roaming.gateway_json("GWAAAAAA").expect("detected as ours");
+    assert_eq!(info["flags_supported"], "00000017");
+    assert_eq!(info["roaming"], false);
+}
+
+#[tokio::test]
+async fn gateways_sharing_a_network_roam_automatically() {
     let (a, b) = gateways(vec![entry(S, S_SHORT)], vec![]);
     let mut w = World::new(RoamingConfig::default()).await;
     w.connect(&a).await;
+    assert_eq!(a.ows().flags, 0, "alone on its network: no roaming");
     w.connect(&b).await;
-    assert_eq!((a.ows().flags, b.ows().flags), (0, 0));
+    // The second gateway on the network turns roaming on for both.
+    assert_eq!((a.ows().flags, b.ows().flags), (ows::FLAG_ROAM, ows::FLAG_ROAM));
     let status = w.roaming.status_json();
-    assert!(status["gateways"].as_array().unwrap().iter().all(|g| g["roaming"] == false));
-    let info = w.roaming.gateway_json("GWAAAAAA").expect("detected as ours");
-    assert_eq!(info["flags_supported"], "00000013");
+    assert!(status["gateways"].as_array().unwrap().iter().all(|g| g["roaming"] == true));
+}
 
+#[tokio::test]
+async fn roam_false_keeps_a_gateway_out() {
+    let (a, b) = gateways(vec![entry(S, S_SHORT)], vec![]);
+    let cfg = RoamingConfig { roam_gateways: [("GWBBBBBB".to_string(), false)].into(), ..Default::default() };
+    let mut w = World::new(cfg).await;
+    w.connect(&a).await;
+    w.connect(&b).await;
+    assert_eq!((a.ows().flags, b.ows().flags), (0, 0), "one of two opted out: no roaming group");
     // overheard reports are not merged without roaming
     b.inject_overheard(S_SHORT, S, SensorType::ContactV2, 1, 7, 80);
     assert!(w.next_event().await.is_none());
@@ -388,4 +408,66 @@ async fn pairing_gets_a_range_above_every_short_address_in_use() {
     eb.set_scan(true).await.unwrap();
     w.roaming.prepare_pairing("GWAAAAAA").await.unwrap();
     assert!(!eb.is_scanning());
+}
+
+#[tokio::test]
+async fn a_report_first_overheard_far_away_carries_the_owners_signal() {
+    let (a, b) = gateways(vec![entry(S, S_SHORT)], vec![]);
+    let mut w = World::new(roam()).await;
+    w.connect(&a).await;
+    w.connect(&b).await;
+    let rssi = |e: &DongleEvent| match e.data {
+        TelemetryData::Alarm { rssi, .. } => rssi,
+        _ => panic!("not an alarm: {:?}", e.data),
+    };
+
+    // The owner hears it well.
+    a.inject_report(S, SensorType::ContactV2, 1, 7, 50);
+    let near = rssi(&w.next_event().await.expect("first report"));
+
+    // Next report: the far gateway's copy arrives first.
+    b.inject_overheard(S_SHORT, S, SensorType::ContactV2, 0, 8, 90);
+    let e = w.next_event().await.expect("second report");
+    assert_eq!(e.dongle_mac.as_deref(), Some("GWAAAAAA"));
+    assert_eq!(rssi(&e), near, "the owner's signal, not the far copy's");
+    a.inject_report(S, SensorType::ContactV2, 0, 8, 50);
+    assert!(w.next_event().await.is_none(), "the owner's copy is the duplicate");
+}
+
+#[tokio::test]
+async fn a_sensor_sharing_another_ones_short_address_is_flagged() {
+    // GWAAAAAA holds S at S_SHORT; "77A8C793" isn't in any table but uses the same short.
+    let (a, b) = gateways(vec![entry(S, S_SHORT)], vec![]);
+    let mut w = World::new(roam()).await;
+    w.connect(&a).await;
+    w.connect(&b).await;
+    w.sensors.lock().unwrap().assign_dongle("GWAAAAAA", &["77A8C793".to_string()]);
+    b.inject_overheard(S_SHORT, "77A8C793", SensorType::ContactV2, 1, 7, 60);
+    let e = w.next_event().await;
+    assert!(e.is_none(), "not passed on as another sensor's report: {:?}", e);
+    let c = &w.roaming.status_json()["address_conflicts"]["77A8C793"];
+    assert_eq!(c["held_by"], S);
+    assert_eq!(c["gateway"], "GWAAAAAA");
+    assert_eq!(c["short"], format!("{:04X}", S_SHORT));
+}
+
+#[tokio::test]
+async fn a_gateway_reporting_a_sensor_it_does_not_hold_is_flagged() {
+    let (a, b) = gateways(vec![entry(S, S_SHORT)], vec![]);
+    let mut w = World::new(roam()).await;
+    w.connect(&a).await;
+    w.connect(&b).await;
+    // A's radio answers "77A8C793" as S (same short) and reports it as its own.
+    a.inject_report("77A8C793", SensorType::ContactV2, 1, 3, 60);
+    assert!(w.next_event().await.is_some(), "its report still gets through");
+    let c = &w.roaming.status_json()["address_conflicts"]["77A8C793"];
+    assert_eq!(c["gateway"], "GWAAAAAA");
+
+    // Paired again (in the table now): its next report clears the flag.
+    let (a2, _) = gateways(vec![entry(S, S_SHORT), entry("77A8C793", 0x0007)], vec![]);
+    w.disconnect(&a).await;
+    w.connect(&a2).await;
+    a2.inject_report("77A8C793", SensorType::ContactV2, 0, 4, 60);
+    w.next_event().await;
+    assert!(w.roaming.status_json()["address_conflicts"].get("77A8C793").is_none());
 }

@@ -2,7 +2,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use wyzesense2mqtt_rs::config::state::{SystemState, PersistedSensorState};
+use wyzesense2mqtt_rs::config::state::{HeardBy, SystemState, PersistedSensorState};
 use wyzesense2mqtt_rs::protocol::sensor::{SensorManager, SensorState, WyzeSensor};
 use wyzesense2mqtt_rs::protocol::telemetry::SensorType;
 
@@ -132,6 +132,7 @@ fn test_dongle_mac_persistence_roundtrip() {
             event_sequence: None,
             state: SensorState::Contact { is_open: true },
             dongle_mac: Some("DONGLE01".to_string()),
+            heard: [("DONGLE01".to_string(), HeardBy { rssi: -48, at: 1620000000 })].into(),
         },
     );
     state.save_to_yaml_atomic(&state_path).unwrap();
@@ -141,6 +142,7 @@ fn test_dongle_mac_persistence_roundtrip() {
     let sensor = loaded.sensors.get("AABB1234").unwrap();
     assert_eq!(sensor.dongle_mac.as_deref(), Some("DONGLE01"));
     assert_eq!(sensor.state, SensorState::Contact { is_open: true });
+    assert_eq!(sensor.heard["DONGLE01"], HeardBy { rssi: -48, at: 1620000000 });
 
     // 3. Verify backward compat: missing dongle_mac defaults to None
     let yaml_no_dongle = r#"
@@ -225,4 +227,33 @@ fn test_scan_request_dongle_mac_is_required() {
     let req = result.unwrap();
     assert_eq!(req.dongle_mac, "DONGLE01");
     assert!(req.enable);
+}
+
+#[test]
+fn a_sensor_heard_by_two_gateways_stays_with_the_one_that_hears_it_best() {
+    use wyzesense2mqtt_rs::protocol::telemetry::{DongleEvent, TelemetryData};
+    let config_path = get_temp_file("best_cfg.yaml");
+    let state_path = get_temp_file("best_state.yaml");
+    let mut mgr = SensorManager::new(config_path.to_string_lossy().to_string(), state_path.to_string_lossy().to_string());
+    mgr.assign_dongle("NEAR0001", &["777B42DF".to_string()]);
+    let report = |gw: &str, rssi: i8| DongleEvent {
+        mac: "777B42DF".into(),
+        timestamp: std::time::SystemTime::now(),
+        sensor_type: SensorType::ContactV1,
+        event_type: 0xA2,
+        data: TelemetryData::Heartbeat { battery: 100, rssi, die_temperature_c: 20, event_sequence: 1 },
+        dongle_mac: Some(gw.into()),
+        overheard_short: None,
+    };
+    // Each report comes through both gateways; the far one's copy comes last.
+    for _ in 0..3 {
+        mgr.dispatch_event(&report("NEAR0001", -48));
+        mgr.dispatch_event(&report("FAR00001", -94));
+        assert_eq!(mgr.get_sensors()["777B42DF"].dongle_mac.as_deref(), Some("NEAR0001"));
+    }
+    // It moves once the other gateway hears it better.
+    mgr.dispatch_event(&report("FAR00001", -40));
+    assert_eq!(mgr.get_sensors()["777B42DF"].dongle_mac.as_deref(), Some("FAR00001"));
+    let _ = fs::remove_file(config_path);
+    let _ = fs::remove_file(state_path);
 }

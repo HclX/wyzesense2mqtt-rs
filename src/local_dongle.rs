@@ -261,6 +261,8 @@ impl LocalDongles {
         let attached: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
         // Nodes whose handshake failed, and when.
         let failed: Arc<Mutex<HashMap<String, Instant>>> = Arc::new(Mutex::new(HashMap::new()));
+        // Nodes already reset out of update mode once since they appeared.
+        let reset_tried: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
         let mut warned_none = false;
 
         loop {
@@ -272,6 +274,7 @@ impl LocalDongles {
 
             // A node that went away and came back gets a fresh try.
             failed.lock().unwrap().retain(|p, at| present.contains(p) && at.elapsed() < retry_after);
+            reset_tried.lock().unwrap().retain(|p| present.contains(p));
 
             for path in present {
                 if self.is_reserved(&path)
@@ -283,17 +286,36 @@ impl LocalDongles {
                 let me = self.clone();
                 let attached = Arc::clone(&attached);
                 let failed = Arc::clone(&failed);
+                let reset_tried = Arc::clone(&reset_tried);
                 tokio::spawn(async move {
                     let end = match HidrawTransport::open(&path).await {
                         Ok(t) => me.run_session(&path, GatewayTransport::Hidraw(t)).await,
                         Err(e) => SessionEnd::HandshakeFailed(format!("open failed: {}", e)),
                     };
                     if let SessionEnd::HandshakeFailed(reason) = &end {
+                        // A firmware job cut short (the daemon stopped mid-backup,
+                        // say) leaves the dongle in its update mode, where it
+                        // half-answers. Its bootloader's reset brings it back.
+                        if !reason.starts_with("open failed")
+                            && !me.is_reserved(&path)
+                            && reset_tried.lock().unwrap().insert(path.clone())
+                        {
+                            let node = path.clone();
+                            let reset = tokio::task::spawn_blocking(move || leave_update_mode(&node)).await.unwrap_or(false);
+                            if reset {
+                                warn!("USB dongle on {} was left in its update mode; reset it, trying again", path);
+                                attached.lock().unwrap().remove(&path);
+                                return;
+                            }
+                        }
                         error!(
                             "USB dongle on {} did not answer: {}. Retrying when it is replugged or in {} s",
                             path, reason, retry_after.as_secs()
                         );
                         failed.lock().unwrap().insert(path.clone(), Instant::now());
+                    }
+                    if matches!(end, SessionEnd::Disconnected { .. }) {
+                        reset_tried.lock().unwrap().remove(&path);
                     }
                     debug!("Session on {} ended: {:?}", path, end);
                     attached.lock().unwrap().remove(&path);
@@ -301,5 +323,16 @@ impl LocalDongles {
             }
             tokio::time::sleep(poll).await;
         }
+    }
+}
+
+/// If the dongle on `path` is in (or can enter) its update mode, resets it
+/// through the bootloader so that it comes back in normal mode. False if its
+/// bootloader doesn't answer.
+fn leave_update_mode(path: &str) -> bool {
+    let Ok(mut t) = ows_host::hidraw::Hidraw::open(std::path::Path::new(path)) else { return false };
+    match ows_host::sbl::Sbl::enter(&mut t) {
+        Ok(mut s) => s.reset().is_ok(),
+        Err(_) => false,
     }
 }

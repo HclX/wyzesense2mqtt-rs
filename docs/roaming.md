@@ -71,8 +71,12 @@ pass through unchanged.
   that another online gateway of the network already holds is removed from the
   newcomer, so the gateway that stayed up keeps it. Two different sensors on
   one short address are logged as an error, and one of them must be re-paired.
-  Roaming groups are the gateways with `roam` configured (and supported) that
-  share an identity. A group needs two members before it does anything.
+  Roaming groups are the gateways that support roaming and share an identity,
+  except those configured `roam: false`. Roaming turns on by itself for every
+  member once a group has two (a gateway left unset is "automatic"; `roam:
+  true` forces it), and stays on. Without it, every gateway of the network
+  ACKs every sensor and reports every join. A group needs two members before
+  it does anything.
 - **Disconnect:** the gateway is marked offline and its sensors stay with it
   (see the policy below). Its table stays cached.
 - **Every 45 s:** re-read the flags (see above). A watchdog or brown-out

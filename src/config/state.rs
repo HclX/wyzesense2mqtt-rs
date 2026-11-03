@@ -24,6 +24,15 @@ pub struct PersistedSensorState {
     pub state: SensorState,  // Type-specific state (persisted)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dongle_mac: Option<String>, // Which dongle owns this sensor (None = unassociated)
+    /// How strongly each gateway heard it last, and when (epoch seconds).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub heard: BTreeMap<String, HeardBy>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq)]
+pub struct HeardBy {
+    pub rssi: i8,
+    pub at: u64,
 }
 
 fn default_battery() -> Option<u8> {

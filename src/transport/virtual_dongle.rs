@@ -34,6 +34,12 @@ pub struct OwsSim {
     pub log: Vec<String>,
     /// Lost power: answers nothing (the connection may look alive).
     pub dead: bool,
+    /// Sensor-update offers staged (MACs), in order; cleared by a cancel.
+    pub ota_offers: Vec<String>,
+    /// Sensor-update blocks received: (offset, bytes).
+    pub ota_data: Vec<(u32, Vec<u8>)>,
+    /// Cancels received (an `********` offer with an empty body).
+    pub ota_cancels: usize,
 }
 
 /// A virtual Wyze Sense dongle for integration testing.
@@ -124,12 +130,15 @@ impl VirtualDongle {
         let mut me = self.with_sensors(table.iter().map(|s| s.mac.clone()).collect());
         let sim = Arc::new(Mutex::new(OwsSim {
             flags: 0,
-            supported: ows::FLAG_DEDUP | ows::FLAG_FIX_ZERO_MAC | ows::FLAG_ROAM,
+            supported: ows::FLAG_DEDUP | ows::FLAG_FIX_ZERO_MAC | ows::FLAG_OTA | ows::FLAG_ROAM,
             range: (ows::ADDR_FIRST, ows::ADDR_LAST),
             network,
             table,
             log: Vec::new(),
             dead: false,
+            ota_offers: Vec::new(),
+            ota_data: Vec::new(),
+            ota_cancels: 0,
         }));
         let state = Arc::clone(&sim);
         me.transport.set_handler(Box::new(move |pkt| Self::ows_answer(&mut state.lock().unwrap(), pkt)));
@@ -225,9 +234,45 @@ impl VirtualDongle {
                 r.extend_from_slice(&sim.range.1.to_le_bytes());
                 r
             }
+            (ows::SUB_OTA_OFFER, 33) => {
+                let mac = String::from_utf8_lossy(&p[1..9]).to_string();
+                if mac == "********" && p[9..].iter().all(|&b| b == 0) {
+                    sim.ota_offers.clear();
+                    sim.ota_cancels += 1;
+                    vec![ows::SUB_OTA_OFFER, ows::STATUS_OK]
+                } else if sim.flags & ows::FLAG_OTA == 0 {
+                    vec![ows::SUB_OTA_OFFER, 0xE0]
+                } else {
+                    sim.ota_offers.push(mac);
+                    vec![ows::SUB_OTA_OFFER, ows::STATUS_OK]
+                }
+            }
+            (ows::SUB_OTA_DATA, n) if n > 5 => {
+                sim.ota_data.push((u32::from_be_bytes([p[1], p[2], p[3], p[4]]), p[5..].to_vec()));
+                return Some(Vec::new());
+            }
             _ => return None,
         };
         Some(Packet::new_async((ows::CMD_OWS_RESPONSE & 0xFF) as u8, reply).to_bytes())
+    }
+
+    /// A sensor (that took an update offer) asks for a block (`0x53F1` sub `0x11`).
+    pub fn inject_ota_need(&self, mac: &str, slot: u8, offset: u32, len: u8) {
+        let mut p = vec![ows::SUB_OTA_NEED];
+        p.extend_from_slice(mac.as_bytes());
+        p.push(slot);
+        p.extend_from_slice(&offset.to_be_bytes());
+        p.push(len);
+        self.transport.enqueue_read(&Packet::new_async((ows::CMD_OWS_RESPONSE & 0xFF) as u8, p).to_bytes());
+    }
+
+    /// A sensor reports how its update ended (`0x53F1` sub `0x13`; 0 ok).
+    pub fn inject_ota_done(&self, mac: &str, status: u8) {
+        let mut p = vec![ows::SUB_OTA_DONE];
+        p.extend_from_slice(mac.as_bytes());
+        p.push(status);
+        p.extend_from_slice(&[0; 4]);
+        self.transport.enqueue_read(&Packet::new_async((ows::CMD_OWS_RESPONSE & 0xFF) as u8, p).to_bytes());
     }
 
     /// Inject the gateway's own report (`0x5319`) with an event counter.

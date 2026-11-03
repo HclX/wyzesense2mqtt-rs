@@ -72,6 +72,30 @@ pub struct WyzeSensor {
 
     // --- Dongle assignment ---
     pub dongle_mac: Option<String>, // Which dongle owns this sensor (None = unassociated)
+    /// How strongly each gateway heard it last, and when (unix seconds); not
+    /// persisted. Gateways sharing a network all hear a sensor.
+    pub heard: std::collections::HashMap<String, (i8, u64)>,
+}
+
+/// The gateway that heard a sensor best within the last 10 minutes before `now`.
+pub fn best_recent(heard: &std::collections::HashMap<String, (i8, u64)>, now: u64) -> Option<String> {
+    heard
+        .iter()
+        .filter(|(_, (_, at))| now.saturating_sub(*at) <= 600)
+        .max_by(|a, b| (a.1).0.cmp(&(b.1).0).then_with(|| b.0.cmp(a.0)))
+        .map(|(g, _)| g.clone())
+}
+
+/// The signal strength a report carries, if any.
+pub fn report_rssi(data: &TelemetryData) -> Option<i8> {
+    match data {
+        TelemetryData::Heartbeat { rssi, .. }
+        | TelemetryData::Alarm { rssi, .. }
+        | TelemetryData::AlarmData { rssi, .. }
+        | TelemetryData::Climate { rssi, .. }
+        | TelemetryData::Leak { rssi, .. } => Some(*rssi),
+        _ => None,
+    }
 }
 
 // Helper to build standard Home Assistant discovery device metadata
@@ -204,6 +228,7 @@ impl WyzeSensor {
                 .as_secs(),
             state,
             dongle_mac: None,
+            heard: Default::default(),
         }
     }
 
@@ -658,6 +683,7 @@ impl SensorManager {
                         sensor.battery_pct = Some(b);
                     }
                     sensor.rssi_dbm = cached.signal;
+                    sensor.heard = cached.heard.iter().map(|(g, h)| (g.clone(), (h.rssi, h.at))).collect();
                     sensor.last_seen = cached.last_seen;
                     sensor.state = cached.state.clone();
                     sensor.dongle_mac = cached.dongle_mac.clone();
@@ -783,6 +809,7 @@ impl SensorManager {
                             sensor.event_sequence = Some(seq);
                         }
                         sensor.rssi_dbm = cached.signal;
+                    sensor.heard = cached.heard.iter().map(|(g, h)| (g.clone(), (h.rssi, h.at))).collect();
                         sensor.last_seen = cached.last_seen;
                         sensor.state = cached.state.clone(); // Full type-specific state restored!
                     }
@@ -824,6 +851,7 @@ impl SensorManager {
                         sensor.battery_pct = Some(b);
                     }
                     sensor.rssi_dbm = cached.signal;
+                    sensor.heard = cached.heard.iter().map(|(g, h)| (g.clone(), (h.rssi, h.at))).collect();
                     sensor.last_seen = cached.last_seen;
                     sensor.state = cached.state.clone();
                     self.sensors.insert(mac.clone(), sensor);
@@ -852,6 +880,11 @@ impl SensorManager {
                 event_sequence: sensor.event_sequence,
                 state: sensor.state.clone(),
                 dongle_mac: sensor.dongle_mac.clone(),
+                heard: sensor
+                    .heard
+                    .iter()
+                    .map(|(g, (rssi, at))| (g.clone(), crate::config::state::HeardBy { rssi: *rssi, at: *at }))
+                    .collect(),
             });
         }
         system_state.save_to_yaml_atomic(&self.state_path)?;
@@ -974,9 +1007,17 @@ impl SensorManager {
         // Associate sensor with its source dongle (if the event carries dongle identity)
         if let Some(ref dmac) = event.dongle_mac {
             if let Some(sensor) = self.sensors.get_mut(&event.mac) {
-                if sensor.dongle_mac.as_ref() != Some(dmac) {
-                    info!("Associating sensor {} with dongle {}", event.mac, dmac);
-                    sensor.dongle_mac = Some(dmac.clone());
+                let at = event.timestamp.duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs();
+                if let Some(rssi) = report_rssi(&event.data) {
+                    sensor.heard.insert(dmac.clone(), (rssi, at));
+                }
+                // Gateways sharing a network each pass the report on: the sensor
+                // belongs with the one that hears it best lately, not with
+                // whichever copy came last.
+                let home = best_recent(&sensor.heard, at).unwrap_or_else(|| dmac.clone());
+                if sensor.dongle_mac.as_ref() != Some(&home) {
+                    info!("Associating sensor {} with dongle {}", event.mac, home);
+                    sensor.dongle_mac = Some(home);
                 }
             }
         }

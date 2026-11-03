@@ -80,6 +80,11 @@ pub struct RoamingConfig {
     pub default_flags: u32,
     /// Feature flags per gateway MAC (upper case).
     pub gateway_flags: HashMap<String, u32>,
+    /// `roam` as configured for all gateways: `None` means automatic (on
+    /// once two of our gateways share a network identity).
+    pub roam_default: Option<bool>,
+    /// `roam` as configured per gateway MAC (upper case), where set.
+    pub roam_gateways: HashMap<String, bool>,
     /// Where the owner each sensor was last given is kept across restarts
     /// (sensor MAC → gateway MAC), so that when two gateways both hold a
     /// sensor the rightful one keeps it. `None`: in memory only.
@@ -87,6 +92,11 @@ pub struct RoamingConfig {
 }
 
 impl RoamingConfig {
+    /// Roaming as configured for a gateway: on, off, or automatic (`None`).
+    pub fn roam_setting(&self, gateway: &str) -> Option<bool> {
+        self.roam_gateways.get(&gateway.to_ascii_uppercase()).copied().or(self.roam_default)
+    }
+
     /// The flags configured for a gateway.
     pub fn configured_flags(&self, gateway: &str) -> u32 {
         self.gateway_flags.get(&gateway.to_ascii_uppercase()).copied().unwrap_or(self.default_flags)
@@ -125,6 +135,8 @@ impl Default for RoamingConfig {
             probe_timeout: Duration::from_millis(1500),
             default_flags: 0,
             gateway_flags: HashMap::new(),
+            roam_default: None,
+            roam_gateways: HashMap::new(),
             owners_path: None,
         }
     }
@@ -396,6 +408,18 @@ fn report_rssi(evt: &DongleEvent) -> Option<i8> {
     }
 }
 
+/// Replaces the signal strength a report carries.
+fn set_report_rssi(evt: &mut DongleEvent, to: i8) {
+    match &mut evt.data {
+        TelemetryData::Heartbeat { rssi, .. }
+        | TelemetryData::Alarm { rssi, .. }
+        | TelemetryData::Climate { rssi, .. }
+        | TelemetryData::AlarmData { rssi, .. }
+        | TelemetryData::Leak { rssi, .. } => *rssi = to,
+        _ => {}
+    }
+}
+
 /// What tells one report from the next, and the event counter when it moves
 /// with every report of this type (heartbeats repeat the last event's).
 fn report_key(evt: &DongleEvent) -> Option<(ReportKey, Option<u16>)> {
@@ -445,9 +469,46 @@ struct State {
     busy: HashSet<String>,
     /// The owner each sensor was last given (see `RoamingConfig::owners_path`).
     owners: HashMap<String, String>,
+    /// Sensors a gateway answers without holding them in its table: on a
+    /// short address another sensor holds (sensor -> (short, the sensor
+    /// holding it, if known; the gateway answering it), when).
+    conflicts: HashMap<String, ((Option<u16>, Option<String>, String), Instant)>,
 }
 
 impl State {
+    /// Automatic roaming: once two of our gateways that support it share a
+    /// network identity, roaming goes on for each whose `roam` isn't set
+    /// (they would otherwise all answer every sensor of the network, and all
+    /// report every join). It stays on. Returns the gateways turned on now.
+    fn auto_roam(&mut self, identity: NetworkIdentity, cfg: &RoamingConfig) -> Vec<String> {
+        let group: Vec<String> = self
+            .gateways
+            .iter()
+            .filter(|(m, g)| g.identity == identity && g.supported & ows::FLAG_ROAM != 0 && cfg.roam_setting(m) != Some(false))
+            .map(|(m, _)| m.clone())
+            .collect();
+        if group.len() < 2 {
+            return Vec::new();
+        }
+        let mut turned_on = Vec::new();
+        for m in &group {
+            let g = self.gateways.get_mut(m).unwrap();
+            if cfg.roam_setting(m).is_none() && g.wanted & ows::FLAG_ROAM == 0 {
+                g.wanted = (g.wanted | ows::FLAG_ROAM) & !ows::FLAG_DEDUP;
+                turned_on.push(m.clone());
+            }
+        }
+        if !turned_on.is_empty() {
+            info!(
+                "Roaming: gateways {} share network {}; roaming on for {}",
+                group.join(", "),
+                identity,
+                turned_on.join(", ")
+            );
+        }
+        turned_on
+    }
+
     /// Gateways that can roam, sharing `identity`.
     fn members(&self, identity: NetworkIdentity) -> impl Iterator<Item = (&String, &Gateway)> {
         self.gateways.iter().filter(move |(_, g)| g.identity == identity && g.can_roam())
@@ -659,6 +720,7 @@ impl Roaming {
         // there: the newcomer (back from an outage, typically, after its
         // sensors were handed over) forgets them.
         // (sensor, gateway that keeps it, gateway that forgets it)
+        let auto_roam;
         let duplicates: Vec<(String, String, String)> = {
             let mut st = self.state.lock().unwrap();
             st.gateways.insert(
@@ -675,6 +737,7 @@ impl Roaming {
                     last_flag_check: Instant::now(),
                 },
             );
+            auto_roam = st.auto_roam(identity, &self.cfg);
             let mut dups = Vec::new();
             for s in &table {
                 for (other, g) in st.members(identity) {
@@ -714,7 +777,21 @@ impl Roaming {
             }
         }
 
+        // Gateways already connected that roaming just turned on for.
+        for other in auto_roam.iter().filter(|g| g.as_str() != gateway) {
+            self.ensure_flags(other).await;
+        }
         self.ensure_flags(gateway).await;
+    }
+
+    /// On a roaming network: the gateway that owns `sensor` (the one that
+    /// answers it), found from any gateway of that network. `None` without
+    /// roaming, or when no online gateway holds it.
+    pub fn roaming_owner(&self, any_gateway: &str, sensor: &str) -> Option<String> {
+        let st = self.state.lock().unwrap();
+        let identity = st.roaming_identity(any_gateway)?;
+        let owner = st.owner_of(sensor, identity)?;
+        st.gateways.get(&owner).is_some_and(|g| g.online).then_some(owner)
     }
 
     /// Call when a gateway's connection is gone.
@@ -783,6 +860,13 @@ impl Roaming {
     /// of no gateway of ours). May also ask for a handover or a table reload.
     fn process(&self, mut evt: DongleEvent, now: Instant) -> (Option<DongleEvent>, Vec<Action>) {
         let Some(gateway) = evt.dongle_mac.clone() else { return (Some(evt), vec![]) };
+        // The sensors this host knows, taken before the roaming state: never
+        // hold both locks (the dashboard takes the sensors, then asks roaming).
+        let known: HashSet<String> = if evt.overheard_short.is_some() {
+            self.sensors.lock().unwrap().get_sensors().keys().cloned().collect()
+        } else {
+            HashSet::new()
+        };
         let mut st = self.state.lock().unwrap();
         let Some(identity) = st.roaming_identity(&gateway) else {
             // Not a roaming gateway (stock, or alone on its network).
@@ -798,7 +882,28 @@ impl Roaming {
         }
 
         let owner = match evt.overheard_short {
-            None => gateway.clone(),
+            None => {
+                // The gateway answered and reported it, so it takes the sensor
+                // for one of its own; if its table doesn't hold this MAC, the
+                // sensor shares a short address with one that it does.
+                let unlisted = st.gateways.get(&gateway).is_some_and(|g| !g.table.iter().any(|s| s.mac == evt.mac));
+                if unlisted && !ows::is_zero_mac(&evt.mac) {
+                    let fresh = st.conflicts.get(&evt.mac).is_none_or(|(_, t)| now.duration_since(*t) > Duration::from_secs(3600));
+                    if fresh {
+                        warn!(
+                            "Roaming: gateway {} answers {} without holding it in its table: it shares a short address with \
+                             one of that gateway's sensors and can't roam. Pair {} again.",
+                            gateway, evt.mac, evt.mac
+                        );
+                    }
+                    let known = st.conflicts.get(&evt.mac).map(|((s, o, _), _)| (*s, o.clone())).unwrap_or((None, None));
+                    st.conflicts.insert(evt.mac.clone(), ((known.0, known.1, gateway.clone()), now));
+                } else if !unlisted {
+                    // In its table now (paired again): no longer a conflict.
+                    st.conflicts.remove(&evt.mac);
+                }
+                gateway.clone()
+            }
             Some(short) => {
                 if ows::is_zero_mac(&evt.mac) {
                     match st.mac_of_short(short, identity) {
@@ -811,9 +916,29 @@ impl Roaming {
                 }
                 let owner = st.owner_of(&evt.mac, identity);
                 match owner {
-                    Some(o) if self.sensors.lock().unwrap().get_sensors().contains_key(&evt.mac) => o,
+                    Some(o) if known.contains(&evt.mac) => o,
                     _ => {
-                        debug!("Roaming: gateway {} overheard {}, which no gateway of ours owns", gateway, evt.mac);
+                        // A sensor no table holds, on a short address another
+                        // sensor holds: the two share an address (a migration
+                        // dropped one, say), so the gateway holding the address
+                        // answers this sensor as the other one, and roaming can't
+                        // move it (by address it would move the other).
+                        let holder = st.mac_of_short(short, identity).filter(|m| *m != evt.mac);
+                        match holder {
+                            Some(other) => {
+                                let at = st.owner_of(&other, identity).unwrap_or_default();
+                                let fresh = st.conflicts.get(&evt.mac).is_none_or(|(_, t)| now.duration_since(*t) > Duration::from_secs(3600));
+                                if fresh {
+                                    warn!(
+                                        "Roaming: {} uses short address {:04X}, which {} holds on gateway {}: they share an address, \
+                                         so {} answers it as {} and it can't roam. Pair {} again.",
+                                        evt.mac, short, other, at, at, other, evt.mac
+                                    );
+                                }
+                                st.conflicts.insert(evt.mac.clone(), ((Some(short), Some(other), at), now));
+                            }
+                            None => debug!("Roaming: gateway {} overheard {}, which no gateway of ours owns", gateway, evt.mac),
+                        }
                         return (None, vec![]);
                     }
                 }
@@ -835,6 +960,16 @@ impl Roaming {
         }
         if duplicate {
             return (None, actions);
+        }
+        // The first copy may come from another gateway (an overheard copy
+        // over a faster link): the event speaks for the owner, so it carries
+        // the owner's signal, not the far gateway's.
+        if gateway != owner {
+            if let Some(link) = st.tracker.links(&evt.mac).and_then(|l| l.get(&owner)) {
+                if now.duration_since(link.last) <= self.cfg.stale {
+                    set_report_rssi(&mut evt, link.rssi.round() as i8);
+                }
+            }
         }
         evt.dongle_mac = Some(owner);
         (Some(evt), actions)
@@ -1079,7 +1214,18 @@ impl Roaming {
                 }))
             })
             .collect();
-        serde_json::json!({ "gateways": gateways, "heard": links, "evidence": evidence })
+        let conflicts: serde_json::Map<String, serde_json::Value> = st
+            .conflicts
+            .iter()
+            .filter(|(_, (_, t))| now.duration_since(*t) < Duration::from_secs(24 * 3600))
+            .map(|(sensor, ((short, other, gw), _))| {
+                (
+                    sensor.clone(),
+                    serde_json::json!({ "short": short.map(|s| format!("{:04X}", s)), "held_by": other, "gateway": gw }),
+                )
+            })
+            .collect();
+        serde_json::json!({ "gateways": gateways, "heard": links, "evidence": evidence, "address_conflicts": conflicts })
     }
 }
 
