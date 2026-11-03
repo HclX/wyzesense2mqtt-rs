@@ -66,6 +66,21 @@ The gateway requires physical connection to the Wyze Sense USB receiver (Bridge)
     docker compose up -d
     ```
 
+#### Replugging a dongle under Docker
+
+A `devices:` entry gives the container the one device file that existed when it started. When a dongle is unplugged and plugged back in, it can come back as a different `/dev/hidrawN`, and the container then can't open it until you recreate it. To let the daemon follow dongles as they come and go (see [Multiple `/dev/hidraw` devices](#2-multiple-devhidraw-devices)), give the container the host's `/dev` and allow hidraw devices only:
+
+```yaml
+    # instead of `devices:`
+    device_cgroup_rules:
+      - "c 239:* rmw"   # 239: the first number `ls -l /dev/hidraw*` prints on your host
+    volumes:
+      - /dev:/dev
+      # ...your other volumes
+```
+
+The rule limits the container to hidraw devices, and the daemon only opens Wyze dongles (USB ID `1a86:e024`), so other containers' devices are unaffected.
+
 ---
 
 ### Method B: Bare Metal / Cargo Installation

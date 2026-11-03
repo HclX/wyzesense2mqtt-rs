@@ -41,7 +41,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::{error, info, warn};
 
 /// The OpenWyzeSense release this build installs (the `ows-host` tag).
-pub const RELEASE_VERSION: &str = "v0.2.3";
+pub const RELEASE_VERSION: &str = "v0.2.4";
 /// Where releases are downloaded from; `{version}` is replaced.
 pub const DEFAULT_SOURCE: &str = "https://github.com/HclX/openwyzesense/releases/download/{version}";
 /// The release file for the USB dongle.
@@ -577,7 +577,7 @@ impl Firmware {
         let opener = Arc::clone(&self.opener);
         let node = PathBuf::from(&path);
         let mut progress = Self::progress_sink(Arc::clone(&self.job), self.broadcast_tx.clone());
-        let outcome = tokio::task::spawn_blocking(move || -> Result<(dongle::FlashReport, bool), String> {
+        let outcome = tokio::task::spawn_blocking(move || -> Result<(dongle::FlashReport, bool, bool), String> {
             let mut t = opener(&node).map_err(|e| format!("open {}: {}", node.display(), e))?;
             let report = match &release {
                 Some(r) => dongle::flash(&mut *t, &r.image, &backup, &FlashOptions { fast: false, nv: NvChoice::Migrate }, &mut progress),
@@ -587,16 +587,29 @@ impl Firmware {
             drop(t);
             // A fresh handle, as after a replug, tells whether it is back in normal mode.
             std::thread::sleep(Duration::from_millis(500));
-            let back = match opener(&node) {
-                Ok(mut t) => dongle::inquiry(&mut *t).unwrap_or(false),
-                Err(_) => false,
+            // Inquiry is answered by the dongle's USB chip, so it only says the
+            // update mode is over; Get Version needs the radio chip to be
+            // running what was written (it can take a moment to start).
+            let (back, radio) = match opener(&node) {
+                Ok(mut t) => {
+                    let back = dongle::inquiry(&mut *t).unwrap_or(false);
+                    let radio = back
+                        && (0..3).any(|i| {
+                            if i > 0 {
+                                std::thread::sleep(Duration::from_secs(1));
+                            }
+                            dongle::radio_answers(&mut *t).unwrap_or(false)
+                        });
+                    (back, radio)
+                }
+                Err(_) => (false, false),
             };
-            Ok((report, back))
+            Ok((report, back, radio))
         })
         .await
         .map_err(|e| e.to_string())?;
         drop(reservation);
-        let (report, back) = outcome.map_err(|e| {
+        let (report, back, radio) = outcome.map_err(|e| {
             format!("{} (the dongle may still be in update mode: try again, or unplug it and plug it back in)", e)
         })?;
 
@@ -609,7 +622,13 @@ impl Firmware {
             job.dongle,
             job.target.as_deref().unwrap_or("firmware"),
             report.seconds,
-            if back { "" } else { "; it needs a replug" }
+            if !back {
+                "; it needs a replug"
+            } else if !radio {
+                "; its radio chip doesn't answer"
+            } else {
+                ""
+            }
         );
         let dropped = report.nv_doc.as_ref().map(|d| d.dropped.clone());
         self.update(|j| {
@@ -617,8 +636,15 @@ impl Firmware {
             if let Some(d) = dropped {
                 j.dropped = d;
             }
-            if back {
+            if back && radio {
                 j.step = Step::Done;
+            } else if back {
+                j.step = Step::Failed;
+                j.message = Some(
+                    "The firmware was written, but the dongle's radio chip doesn't answer. Unplug the dongle and plug \
+                     it back in; if it still doesn't come up, restore its backup."
+                        .into(),
+                );
             } else {
                 j.step = Step::Replug;
                 j.message = Some("Unplug the dongle and plug it back in.".into());

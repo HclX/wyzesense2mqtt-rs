@@ -36,9 +36,20 @@ services:
     restart: unless-stopped
     stop_signal: SIGINT
 
-    # USB dongle passthrough — required for HID device access
+    # USB dongle passthrough — required for HID device access.
+    # This maps one device file, fixed when the container starts: a dongle
+    # that is unplugged and plugged back in may come back as another
+    # /dev/hidrawN, which the container then can't open until it is recreated.
     devices:
       - "${USB_DONGLE:-/dev/hidraw0}:/dev/hidraw0"
+    # To follow dongles as they are plugged in and out (hot-plug), replace the
+    # `devices:` block above with these two settings, and add the /dev line
+    # under `volumes:`. HIDRAW_MAJOR is the first number `ls -l /dev/hidraw*`
+    # prints for any hidraw device (or: grep hidraw /proc/devices).
+    #   device_cgroup_rules:
+    #     - "c ${HIDRAW_MAJOR:-239}:* rmw"   # hidraw devices only
+    #   volumes:
+    #     - /dev:/dev
 
     # Expose web dashboard. WEB_PORT is also forwarded below via `environment`,
     # so the app actually binds to it (and the container's healthcheck, which
