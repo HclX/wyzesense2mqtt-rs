@@ -450,3 +450,24 @@ async fn a_sensor_sharing_another_ones_short_address_is_flagged() {
     assert_eq!(c["gateway"], "GWAAAAAA");
     assert_eq!(c["short"], format!("{:04X}", S_SHORT));
 }
+
+#[tokio::test]
+async fn a_gateway_reporting_a_sensor_it_does_not_hold_is_flagged() {
+    let (a, b) = gateways(vec![entry(S, S_SHORT)], vec![]);
+    let mut w = World::new(roam()).await;
+    w.connect(&a).await;
+    w.connect(&b).await;
+    // A's radio answers "77A8C793" as S (same short) and reports it as its own.
+    a.inject_report("77A8C793", SensorType::ContactV2, 1, 3, 60);
+    assert!(w.next_event().await.is_some(), "its report still gets through");
+    let c = &w.roaming.status_json()["address_conflicts"]["77A8C793"];
+    assert_eq!(c["gateway"], "GWAAAAAA");
+
+    // Paired again (in the table now): its next report clears the flag.
+    let (a2, _) = gateways(vec![entry(S, S_SHORT), entry("77A8C793", 0x0007)], vec![]);
+    w.disconnect(&a).await;
+    w.connect(&a2).await;
+    a2.inject_report("77A8C793", SensorType::ContactV2, 0, 4, 60);
+    w.next_event().await;
+    assert!(w.roaming.status_json()["address_conflicts"].get("77A8C793").is_none());
+}

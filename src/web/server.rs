@@ -983,7 +983,7 @@ const HTML_CONTENT: &str = concat!(r##"
 
             return `<tr class="hover:bg-slate-800/30 transition text-xs">
                 <td class="py-2 px-3 font-mono font-semibold text-teal-400">${s.mac}</td>
-                <td class="py-2 px-3">${tt}${s.address_conflict ? ` <span class="tag border border-amber-900 bg-amber-950/30 text-amber-400" title="It uses short address ${s.address_conflict.short}, which ${s.address_conflict.held_by} holds on ${s.address_conflict.gateway}: the gateway answers it as that sensor, and it can't roam. Pair it again.">⚠ shares an address: pair again</span>` : ''}</td><td class="py-2 px-3">${st}</td>
+                <td class="py-2 px-3">${tt}${s.address_conflict ? ` <span class="tag border border-amber-900 bg-amber-950/30 text-amber-400" title="${s.address_conflict.held_by ? `It uses short address ${s.address_conflict.short}, which ${s.address_conflict.held_by} holds on ${s.address_conflict.gateway}` : `Gateway ${s.address_conflict.gateway} answers it without holding it in its table`}: it shares an address with another sensor and can't roam. Pair it again.">⚠ shares an address: pair again</span>` : ''}</td><td class="py-2 px-3">${st}</td>
                 <td class="py-2 px-3">${batt}</td>
                 <td class="py-2 px-3"><span class="font-mono ${sig}">${s.signal} dBm</span></td>
                 <td class="py-2 px-3 text-slate-400">${seen}</td>

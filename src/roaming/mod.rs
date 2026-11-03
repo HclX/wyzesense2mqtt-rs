@@ -469,9 +469,10 @@ struct State {
     busy: HashSet<String>,
     /// The owner each sensor was last given (see `RoamingConfig::owners_path`).
     owners: HashMap<String, String>,
-    /// Sensors heard on a short address another sensor holds in a table
-    /// (sensor -> (short, the sensor holding it, the gateway holding it), when).
-    conflicts: HashMap<String, ((u16, String, String), Instant)>,
+    /// Sensors a gateway answers without holding them in its table: on a
+    /// short address another sensor holds (sensor -> (short, the sensor
+    /// holding it, if known; the gateway answering it), when).
+    conflicts: HashMap<String, ((Option<u16>, Option<String>, String), Instant)>,
 }
 
 impl State {
@@ -874,7 +875,28 @@ impl Roaming {
         }
 
         let owner = match evt.overheard_short {
-            None => gateway.clone(),
+            None => {
+                // The gateway answered and reported it, so it takes the sensor
+                // for one of its own; if its table doesn't hold this MAC, the
+                // sensor shares a short address with one that it does.
+                let unlisted = st.gateways.get(&gateway).is_some_and(|g| !g.table.iter().any(|s| s.mac == evt.mac));
+                if unlisted && !ows::is_zero_mac(&evt.mac) {
+                    let fresh = st.conflicts.get(&evt.mac).is_none_or(|(_, t)| now.duration_since(*t) > Duration::from_secs(3600));
+                    if fresh {
+                        warn!(
+                            "Roaming: gateway {} answers {} without holding it in its table: it shares a short address with \
+                             one of that gateway's sensors and can't roam. Pair {} again.",
+                            gateway, evt.mac, evt.mac
+                        );
+                    }
+                    let known = st.conflicts.get(&evt.mac).map(|((s, o, _), _)| (*s, o.clone())).unwrap_or((None, None));
+                    st.conflicts.insert(evt.mac.clone(), ((known.0, known.1, gateway.clone()), now));
+                } else if !unlisted {
+                    // In its table now (paired again): no longer a conflict.
+                    st.conflicts.remove(&evt.mac);
+                }
+                gateway.clone()
+            }
             Some(short) => {
                 if ows::is_zero_mac(&evt.mac) {
                     match st.mac_of_short(short, identity) {
@@ -906,7 +928,7 @@ impl Roaming {
                                         evt.mac, short, other, at, at, other, evt.mac
                                     );
                                 }
-                                st.conflicts.insert(evt.mac.clone(), ((short, other, at), now));
+                                st.conflicts.insert(evt.mac.clone(), ((Some(short), Some(other), at), now));
                             }
                             None => debug!("Roaming: gateway {} overheard {}, which no gateway of ours owns", gateway, evt.mac),
                         }
@@ -1190,7 +1212,10 @@ impl Roaming {
             .iter()
             .filter(|(_, (_, t))| now.duration_since(*t) < Duration::from_secs(24 * 3600))
             .map(|(sensor, ((short, other, gw), _))| {
-                (sensor.clone(), serde_json::json!({ "short": format!("{:04X}", short), "held_by": other, "gateway": gw }))
+                (
+                    sensor.clone(),
+                    serde_json::json!({ "short": short.map(|s| format!("{:04X}", s)), "held_by": other, "gateway": gw }),
+                )
             })
             .collect();
         serde_json::json!({ "gateways": gateways, "heard": links, "evidence": evidence, "address_conflicts": conflicts })
