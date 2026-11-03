@@ -409,3 +409,27 @@ async fn pairing_gets_a_range_above_every_short_address_in_use() {
     w.roaming.prepare_pairing("GWAAAAAA").await.unwrap();
     assert!(!eb.is_scanning());
 }
+
+#[tokio::test]
+async fn a_report_first_overheard_far_away_carries_the_owners_signal() {
+    let (a, b) = gateways(vec![entry(S, S_SHORT)], vec![]);
+    let mut w = World::new(roam()).await;
+    w.connect(&a).await;
+    w.connect(&b).await;
+    let rssi = |e: &DongleEvent| match e.data {
+        TelemetryData::Alarm { rssi, .. } => rssi,
+        _ => panic!("not an alarm: {:?}", e.data),
+    };
+
+    // The owner hears it well.
+    a.inject_report(S, SensorType::ContactV2, 1, 7, 50);
+    let near = rssi(&w.next_event().await.expect("first report"));
+
+    // Next report: the far gateway's copy arrives first.
+    b.inject_overheard(S_SHORT, S, SensorType::ContactV2, 0, 8, 90);
+    let e = w.next_event().await.expect("second report");
+    assert_eq!(e.dongle_mac.as_deref(), Some("GWAAAAAA"));
+    assert_eq!(rssi(&e), near, "the owner's signal, not the far copy's");
+    a.inject_report(S, SensorType::ContactV2, 0, 8, 50);
+    assert!(w.next_event().await.is_none(), "the owner's copy is the duplicate");
+}

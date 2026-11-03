@@ -408,6 +408,18 @@ fn report_rssi(evt: &DongleEvent) -> Option<i8> {
     }
 }
 
+/// Replaces the signal strength a report carries.
+fn set_report_rssi(evt: &mut DongleEvent, to: i8) {
+    match &mut evt.data {
+        TelemetryData::Heartbeat { rssi, .. }
+        | TelemetryData::Alarm { rssi, .. }
+        | TelemetryData::Climate { rssi, .. }
+        | TelemetryData::AlarmData { rssi, .. }
+        | TelemetryData::Leak { rssi, .. } => *rssi = to,
+        _ => {}
+    }
+}
+
 /// What tells one report from the next, and the event counter when it moves
 /// with every report of this type (heartbeats repeat the last event's).
 fn report_key(evt: &DongleEvent) -> Option<(ReportKey, Option<u16>)> {
@@ -896,6 +908,16 @@ impl Roaming {
         }
         if duplicate {
             return (None, actions);
+        }
+        // The first copy may come from another gateway (an overheard copy
+        // over a faster link): the event speaks for the owner, so it carries
+        // the owner's signal, not the far gateway's.
+        if gateway != owner {
+            if let Some(link) = st.tracker.links(&evt.mac).and_then(|l| l.get(&owner)) {
+                if now.duration_since(link.last) <= self.cfg.stale {
+                    set_report_rssi(&mut evt, link.rssi.round() as i8);
+                }
+            }
         }
         evt.dongle_mac = Some(owner);
         (Some(evt), actions)
