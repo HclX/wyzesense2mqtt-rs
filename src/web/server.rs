@@ -28,11 +28,15 @@ use tower_http::cors::{Any, CorsLayer};
 use tracing::{info, debug, error, warn};
 
 use crate::protocol::sensor::SensorManager;
+use crate::config::dongles::DonglesConfig;
 use crate::gateway::mqtt::DongleStatus;
 
 pub struct WebState {
     pub engines: EnginesMap,
     pub sensor_manager: Arc<std::sync::Mutex<SensorManager>>,
+    /// User-assigned dongle names, persisted in config/dongles.yaml.
+    pub dongle_names: Arc<std::sync::Mutex<DonglesConfig>>,
+    pub dongle_config_path: String,
     pub broadcast_tx: tokio::sync::broadcast::Sender<()>,
     pub event_tx: tokio::sync::mpsc::Sender<crate::protocol::telemetry::DongleEvent>,
     /// Bridge dongle connects/disconnects, for the MQTT dongle status topic.
@@ -89,6 +93,11 @@ pub struct SuccessResponse {
     pub message: String,
 }
 
+#[derive(Deserialize)]
+pub struct RenameRequest {
+    pub name: String,
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct ScanRequest {
     pub enable: bool,
@@ -129,10 +138,14 @@ pub async fn start_web_server(
     dongle_status_tx: tokio::sync::mpsc::Sender<DongleStatus>,
     roaming: Option<Arc<crate::roaming::Roaming>>,
     firmware: Option<Arc<crate::firmware::Firmware>>,
+    dongle_config_path: String,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let dongle_names = DonglesConfig::load_from_yaml(&dongle_config_path).unwrap_or_default();
     let shared_state = Arc::new(WebState {
         engines,
         sensor_manager,
+        dongle_names: Arc::new(std::sync::Mutex::new(dongle_names)),
+        dongle_config_path,
         broadcast_tx,
         event_tx,
         dongle_status_tx,
@@ -163,6 +176,8 @@ fn router(shared_state: Arc<WebState>) -> Router {
         .route("/api/sensors", get(list_sensors))
         .route("/api/sensors/cached", get(list_cached_sensors))
         .route("/api/sensors/:mac", delete(unpair_sensor))
+        .route("/api/sensors/:mac/rename", post(rename_sensor))
+        .route("/api/dongles/:mac/rename", post(rename_dongle))
         .route("/api/scan", get(get_scan_status).post(toggle_scan))
         .route("/api/verify", post(verify_scanned_sensor))
         .route("/api/chime/:mac", post(trigger_chime))
@@ -446,17 +461,22 @@ async fn list_dongles(
         .map(|mac| (mac.clone(), state.roaming.as_ref().and_then(|r| r.gateway_json(mac))))
         .collect();
     let manager = state.sensor_manager.lock().unwrap();
+    let names = state.dongle_names.lock().unwrap();
 
     // Group sensors by dongle_mac from the single source of truth (SensorManager)
-    let dongles: Vec<serde_json::Value> = engines.iter().map(|(mac, engine)| {
-        let sensors: Vec<serde_json::Value> = manager.get_sensors().values()
+    let mut dongles: Vec<serde_json::Value> = engines.iter().map(|(mac, engine)| {
+        let mut sensors: Vec<serde_json::Value> = manager.get_sensors().values()
             .filter(|s| s.dongle_mac.as_deref() == Some(mac.as_str()))
             .map(|s| with_conflict(sensor_info_to_json(s)))
             .collect();
+        sensors.sort_by_key(|s| {
+            (s["name"].as_str().unwrap_or("").to_string(), s["mac"].as_str().unwrap_or("").to_string())
+        });
         let sensor_count = sensors.len();
 
         serde_json::json!({
             "mac": mac,
+            "name": names.name_of(mac),
             "version": engine.dongle_version(),
             "scanning": engine.is_scanning(),
             "transport": engine.transport_label,
@@ -468,12 +488,18 @@ async fn list_dongles(
             "openwyzesense": ows.get(mac).cloned().flatten(),
         })
     }).collect();
+    dongles.sort_by_key(|d| {
+        (d["name"].as_str().unwrap_or("").to_string(), d["mac"].as_str().unwrap_or("").to_string())
+    });
 
     // Unassociated sensors: dongle_mac is None
-    let unassociated: Vec<serde_json::Value> = manager.get_sensors().values()
+    let mut unassociated: Vec<serde_json::Value> = manager.get_sensors().values()
         .filter(|s| s.dongle_mac.is_none())
         .map(|s| sensor_info_to_json(s))
         .collect();
+    unassociated.sort_by_key(|s| {
+        (s["name"].as_str().unwrap_or("").to_string(), s["mac"].as_str().unwrap_or("").to_string())
+    });
 
     Json(json!({
         "dongles": dongles,
@@ -482,13 +508,28 @@ async fn list_dongles(
 }
 
 fn sensor_info_to_json(s: &crate::protocol::sensor::WyzeSensor) -> serde_json::Value {
+    let mut heard: Vec<serde_json::Value> = s
+        .heard
+        .iter()
+        .map(|(mac, (rssi, at))| serde_json::json!({ "mac": mac, "rssi": rssi, "at": at }))
+        .collect();
+    // Strongest first, so the dashboard can show the useful ones without sorting.
+    heard.sort_by_key(|h| std::cmp::Reverse(h["rssi"].as_i64().unwrap_or(i64::MIN)));
+
     serde_json::json!({
         "mac": s.mac,
+        "name": s.friendly_name,
         "sensor_type": s.sensor_type.as_str(),
+        "sw_version": s.sw_version,
         "last_seen": s.last_seen,
         "battery": s.battery_pct,
+        "battery_raw": s.battery_raw,
         "signal": s.rssi_dbm,
+        "die_temperature_c": s.die_temperature_c,
+        "event_sequence": s.event_sequence,
         "state": s.state,
+        "dongle_mac": s.dongle_mac,
+        "heard": heard,
     })
 }
 
@@ -566,6 +607,61 @@ async fn unpair_sensor(
         }),
     )
         .into_response()
+}
+
+// --- POST /api/sensors/:mac/rename ---
+async fn rename_sensor(
+    Path(mac): Path<String>,
+    State(state): State<Arc<WebState>>,
+    Json(req): Json<RenameRequest>,
+) -> impl IntoResponse {
+    let name = req.name.trim().to_string();
+    if name.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "name must not be empty" }))).into_response();
+    }
+
+    let result = {
+        let mut manager = state.sensor_manager.lock().unwrap();
+        manager.rename_sensor(&mac, &name)
+    };
+
+    match result {
+        Ok(()) => {
+            let _ = state.broadcast_tx.send(());
+            (StatusCode::OK, Json(json!({ "success": true, "name": name }))).into_response()
+        }
+        Err(e) => (StatusCode::NOT_FOUND, Json(json!({ "error": e }))).into_response(),
+    }
+}
+
+// --- POST /api/dongles/:mac/rename ---
+async fn rename_dongle(
+    Path(mac): Path<String>,
+    State(state): State<Arc<WebState>>,
+    Json(req): Json<RenameRequest>,
+) -> impl IntoResponse {
+    let name = req.name.trim().to_string();
+    if name.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "name must not be empty" }))).into_response();
+    }
+
+    let result = {
+        let mut names = state.dongle_names.lock().unwrap();
+        names.set_name(&mac, &name);
+        names.save_to_yaml_atomic(&state.dongle_config_path)
+    };
+
+    match result {
+        Ok(()) => {
+            let _ = state.broadcast_tx.send(());
+            (StatusCode::OK, Json(json!({ "success": true, "name": name }))).into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("could not save dongle name: {}", e) })),
+        )
+            .into_response(),
+    }
 }
 
 // --- GET /api/scan ---
@@ -895,26 +991,38 @@ const HTML_CONTENT: &str = concat!(r##"
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
         body { font-family: 'Inter', sans-serif; }
-        .sensor-rows { transition: max-height 0.35s ease, opacity 0.2s ease; overflow: hidden; }
-        .sensor-rows.collapsed { max-height: 0; opacity: 0; }
-        .chevron { transition: transform 0.2s ease; display: inline-block; }
+        .chevron { transition: transform .2s ease; display: inline-block; }
         .chevron.open { transform: rotate(90deg); }
-        .dongle-card { transition: border-color 0.2s ease; }
-        .dongle-card:hover { border-color: rgba(45, 212, 191, 0.3); }
-        .tag { display: inline-flex; align-items: center; gap: 4px; font-size: 0.65rem; padding: 2px 8px; border-radius: 9999px; font-weight: 600; }
-        .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.6); backdrop-filter: blur(4px); z-index: 100; display: flex; align-items: center; justify-content: center; }
-        .modal-panel { background: #0f172a; border: 1px solid #1e293b; border-radius: 1rem; width: 90%; max-width: 560px; max-height: 85vh; overflow-y: auto; box-shadow: 0 25px 50px rgba(0,0,0,0.5); }
+        .detail-wrap { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .25s ease; }
+        .detail-wrap.open { grid-template-rows: 1fr; }
+        .detail-inner { overflow: hidden; }
+        .dongle-detail { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .25s ease; }
+        .dongle-detail.open { grid-template-rows: 1fr; }
+        .dongle-detail-inner { overflow: hidden; }
+        .sensor-row { transition: background-color .15s ease; }
+        .sensor-row:hover, .sensor-row.open { background: rgba(30, 41, 59, .35); }
+        .sensor-card { transition: border-color .2s ease; }
+        .sensor-card.open { border-color: rgba(45, 212, 191, .35); }
+        .tag { display: inline-flex; align-items: center; gap: 4px; font-size: .65rem; padding: 2px 8px; border-radius: 9999px; font-weight: 600; white-space: nowrap; }
+        .modal-backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, .6); backdrop-filter: blur(4px); z-index: 100; display: none; align-items: center; justify-content: center; }
+        .modal-backdrop.open { display: flex; }
+        .modal-panel { background: #0f172a; border: 1px solid #1e293b; border-radius: 1rem; width: 90%; max-width: 460px; max-height: 85vh; overflow-y: auto; box-shadow: 0 25px 50px rgba(0, 0, 0, .5); }
+        /* Touch: keep controls at least 40px tall on phones. */
+        @media (max-width: 639px) {
+            button { min-height: 40px; }
+            .modal-panel { width: calc(100% - 1.5rem); }
+        }
     </style>
 </head>
 <body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col">
     <header class="border-b border-slate-800 bg-slate-900/50 backdrop-blur sticky top-0 z-50">
-        <div class="max-w-5xl w-full mx-auto px-6 py-3 flex items-center justify-between">
-            <div class="flex items-center space-x-3">
+        <div class="max-w-5xl w-full mx-auto px-4 sm:px-6 py-3 flex items-center justify-between gap-2">
+            <div class="flex items-center space-x-3 min-w-0">
                 <span class="text-2xl">📡</span>
-                <h1 class="text-xl font-bold tracking-tight text-teal-400">Wyze Sense Bridge</h1>
-                <span class="text-xs text-slate-600 font-mono">v"##, env!("CARGO_PKG_VERSION"), r##"</span>
+                <h1 class="text-lg sm:text-xl font-bold tracking-tight text-teal-400 truncate">Wyze Sense Bridge</h1>
+                <span class="hidden sm:inline text-xs text-slate-600 font-mono">v"##, env!("CARGO_PKG_VERSION"), r##"</span>
             </div>
-            <div class="flex items-center gap-3">
+            <div class="flex items-center gap-3 shrink-0">
                 <div class="flex items-center space-x-2 bg-slate-800 px-3 py-1.5 rounded-full text-xs font-semibold text-slate-400" id="header-badge">
                     <span class="w-2 h-2 rounded-full bg-slate-600" id="status-dot"></span>
                     <span id="status-text">Connecting...</span>
@@ -923,7 +1031,7 @@ const HTML_CONTENT: &str = concat!(r##"
         </div>
     </header>
 
-    <main class="flex-1 max-w-5xl w-full mx-auto px-6 py-6 flex flex-col gap-5">
+    <main class="flex-1 max-w-5xl w-full mx-auto px-4 sm:px-6 py-6 flex flex-col gap-5">
         <div class="flex items-center justify-between">
             <h2 class="text-lg font-bold text-teal-400 flex items-center"><span class="mr-2">🔋</span> Devices</h2>
             <button onclick="loadDongles()" class="text-xs text-teal-400 hover:underline">Refresh</button>
@@ -934,407 +1042,738 @@ const HTML_CONTENT: &str = concat!(r##"
     </main>
 
     <footer class="border-t border-slate-800 bg-slate-900/20 py-3">
-        <div class="max-w-5xl w-full mx-auto px-6 text-center text-xs text-slate-500">
+        <div class="max-w-5xl w-full mx-auto px-4 sm:px-6 text-center text-xs text-slate-500">
             Wyze Sense to MQTT Bridge (Rust) — Multi-Dongle WebSocket Architecture
         </div>
     </footer>
 
-    <!-- Modal container -->
-    <div id="modal-root"></div>
+    <div id="rename-modal" class="modal-backdrop" onclick="if(event.target===this)closeRename()">
+        <div class="modal-panel p-5">
+            <div class="flex items-center justify-between mb-1">
+                <h3 id="rename-title" class="font-bold text-base text-teal-400">✏️ Rename</h3>
+                <button onclick="closeRename()" class="text-slate-500 hover:text-slate-300 text-xl leading-none px-2">✕</button>
+            </div>
+            <div class="text-xs text-slate-500 font-mono mb-4" id="rename-subtitle"></div>
+            <label class="block text-[10px] uppercase tracking-wide text-slate-600 mb-1">Name</label>
+            <input id="rename-input" maxlength="64" autocomplete="off" class="w-full bg-slate-950 border border-slate-800 text-sm rounded-xl px-3 py-2.5 focus:outline-none focus:border-teal-500" onkeydown="if(event.key==='Enter'){event.preventDefault();saveRename()}else if(event.key==='Escape')closeRename()">
+            <div class="mt-1 text-[11px] text-rose-400 hidden" id="rename-error">A name is required.</div>
+            <div class="flex justify-end gap-2 mt-5">
+                <button onclick="closeRename()" class="py-2 px-4 bg-slate-800 hover:bg-slate-700 text-slate-300 text-sm font-semibold rounded-xl border border-slate-700">Cancel</button>
+                <button onclick="saveRename()" class="py-2 px-4 bg-teal-600 hover:bg-teal-500 text-white text-sm font-semibold rounded-xl">Save</button>
+            </div>
+        </div>
+    </div>
 
     <script>
         const API = "";
         let donglesData = { dongles: [], unassociated_sensors: [] };
-        let fwData = { release: null, job: null, dongles: {} };
+        let fwData = { release: null, job: null, sensor_job: null, dongles: {} };
+        let roamingData = { enabled: false };
         let fwDismissed = null;
+        let sensorDismissed = null;
         let scanState = {};
-        let modalDongle = null;
+        let openSensors = new Set();
+        let openDongles = new Set();
+        let heardExpanded = new Set();
+        let hexLogs = {};
+        let renameTarget = null;
+        let pendingRender = false;
 
-        // ===== Sensor Row =====
-        function sensorRow(s) {
-            let batt;
-            if (s.battery == null) batt = `<span class="tag border border-slate-800 text-slate-500">N/A</span>`;
-            else {
-                let c = "text-emerald-400 bg-emerald-950/30 border-emerald-900/30";
-                if (s.battery < 20) c = "text-rose-400 bg-rose-950/30 border-rose-900/30";
-                else if (s.battery < 50) c = "text-amber-400 bg-amber-950/30 border-amber-900/30";
-                batt = `<span class="tag border ${c}">${s.battery}%</span>`;
-            }
-            let sig = "text-slate-400";
-            if (s.signal > -50) sig = "text-teal-400 font-semibold";
-            else if (s.signal < -80) sig = "text-rose-400 font-semibold";
+        // ===== Helpers =====
+        const esc = (t) => String(t ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
-            let seen = "Never";
-            if (s.last_seen > 0) {
-                const d = Math.floor(Date.now()/1000) - s.last_seen;
-                if (d < 60) seen = "Just now"; else if (d < 3600) seen = `${Math.floor(d/60)}m ago`;
-                else if (d < 86400) seen = `${Math.floor(d/3600)}h ago`; else seen = `${Math.floor(d/86400)}d ago`;
-            }
-
-            const t = (s.sensor_type||"").toLowerCase();
-            let tt;
-            if (t.includes("contact")||t.includes("switch")) tt = `<span class="tag border border-cyan-900 bg-cyan-950/20 text-cyan-400">🚪 Contact</span>`;
-            else if (t.includes("motion")) tt = `<span class="tag border border-purple-900 bg-purple-950/20 text-purple-400">🏃 Motion</span>`;
-            else if (t.includes("climate")) tt = `<span class="tag border border-sky-900 bg-sky-950/20 text-sky-400">🌡️ Climate</span>`;
-            else if (t.includes("leak")) tt = `<span class="tag border border-blue-900 bg-blue-950/20 text-blue-400">💧 Leak</span>`;
-            else tt = `<span class="tag border border-slate-800 bg-slate-900 text-slate-300">${s.sensor_type}</span>`;
-
-            let st = `<span class="text-slate-500 italic text-xs">—</span>`;
-            if (s.state) switch (s.state.kind) {
-                case "Contact": st = s.state.is_open ? `<span class="text-rose-400 font-bold text-xs">Open</span>` : `<span class="text-emerald-400 font-bold text-xs">Closed</span>`; break;
-                case "Motion": st = s.state.is_active ? `<span class="text-rose-400 font-bold text-xs">Active</span>` : `<span class="text-emerald-400 font-bold text-xs">Clear</span>`; break;
-                case "Leak": st = s.state.is_wet ? `<span class="text-blue-400 font-bold text-xs">Wet</span>` : `<span class="text-emerald-400 font-bold text-xs">Dry</span>`; break;
-                case "Climate": st = `<span class="text-cyan-400 font-mono text-xs">${parseFloat(s.state.temperature).toFixed(1)}°C / ${s.state.humidity}%</span>`; break;
-            }
-
-            return `<tr class="hover:bg-slate-800/30 transition text-xs">
-                <td class="py-2 px-3 font-mono font-semibold text-teal-400">${s.mac}</td>
-                <td class="py-2 px-3">${tt}${s.address_conflict ? ` <span class="tag border border-amber-900 bg-amber-950/30 text-amber-400" title="${s.address_conflict.held_by ? `It uses short address ${s.address_conflict.short}, which ${s.address_conflict.held_by} holds on ${s.address_conflict.gateway}` : `Gateway ${s.address_conflict.gateway} answers it without holding it in its table`}: it shares an address with another sensor and can't roam. Pair it again.">⚠ shares an address: pair again</span>` : ''}</td><td class="py-2 px-3">${st}</td>
-                <td class="py-2 px-3">${batt}</td>
-                <td class="py-2 px-3"><span class="font-mono ${sig}">${s.signal} dBm</span></td>
-                <td class="py-2 px-3 text-slate-400">${seen}</td>
-            </tr>`;
+        function seenAge(ts) {
+            if (!ts) return null;
+            const d = Math.floor(Date.now() / 1000) - ts;
+            return d < 0 ? 0 : d;
+        }
+        function relSeen(ts) {
+            const d = seenAge(ts);
+            if (d == null) return "Never";
+            if (d < 60) return d < 5 ? "Just now" : `${d}s ago`;
+            if (d < 3600) return `${Math.floor(d / 60)}m ago`;
+            if (d < 86400) return `${Math.floor(d / 3600)}h ago`;
+            return `${Math.floor(d / 86400)}d ago`;
+        }
+        function absSeen(ts) {
+            if (!ts) return "Never";
+            return new Date(ts * 1000).toLocaleString();
         }
 
-        function sensorTable(sensors) {
+        function dongleByMac(mac) { return (donglesData.dongles || []).find(d => d.mac === mac) || null; }
+        function allSensors() {
+            return [...(donglesData.dongles || []).flatMap(d => d.sensors || []), ...(donglesData.unassociated_sensors || [])];
+        }
+        function sensorByMac(mac) { return allSensors().find(s => s.mac === mac) || null; }
+        function dongleName(mac) { const d = dongleByMac(mac); return d?.name || mac; }
+        function sensorName(mac) { const s = sensorByMac(mac); return s?.name || mac; }
+
+        function typeLabel(t) {
+            return {
+                switch: "Contact v1", switchv2: "Contact v2",
+                motion: "Motion v1", motionv2: "Motion v2",
+                leak: "Leak v2", climate: "Climate v2", chime: "Chime v1",
+            }[t] || (t ? String(t) : "Unknown");
+        }
+        function typeTag(s) {
+            const t = (s.sensor_type || "").toLowerCase();
+            if (t.includes("contact") || t.includes("switch")) return `<span class="tag border border-cyan-900 bg-cyan-950/20 text-cyan-400">🚪 Contact</span>`;
+            if (t.includes("motion")) return `<span class="tag border border-purple-900 bg-purple-950/20 text-purple-400">🏃 Motion</span>`;
+            if (t.includes("climate")) return `<span class="tag border border-sky-900 bg-sky-950/20 text-sky-400">🌡️ Climate</span>`;
+            if (t.includes("leak")) return `<span class="tag border border-blue-900 bg-blue-950/20 text-blue-400">💧 Leak</span>`;
+            return `<span class="tag border border-slate-800 bg-slate-900 text-slate-300">${esc(s.sensor_type || "unknown")}</span>`;
+        }
+        function stateTag(s) {
+            const st = s.state;
+            if (!st) return `<span class="text-slate-500 italic text-xs">—</span>`;
+            switch (st.kind) {
+                case "Contact": return st.is_open ? `<span class="text-rose-400 font-bold text-xs">Open</span>` : `<span class="text-emerald-400 font-bold text-xs">Closed</span>`;
+                case "Motion": return st.is_active ? `<span class="text-rose-400 font-bold text-xs">Active</span>` : `<span class="text-emerald-400 font-bold text-xs">Clear</span>`;
+                case "Leak": return st.is_wet ? `<span class="text-blue-400 font-bold text-xs">Wet</span>` : `<span class="text-emerald-400 font-bold text-xs">Dry</span>`;
+                case "Climate": {
+                    const t = Number(st.temperature);
+                    return `<span class="text-cyan-400 font-mono text-xs">${isFinite(t) ? t.toFixed(1) : "—"}°C / ${esc(st.humidity ?? "—")}%</span>`;
+                }
+            }
+            return `<span class="text-slate-500 italic text-xs">—</span>`;
+        }
+        function sigText(rssi) {
+            let cls = "text-slate-400", label = "Fair";
+            if (rssi > -50) { cls = "text-teal-400 font-semibold"; label = "Excellent"; }
+            else if (rssi > -65) { cls = "text-emerald-400"; label = "Good"; }
+            else if (rssi < -80) { cls = "text-rose-400 font-semibold"; label = "Weak"; }
+            return {cls, label};
+        }
+        function signalBars(rssi) {
+            const lvl = rssi > -50 ? 4 : rssi > -65 ? 3 : rssi > -80 ? 2 : 1;
+            return `<svg viewBox="0 0 11 8" class="w-4 h-3 shrink-0" aria-hidden="true">${[2,4,6,8].map((h,i) => `<rect x="${i*3}" y="${8-h}" width="2" height="${h}" rx="1" fill="currentColor" opacity="${i < lvl ? 1 : .22}"/>`).join('')}</svg>`;
+        }
+        function signalInline(rssi) {
+            const s = sigText(rssi);
+            return `<span class="inline-flex items-center gap-1 font-mono ${s.cls}">${signalBars(rssi)}<span>${rssi} dBm</span></span>`;
+        }
+        function batteryIcon(pct) {
+            const w = pct == null ? 0 : Math.max(pct > 0 ? 1 : 0, Math.round(pct / 100 * 11));
+            return `<svg viewBox="0 0 18 10" class="w-[17px] h-[10px] shrink-0" aria-hidden="true">
+                <rect x=".5" y=".5" width="14" height="9" rx="2" fill="none" stroke="currentColor"/>
+                <rect x="16" y="3" width="1.6" height="4" rx=".6" fill="currentColor"/>
+                <rect x="2" y="2" width="${w}" height="6" rx="1" fill="currentColor"/>
+            </svg>`;
+        }
+        function batteryTag(pct) {
+            if (pct == null) return `<span class="tag border border-slate-800 text-slate-500">${batteryIcon(null)}N/A</span>`;
+            let c = "text-emerald-400 bg-emerald-950/30 border-emerald-900/30";
+            if (pct < 20) c = "text-rose-400 bg-rose-950/30 border-rose-900/30";
+            else if (pct < 50) c = "text-amber-400 bg-amber-950/30 border-amber-900/30";
+            return `<span class="tag border ${c}">${batteryIcon(pct)}${pct}%</span>`;
+        }
+        function detailCell(label, value, sub) {
+            return `<div class="min-w-0">
+                <div class="text-[10px] uppercase tracking-wide text-slate-600">${label}</div>
+                <div class="mt-0.5 text-xs text-slate-300 break-words">${value}${sub ? `<span class="text-slate-600"> · ${sub}</span>` : ''}</div>
+            </div>`;
+        }
+        function conflictText(c) {
+            return c.held_by
+                ? `It uses short address ${c.short}, which ${c.held_by} holds on ${c.gateway}`
+                : `Gateway ${c.gateway} answers it without holding it in its table`;
+        }
+
+        // ===== OTA / firmware state =====
+        function fwBusy() {
+            return !!(fwData.job && ["download","backup","review","flash","replug","restart"].includes(fwData.job.step));
+        }
+        function otaEntry(d, s) {
+            if (!d) return null;
+            const f = fwData.dongles?.[d.mac];
+            const ota = f?.ota;
+            if (!ota || !ota.supported) return null;
+            const entry = (ota.sensors || []).find(x => x.mac === s.mac);
+            if (!entry || !entry.board) return null;
+            return {board: entry.board, target: fwData.release || "", entry};
+        }
+        function sensorJobRow(mac) {
+            const j = fwData.sensor_job;
+            if (!j || !["download","running"].includes(j.step)) return null;
+            return (j.sensors || []).find(r => r.mac === mac) || null;
+        }
+
+        // ===== Heard-by gateways =====
+        function heardBlock(s) {
+            if (!roamingData.enabled) return '';
+            const rows = [...(s.heard || [])].sort((a, b) => b.rssi - a.rssi);
+            if (!rows.length) return '';
+            const n = rows.length;
+            const best = rows[0].rssi;
+            const open = heardExpanded.has(s.mac);
+            const visible = open ? rows : rows.slice(0, 3);
+            const items = rows.map((h, i) => {
+                const hidden = !open && i >= 3;
+                const owner = s.dongle_mac === h.mac;
+                const cls = sigText(h.rssi).cls;
+                return `<div data-heard-extra="${s.mac}" class="${hidden ? 'hidden ' : ''}flex items-center justify-between gap-2 rounded-lg border ${owner ? 'border-teal-800/60 bg-teal-950/20' : 'border-slate-800 bg-slate-900/40'} px-3 py-1.5 text-xs">
+                    <div class="flex items-center gap-2 min-w-0">
+                        <span class="w-1.5 h-1.5 rounded-full ${owner ? 'bg-teal-400' : 'bg-slate-600'} shrink-0"></span>
+                        <span class="font-mono text-slate-300 truncate">${esc(h.mac)}</span>
+                        ${owner ? '<span class="tag border border-teal-900 bg-teal-950/30 text-teal-400">owner</span>' : (h.rssi === best ? '<span class="tag border border-emerald-900 bg-emerald-950/20 text-emerald-400">best</span>' : '')}
+                    </div>
+                    <div class="flex items-center gap-2 shrink-0">
+                        ${signalInline(h.rssi)}
+                        <span class="text-slate-600">${relSeen(h.at)}</span>
+                    </div>
+                </div>`;
+            }).join('');
+            return `<div class="mt-4">
+                <div class="flex items-center gap-2 mb-1.5 flex-wrap">
+                    <div class="text-[10px] uppercase tracking-wide text-slate-600">Heard by ${n} gateway${n !== 1 ? 's' : ''}</div>
+                    <span class="tag border border-teal-900 bg-teal-950/20 text-teal-400">roaming${n > 1 ? ` · best ${best} dBm` : ''}</span>
+                </div>
+                <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1.5">${items}</div>
+                ${n > 3 ? `<button type="button" data-heard-btn="${s.mac}" data-total="${n}" onclick="toggleHeardList('${s.mac}', this)" class="mt-2 text-[11px] font-semibold text-teal-400 hover:text-teal-300 px-1">${open ? 'Show less' : `Show all ${n}`}</button>` : ''}
+            </div>`;
+        }
+        function toggleHeardList(mac, btn) {
+            const extras = document.querySelectorAll(`[data-heard-extra="${mac}"]`);
+            const hidden = [...extras].some(el => el.classList.contains('hidden'));
+            extras.forEach(el => el.classList.toggle('hidden', !hidden));
+            const total = btn ? btn.dataset.total : "";
+            document.querySelectorAll(`[data-heard-btn="${mac}"]`).forEach(b => {
+                b.textContent = hidden ? "Show less" : `Show all ${b.dataset.total || total}`;
+            });
+            if (hidden) heardExpanded.add(mac); else heardExpanded.delete(mac);
+        }
+
+        // ===== Sensor detail =====
+        function detailCard(s, d) {
+            const gatewayMac = d?.mac || s.dongle_mac || null;
+            const volts = s.battery_raw != null ? (s.battery_raw / 32).toFixed(2) + " V" : null;
+            const ota = otaEntry(d, s);
+            const job = sensorJobRow(s.mac);
+            const updating = !!job;
+            const conflict = s.address_conflict;
+            return `<div class="rounded-xl border border-slate-800 bg-slate-950/70 p-3 sm:p-4">
+                <div class="flex items-center justify-between gap-2 mb-3">
+                    <div class="min-w-0">
+                        <div class="font-semibold text-sm text-slate-200 truncate">${esc(s.name || s.mac)}</div>
+                        <div class="font-mono text-[11px] text-teal-500/80">${esc(s.mac)}</div>
+                    </div>
+                    <button onclick="openRename('${s.mac}')" class="shrink-0 inline-flex items-center gap-1.5 py-1.5 px-3 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-lg border border-slate-700 transition">✏️ Rename</button>
+                </div>
+                <div class="grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-3">
+                    ${detailCell("Sensor type", esc(typeLabel(s.sensor_type)))}
+                    ${detailCell("Firmware", esc(s.sw_version || "Unknown"))}
+                    ${detailCell("MAC", `<span class="font-mono">${esc(s.mac)}</span>`)}
+                    ${detailCell("Gateway", `<span class="font-mono">${esc(gatewayMac || "—")}</span>`)}
+                    ${detailCell("Last seen", esc(absSeen(s.last_seen)), esc(relSeen(s.last_seen)))}
+                    ${detailCell("Signal", signalInline(s.signal), sigText(s.signal).label)}
+                    ${detailCell("Battery", s.battery == null ? `${batteryIcon(null)} External power` : batteryTag(s.battery), volts)}
+                    ${detailCell("Die temperature", s.die_temperature_c == null ? "—" : `${esc(s.die_temperature_c)} °C`)}
+                    ${detailCell("Event sequence", s.event_sequence == null ? "—" : `#${esc(s.event_sequence)}`)}
+                    ${detailCell("State", stateTag(s))}
+                </div>
+                ${ota ? `<div class="mt-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 rounded-xl border border-emerald-900/60 bg-emerald-950/20 px-3 py-2.5">
+                    <div class="text-xs min-w-0">
+                        <div class="font-semibold text-emerald-400">OpenWyzeSense ${esc(ota.target)} is available</div>
+                        <div class="text-slate-500 mt-0.5">Current ${esc(s.sw_version || "unknown")} · ${esc(ota.board)} · press the sensor's button briefly when asked</div>
+                    </div>
+                    <button ${updating ? 'disabled' : ''} onclick="fwUpdateSensor('${d.mac}', '${s.mac}', '${ota.board}')" class="ota-btn-${s.mac} shrink-0 py-2 px-4 ${updating ? 'bg-slate-700 cursor-not-allowed opacity-60' : 'bg-emerald-700 hover:bg-emerald-600'} text-white text-xs font-semibold rounded-lg transition">${updating ? 'Updating…' : '⬆️ Update sensor'}</button>
+                </div>` : ''}
+                ${heardBlock(s)}
+                ${conflict ? `<div class="mt-3 text-xs text-amber-400 bg-amber-950/20 border border-amber-900/40 rounded-lg px-3 py-2">
+                    This sensor ${esc(conflictText(conflict))}. It shares a short address with another sensor and can't roam — pair it again.
+                </div>` : ''}
+            </div>`;
+        }
+
+        function updateBadge(s, d) {
+            return otaEntry(d, s)
+                ? `<span class="tag border border-emerald-900 bg-emerald-950/20 text-emerald-400" title="OpenWyzeSense update available">⬆️ update</span>`
+                : '';
+        }
+        function conflictBadge(s) {
+            return s.address_conflict
+                ? `<span class="tag border border-amber-900 bg-amber-950/30 text-amber-400" title="${esc(conflictText(s.address_conflict))}">⚠ address</span>`
+                : '';
+        }
+
+        // ===== Sensor rows / cards =====
+        function desktopRow(s, d) {
+            const open = openSensors.has(s.mac);
+            const mac = s.mac;
+            return `<tr data-sensor-row="${mac}" class="sensor-row cursor-pointer text-xs border-t border-slate-800/40${open ? ' open' : ''}" onclick="toggleSensor('${mac}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleSensor('${mac}')}" tabindex="0">
+                    <td class="py-2.5 pl-3 pr-1 w-6"><span data-sensor-chev="${mac}" class="chevron text-slate-500 text-[10px]${open ? ' open' : ''}">▶</span></td>
+                    <td class="py-2.5 px-2">
+                        <div class="font-semibold text-slate-200 truncate max-w-[11rem]">${esc(s.name || s.mac)}</div>
+                        <div class="font-mono text-[11px] text-teal-500/80">${esc(mac)}</div>
+                    </td>
+                    <td class="py-2.5 px-2">${typeTag(s)}${updateBadge(s, d)}${conflictBadge(s)}</td>
+                    <td class="py-2.5 px-2">${stateTag(s)}</td>
+                    <td class="py-2.5 px-2">${batteryTag(s.battery)}</td>
+                    <td class="py-2.5 px-2">${signalInline(s.signal)}</td>
+                    <td class="py-2.5 px-2 text-slate-400">${relSeen(s.last_seen)}</td>
+                </tr>
+                <tr data-sensor-detail-tr="${mac}" class="${open ? '' : 'hidden'}">
+                    <td colspan="7" class="p-0">
+                        <div data-sensor-wrap="${mac}" class="detail-wrap${open ? ' open' : ''}"><div class="detail-inner px-3 pb-3 pt-0">${detailCard(s, d)}</div></div>
+                    </td>
+                </tr>`;
+        }
+
+        function mobileCard(s, d) {
+            const open = openSensors.has(s.mac);
+            const mac = s.mac;
+            return `<div data-sensor-row="${mac}" class="sensor-card border-b border-slate-800/50 last:border-b-0${open ? ' open' : ''}">
+                <button class="w-full text-left px-4 py-3 flex items-start gap-3" onclick="toggleSensor('${mac}')">
+                    <span data-sensor-chev="${mac}" class="chevron ${open ? 'open ' : ''}mt-1 text-slate-500 text-[10px]">▶</span>
+                    <div class="min-w-0 flex-1">
+                        <div class="flex items-start justify-between gap-2">
+                            <div class="min-w-0">
+                                <div class="font-semibold text-sm text-slate-100 truncate">${esc(s.name || s.mac)}</div>
+                                <div class="font-mono text-[11px] text-teal-500/80 truncate">${esc(mac)}</div>
+                            </div>
+                            <div class="shrink-0">${stateTag(s)}</div>
+                        </div>
+                        <div class="mt-2 flex flex-wrap items-center gap-1.5">${typeTag(s)}${updateBadge(s, d)}${conflictBadge(s)}${batteryTag(s.battery)}</div>
+                        <div class="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-500">
+                            ${signalInline(s.signal)}
+                            <span>Seen ${relSeen(s.last_seen)}</span>
+                        </div>
+                    </div>
+                </button>
+                <div data-sensor-wrap="${mac}" class="detail-wrap${open ? ' open' : ''}"><div class="detail-inner px-4 pb-3">${detailCard(s, d)}</div></div>
+            </div>`;
+        }
+
+        function sensorList(sensors, d) {
             if (!sensors || !sensors.length) return `<div class="text-center text-xs text-slate-500 py-3 italic">No sensors</div>`;
-            return `<table class="w-full text-left text-slate-300">
-                <thead class="text-slate-500 text-xs uppercase"><tr>
-                    <th class="py-1.5 px-3">MAC</th><th class="py-1.5 px-3">Type</th><th class="py-1.5 px-3">State</th>
-                    <th class="py-1.5 px-3">Battery</th><th class="py-1.5 px-3">Signal</th><th class="py-1.5 px-3">Seen</th>
-                </tr></thead>
-                <tbody class="divide-y divide-slate-800/50">${sensors.map(sensorRow).join("")}</tbody></table>`;
+            return `<table class="hidden sm:table w-full text-left text-slate-300">
+                    <thead class="text-slate-500 text-[11px] uppercase">
+                        <tr>
+                            <th class="py-1.5 pl-3 pr-1"></th>
+                            <th class="py-1.5 px-2">Sensor</th><th class="py-1.5 px-2">Type</th><th class="py-1.5 px-2">State</th>
+                            <th class="py-1.5 px-2">Battery</th><th class="py-1.5 px-2">Signal</th><th class="py-1.5 px-2">Seen</th>
+                        </tr>
+                    </thead>
+                    <tbody>${sensors.map(s => desktopRow(s, d)).join("")}</tbody>
+                </table>
+                <div class="sm:hidden">${sensors.map(s => mobileCard(s, d)).join("")}</div>`;
         }
 
-        // ===== Dongle Card =====
-        function dongleCard(d, i) {
-            const n = d.sensors?.length || 0;
-            const dot = `<span class="w-2.5 h-2.5 rounded-full ${d.scanning ? 'bg-amber-400 animate-pulse' : 'bg-teal-400'}"></span>`;
-            let tr;
-            if (d.transport === "bridge") {
-                const ip = d.remote_addr ? d.remote_addr.split(':')[0] : '?';
-                tr = `<span class="tag border border-violet-900 bg-violet-950/20 text-violet-400">🌐 Bridge</span>
-                      <span class="text-xs text-slate-500 font-mono ml-1">${ip} · ${d.device_path||'?'}</span>`;
-            } else {
-                tr = `<span class="tag border border-teal-900 bg-teal-950/20 text-teal-400">🔌 Local</span>
-                      <span class="text-xs text-slate-500 font-mono ml-1">${d.device_path||'?'}</span>`;
-            }
-            return `<div class="dongle-card bg-slate-900 rounded-2xl border border-slate-800 shadow-xl overflow-hidden">
-                <div class="px-5 py-3.5 flex items-center justify-between">
-                    <div class="flex items-center gap-3 cursor-pointer select-none flex-1" onclick="toggleSec(${i})">
-                        <span class="chevron open text-slate-500 text-xs" id="chev-${i}">▶</span>
+        function toggleSensor(mac) {
+            const open = !openSensors.has(mac);
+            if (open) openSensors.add(mac); else openSensors.delete(mac);
+            document.querySelectorAll(`[data-sensor-wrap="${mac}"]`).forEach(el => el.classList.toggle('open', open));
+            document.querySelectorAll(`[data-sensor-chev="${mac}"]`).forEach(el => el.classList.toggle('open', open));
+            document.querySelectorAll(`[data-sensor-row="${mac}"]`).forEach(el => el.classList.toggle('open', open));
+            document.querySelectorAll(`[data-sensor-detail-tr="${mac}"]`).forEach(el => el.classList.toggle('hidden', !open));
+        }
+
+        // ===== Dongle =====
+        function dongleDetails(d) {
+            const o = d.openwyzesense;
+            const conn = d.transport === "bridge" ? (d.remote_addr || "—") : (d.device_path || "—");
+            return `<div class="border-t border-slate-800/50 bg-slate-950/40 px-4 sm:px-5 py-4">
+                <div class="flex items-start justify-between gap-2 mb-3">
+                    <div class="min-w-0">
+                        <div class="text-[10px] uppercase tracking-wide text-slate-600 mb-1">Dongle</div>
+                        <div class="font-semibold text-sm text-slate-200 break-all">${esc(d.name || ("Dongle " + d.mac))}</div>
+                        <div class="font-mono text-[11px] text-teal-500/80">${esc(d.mac)}</div>
+                    </div>
+                    <button onclick="openDongleRename('${d.mac}')" class="shrink-0 inline-flex items-center gap-1.5 py-1.5 px-3 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-lg border border-slate-700 transition">✏️ Rename</button>
+                </div>
+                <div class="grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-3">
+                    ${detailCell("Transport", d.transport === "bridge" ? "🌐 Bridge" : "🔌 Local")}
+                    ${detailCell("Connection", `<span class="font-mono break-all">${esc(conn)}</span>`)}
+                    ${detailCell("Firmware", esc(d.version || "Unknown"))}
+                    ${detailCell("OpenWyzeSense", o ? `${esc(o.version || "—")} <span class="text-slate-600">· ${esc(o.build?.product || "")}</span>` : "Stock")}
+                    ${detailCell("Network", `<span class="font-mono text-[11px] break-all">${esc(o?.network || "—")}</span>`)}
+                    ${detailCell("Roaming", o ? (o.roaming ? "On" : "Off") : "Not supported")}
+                    ${detailCell("Flags", o ? `<span class="font-mono text-[11px]">${esc(o.flags_supported || "—")} / ${esc(o.flags_enabled || "—")}</span>` : "—", o ? "supported / enabled" : null)}
+                    ${detailCell("Build ID", `<span class="font-mono text-[11px] break-all">${esc(o?.build?.id || "—")}</span>`)}
+                </div>
+                ${dongleFirmware(d)}
+                ${dongleActions(d)}
+            </div>`;
+        }
+
+        function relayFirmware(d, r, busy) {
+            if (!r) return '';
+            const current = r.build && fwData.release && r.build.startsWith(fwData.release);
+            const pw = r.auth ? `<input data-relay-pass="${d.mac}" type="password" placeholder="Relay admin password (not stored)" class="w-full mb-2 bg-slate-950 border border-slate-800 text-sm rounded-xl px-3 py-2 focus:outline-none focus:border-teal-500">` : '';
+            return `<div class="mt-4 border-t border-slate-800/60 pt-3">
+                <div class="text-[10px] uppercase tracking-wide text-slate-600 mb-1.5">🔧 Relay firmware</div>
+                <p class="text-xs text-slate-500 mb-2 break-words">${esc(r.name || "")}: <span class="text-slate-300">${esc(r.chip || "")} · ${esc(r.build || "")}</span>.
+                    The relay restarts into the new firmware and updates its contact board's radio, then reconnects (about a minute).
+                    A build that can't rejoin Wi-Fi rolls back by itself.</p>
+                ${r.product ? `${pw}<button ${busy ? 'disabled' : ''} onclick="fwRelay('${d.mac}')" class="w-full py-2.5 bg-emerald-700 hover:bg-emerald-600 disabled:opacity-40 text-white text-xs font-semibold rounded-lg transition">${current ? 'Reinstall' : 'Update relay to'} OpenWyzeSense ${esc(fwData.release || "")}</button>`
+                    : `<p class="text-xs text-amber-400">No relay firmware for a ${esc(r.chip || "unknown")}.</p>`}
+            </div>`;
+        }
+
+        function dongleFirmware(d) {
+            const f = fwData.dongles?.[d.mac];
+            if (!f) return '';
+            const busy = fwBusy();
+            if (d.transport === "bridge") return relayFirmware(d, f.relay, busy);
+            const ows = !!d.openwyzesense;
+            const release = esc(fwData.release || "");
+            const install = ows ? `Reinstall / update to OpenWyzeSense ${release}` : `Install OpenWyzeSense ${release}`;
+            const restore = ows && f.can_restore_stock
+                ? `<button ${busy ? 'disabled' : ''} onclick="fwRestore('${d.mac}')" class="w-full mt-2 py-2.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-slate-300 text-xs font-semibold rounded-lg border border-slate-700 transition">Restore stock firmware</button>`
+                : '';
+            const backups = (f.backups || []).length;
+            return `<div class="mt-4 border-t border-slate-800/60 pt-3">
+                <div class="flex items-center gap-2 mb-1.5 flex-wrap">
+                    <div class="text-[10px] uppercase tracking-wide text-slate-600">🔧 Firmware</div>
+                    ${busy ? '<span class="tag border border-amber-900 bg-amber-950/20 text-amber-400">job running</span>' : ''}
+                </div>
+                <p class="text-xs text-slate-500 mb-2 break-words">Running: <span class="text-slate-300">${esc(f.firmware || "unknown")}</span>.
+                    The dongle is backed up first (the only way back to stock), then you see which sensors carry over before anything is written.
+                    It is offline for about a minute.${backups ? ` ${backups} backup${backups > 1 ? 's' : ''} saved.` : ''}</p>
+                <button ${busy ? 'disabled' : ''} onclick="fwInstall('${d.mac}')" class="w-full py-2.5 bg-emerald-700 hover:bg-emerald-600 disabled:opacity-40 text-white text-xs font-semibold rounded-lg transition">${install}</button>
+                ${restore}
+            </div>`;
+        }
+
+        function dongleActions(d) {
+            const ss = scanState[d.mac] || {active: false};
+            const scanning = !!ss.active;
+            const pairBtn = `<button data-pair-btn="${d.mac}" onclick="toggleScan('${d.mac}')" class="w-full py-2.5 ${scanning ? 'bg-rose-700 hover:bg-rose-600' : 'bg-teal-600 hover:bg-teal-500'} text-white text-xs font-semibold rounded-lg transition">${scanning ? `⏹ Stop scan${ss.secondsLeft != null ? ` (${ss.secondsLeft}s)` : ""}` : "📡 Pair new sensor"}</button>`;
+            return `<div class="mt-4 border-t border-slate-800/60 pt-3">
+                <div class="text-[10px] uppercase tracking-wide text-slate-600 mb-2">⚙️ Actions</div>
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                    <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-3">
+                        <div class="text-xs font-semibold text-slate-300 mb-1">📡 Pairing center</div>
+                        <p class="text-[11px] text-slate-500 mb-2">Put the sensor in pairing mode, then start scanning. Scan auto-stops after 60 seconds.</p>
+                        ${pairBtn}
+                    </div>
+                    <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-3">
+                        <div class="text-xs font-semibold text-slate-300 mb-1">🧹 Maintenance</div>
+                        <p class="text-[11px] text-slate-500 mb-2">Remove invalid or ghost sensor entries from the dongle's NVRAM.</p>
+                        <button onclick="runFix('${d.mac}', this)" class="w-full py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-lg border border-slate-700 transition">Purge ghost sensors</button>
+                    </div>
+                    <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-3 lg:col-span-2">
+                        <div class="text-xs font-semibold text-slate-300 mb-1">💻 Hex console</div>
+                        <p class="text-[11px] text-slate-500 mb-2">Send a raw packet and see the dongle's reply.</p>
+                        <div class="flex gap-2">
+                            <input data-hex-input="${d.mac}" placeholder="AA,55,43..." class="flex-1 min-w-0 bg-slate-950 border border-slate-800 text-xs rounded-lg px-3 py-2 font-mono focus:outline-none focus:border-teal-500">
+                            <button onclick="sendRaw('${d.mac}')" class="shrink-0 py-2 px-4 bg-slate-800 hover:bg-slate-700 font-semibold text-xs rounded-lg border border-slate-700 transition">Send</button>
+                        </div>
+                        <div data-hex-log="${d.mac}" class="rounded-lg border border-slate-800 bg-slate-950 p-2 mt-2 font-mono text-[11px] text-emerald-400 min-h-[44px] max-h-[120px] overflow-y-auto overflow-x-hidden break-all space-y-0.5">${hexLogHtml(d.mac)}</div>
+                    </div>
+                </div>
+            </div>`;
+        }
+
+        function hexLogHtml(mac) {
+            const lines = hexLogs[mac] || [];
+            if (!lines.length) return `<div class="text-slate-500 italic">[Console ready]</div>`;
+            return lines.map(l => `<div class="${l.cls || ''}">${esc(l.text)}</div>`).join('');
+        }
+        function pushHex(mac, text, cls) {
+            if (!hexLogs[mac]) hexLogs[mac] = [];
+            hexLogs[mac].push({text, cls: cls || ''});
+            if (hexLogs[mac].length > 200) hexLogs[mac].shift();
+            const el = document.querySelector(`[data-hex-log="${mac}"]`);
+            if (el) { el.innerHTML = hexLogHtml(mac); el.scrollTop = el.scrollHeight; }
+        }
+
+        function dongleCard(d) {
+            const n = (d.sensors || []).length;
+            const open = openDongles.has(d.mac);
+            const dot = `<span class="w-2.5 h-2.5 rounded-full shrink-0 ${d.scanning ? 'bg-amber-400 animate-pulse' : 'bg-teal-400'}"></span>`;
+            const tr = d.transport === "bridge"
+                ? `<span class="tag border border-violet-900 bg-violet-950/20 text-violet-400">🌐 Bridge</span><span class="text-xs text-slate-500 font-mono ml-1">${esc(d.remote_addr || "?")}</span>`
+                : `<span class="tag border border-teal-900 bg-teal-950/20 text-teal-400">🔌 Local</span><span class="text-xs text-slate-500 font-mono ml-1">${esc(d.device_path || "?")}</span>`;
+            return `<div class="bg-slate-900 rounded-2xl border border-slate-800 shadow-xl overflow-hidden">
+                <div class="px-4 sm:px-5 py-3.5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-0">
+                    <div class="flex items-center gap-3 min-w-0">
                         ${dot}
                         <div class="min-w-0">
                             <div class="flex items-center gap-2 flex-wrap">
-                                <span class="font-bold text-sm">🕹️ ${d.mac}</span>
-                                ${d.scanning?'<span class="tag border border-amber-900 bg-amber-950/20 text-amber-400">SCANNING</span>':''}
-                                <span class="tag border border-slate-800 text-slate-400">${n} sensor${n!==1?'s':''}</span>
-                                ${d.openwyzesense
-                                    ? `<span class="tag border border-emerald-900 bg-emerald-950/20 text-emerald-400">OpenWyzeSense ${d.openwyzesense.version||''}${d.openwyzesense.roaming?' · roaming':''}</span>`
-                                    : (d.transport !== 'bridge' ? '<span class="tag border border-slate-800 text-slate-500">Stock firmware</span>' : '')}
+                                <span class="font-bold text-sm break-all">🕹️ ${esc(d.name || ("Dongle " + d.mac))}</span>
+                                ${d.scanning ? '<span class="tag border border-amber-900 bg-amber-950/20 text-amber-400">SCANNING</span>' : ''}
+                                <span class="tag border border-slate-800 text-slate-400">${n} sensor${n !== 1 ? 's' : ''}</span>
+                                ${d.openwyzesense ? `<span class="tag border border-emerald-900 bg-emerald-950/20 text-emerald-400">OpenWyzeSense ${esc(d.openwyzesense.version || "")}${d.openwyzesense.roaming ? ' · roaming' : ''}</span>` : (d.transport !== 'bridge' ? '<span class="tag border border-slate-800 text-slate-500">Stock firmware</span>' : '')}
                             </div>
                             <div class="flex items-center gap-2 mt-0.5 flex-wrap">
-                                <span class="text-xs text-slate-500 font-mono">${d.version||'Unknown firmware'}</span>
+                                <span class="text-xs text-slate-500 font-mono">${esc(d.mac)}</span>
+                                <span class="text-slate-700">·</span>
+                                <span class="text-xs text-slate-500 font-mono">${esc(d.version || 'Unknown firmware')}</span>
                                 <span class="text-slate-700">·</span> ${tr}
                             </div>
                         </div>
                     </div>
-                    <button onclick="openModal('${d.mac}')" class="ml-3 shrink-0 py-1.5 px-4 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-lg border border-slate-700 transition flex items-center gap-1.5">
-                        <span>⚙️</span> Actions
-                    </button>
+                    <button data-dongle-btn="${d.mac}" onclick="toggleDongleDetails('${d.mac}')" class="w-full sm:w-auto sm:ml-3 shrink-0 py-1.5 px-4 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-lg border border-slate-700 transition flex items-center justify-center gap-1.5 whitespace-nowrap">${open ? 'ⓘ Hide details' : 'ⓘ Details'}</button>
                 </div>
-                <div class="sensor-rows border-t border-slate-800/50" id="rows-${i}">
-                    <div class="px-2 py-1">${sensorTable(d.sensors)}</div>
+                <div data-dongle-detail="${d.mac}" class="dongle-detail${open ? ' open' : ''}"><div class="dongle-detail-inner">${dongleDetails(d)}</div></div>
+                <div class="border-t border-slate-800/50">
+                    <div class="px-2 py-1">${sensorList(d.sensors, d)}</div>
                 </div>
             </div>`;
         }
 
         function orphanCard(sensors) {
             if (!sensors?.length) return '';
-            return `<div class="dongle-card bg-slate-900/50 rounded-2xl border border-dashed border-slate-700 shadow-xl overflow-hidden">
-                <div class="px-5 py-3.5 flex items-center gap-3 cursor-pointer select-none" onclick="toggleSec('orph')">
-                    <span class="chevron open text-slate-500 text-xs" id="chev-orph">▶</span>
-                    <span class="w-2.5 h-2.5 rounded-full bg-slate-600"></span>
-                    <div><span class="font-bold text-sm text-slate-400">📦 Unassociated Sensors</span>
+            return `<div class="bg-slate-900/50 rounded-2xl border border-dashed border-slate-700 shadow-xl overflow-hidden">
+                <div class="px-4 sm:px-5 py-3.5 flex items-center gap-3">
+                    <span class="w-2.5 h-2.5 rounded-full bg-slate-600 shrink-0"></span>
+                    <div class="min-w-0"><span class="font-bold text-sm text-slate-400">📦 Unassociated Sensors</span>
                         <div class="text-xs text-slate-600">Restored from state — no active dongle</div></div>
-                    <span class="tag border border-slate-700 text-slate-500 ml-auto">${sensors.length}</span>
+                    <span class="tag border border-slate-700 text-slate-500 ml-auto shrink-0">${sensors.length}</span>
                 </div>
-                <div class="sensor-rows border-t border-slate-800/50" id="rows-orph">
-                    <div class="px-2 py-1">${sensorTable(sensors)}</div>
-                </div>
+                <div class="border-t border-slate-800/50"><div class="px-2 py-1">${sensorList(sensors, null)}</div></div>
             </div>`;
         }
 
-        function toggleSec(id) {
-            document.getElementById(`rows-${id}`)?.classList.toggle("collapsed");
-            document.getElementById(`chev-${id}`)?.classList.toggle("open");
+        function toggleDongleDetails(mac) {
+            const open = !openDongles.has(mac);
+            if (open) openDongles.add(mac); else openDongles.delete(mac);
+            document.querySelectorAll(`[data-dongle-detail="${mac}"]`).forEach(el => el.classList.toggle('open', open));
+            document.querySelectorAll(`[data-dongle-btn="${mac}"]`).forEach(btn => { btn.innerHTML = open ? 'ⓘ Hide details' : 'ⓘ Details'; });
         }
 
-        // ===== Modal =====
-        function openModal(mac) {
-            modalDongle = mac;
-            renderModal();
-        }
-        function closeModal() {
-            // Stop any active scan when closing
-            if (modalDongle && scanState[modalDongle]?.active) forceStopScan(modalDongle);
-            modalDongle = null;
-            document.getElementById("modal-root").innerHTML = '';
+        // ===== Rename =====
+        async function postJson(path, body) {
+            const r = await fetch(`${API}${path}`, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body || {})});
+            const data = await r.json().catch(() => ({}));
+            return {ok: r.ok, status: r.status, data};
         }
 
-        function renderModal() {
-            if (!modalDongle) return;
-            const d = donglesData.dongles.find(x => x.mac === modalDongle);
-            if (!d) { closeModal(); return; }
-            const ss = scanState[modalDongle] || {};
-            const scanning = ss.active || false;
-
-            const scanBtn = scanning
-                ? `<button onclick="toggleScan('${d.mac}')" class="w-full py-2.5 bg-rose-700 hover:bg-rose-600 text-white text-sm font-semibold rounded-xl transition">⏹ Stop Scan (${ss.secondsLeft||0}s)</button>`
-                : `<button onclick="toggleScan('${d.mac}')" class="w-full py-2.5 bg-teal-600 hover:bg-teal-500 text-white text-sm font-semibold rounded-xl transition">📡 Pair New Sensor</button>`;
-
-            document.getElementById("modal-root").innerHTML = `
-            <div class="modal-backdrop" onclick="if(event.target===this)closeModal()">
-                <div class="modal-panel">
-                    <div class="px-6 py-4 border-b border-slate-800 flex items-center justify-between">
-                        <div>
-                            <div class="font-bold text-base text-teal-400">⚙️ Dongle ${d.mac}</div>
-                            <div class="text-xs text-slate-500 mt-0.5">${d.transport === 'bridge' ? '🌐 Bridge' : '🔌 Local'} · ${d.device_path||'?'}${d.remote_addr ? ' · '+d.remote_addr.split(':')[0] : ''}</div>
-                            ${d.openwyzesense ? `<div class="text-xs text-emerald-600 mt-0.5">OpenWyzeSense ${d.openwyzesense.version||''} · flags supported ${d.openwyzesense.flags_supported} / enabled ${d.openwyzesense.flags_enabled}${d.openwyzesense.roaming ? ' · roaming' : ''}</div>` : ''}
-                        </div>
-                        <button onclick="closeModal()" class="text-slate-500 hover:text-slate-300 text-xl leading-none px-1">✕</button>
-                    </div>
-                    <div class="p-6 space-y-5">
-                        <!-- Pairing Center -->
-                        <div>
-                            <h3 class="text-sm font-semibold text-slate-300 mb-2">📡 Pairing Center</h3>
-                            <p class="text-xs text-slate-500 mb-3">Put the sensor in pairing mode, then start scanning. Scan auto-stops after 60 seconds.</p>
-                            ${scanBtn}
-                        </div>
-
-                        ${firmwareSection(d)}
-                        ${sensorOtaSection(d)}
-
-                        <hr class="border-slate-800">
-
-                        <!-- Maintenance -->
-                        <div>
-                            <h3 class="text-sm font-semibold text-slate-300 mb-2">🧹 Maintenance</h3>
-                            <button onclick="runFix('${d.mac}')" class="w-full py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-sm font-semibold rounded-xl border border-slate-700 transition">Purge Ghost Sensors</button>
-                        </div>
-
-                        <hr class="border-slate-800">
-
-                        <!-- Hex Console -->
-                        <div>
-                            <h3 class="text-sm font-semibold text-slate-300 mb-2">💻 Hex Console</h3>
-                            <div class="flex gap-2 mb-2">
-                                <input id="hex-input" type="text" placeholder="AA,55,43..." class="flex-1 bg-slate-950 border border-slate-800 text-sm rounded-xl px-3 py-2 font-mono focus:outline-none focus:border-teal-500 transition">
-                                <button onclick="sendRaw()" class="py-2 px-4 bg-slate-800 hover:bg-slate-700 font-semibold text-xs rounded-xl border border-slate-700 transition">Send</button>
-                            </div>
-                            <div class="rounded-xl border border-slate-800 bg-slate-950 p-3 font-mono text-xs text-emerald-400 min-h-[60px] max-h-[120px] overflow-y-auto space-y-1 flex flex-col justify-end" id="console-log">
-                                <div class="text-slate-500 italic">[Console ready]</div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>`;
+        function openRename(mac) {
+            const s = sensorByMac(mac);
+            if (!s) return;
+            renameTarget = {kind: "sensor", key: mac};
+            document.getElementById("rename-title").textContent = "✏️ Rename sensor";
+            document.getElementById("rename-subtitle").textContent = mac;
+            showRename(s.name || "");
         }
-
-        // ===== Firmware (OpenWyzeSense on local USB dongles) =====
-        const esc = (t) => String(t ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-
-        function firmwareSection(d) {
-            const f = fwData.dongles?.[d.mac];
-            if (!f) return '';
-            const busy = fwData.job && ['download','backup','review','flash','replug','restart'].includes(fwData.job.step);
-            if (d.transport === 'bridge') return relaySection(d, f.relay, busy);
-            const ows = !!d.openwyzesense;
-            const install = ows ? `Reinstall / update to OpenWyzeSense ${esc(fwData.release)}` : `Install OpenWyzeSense ${esc(fwData.release)}`;
-            const restore = ows && f.can_restore_stock
-                ? `<button ${busy?'disabled':''} onclick="fwRestore('${d.mac}')" class="w-full mt-2 py-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-slate-300 text-sm font-semibold rounded-xl border border-slate-700 transition">Restore stock firmware</button>` : '';
-            return `<hr class="border-slate-800">
-                <div>
-                    <h3 class="text-sm font-semibold text-slate-300 mb-2">🔧 Firmware</h3>
-                    <p class="text-xs text-slate-500 mb-3">Running: <span class="text-slate-300">${esc(f.firmware)}</span>.
-                        The dongle is backed up first (the only way back to stock), then you see which sensors carry over before anything is written.
-                        It is offline for about a minute.${f.backups.length ? ` ${f.backups.length} backup${f.backups.length>1?'s':''} saved.` : ''}</p>
-                    <button ${busy?'disabled':''} onclick="fwInstall('${d.mac}')" class="w-full py-2.5 bg-emerald-700 hover:bg-emerald-600 disabled:opacity-40 text-white text-sm font-semibold rounded-xl transition">${install}</button>
-                    ${restore}
-                    ${busy ? '<p class="text-xs text-amber-400 mt-2">A firmware job is running; see the card at the top.</p>' : ''}
-                </div>`;
+        function openDongleRename(mac) {
+            const d = dongleByMac(mac);
+            if (!d) return;
+            renameTarget = {kind: "dongle", key: mac};
+            document.getElementById("rename-title").textContent = "✏️ Rename dongle";
+            document.getElementById("rename-subtitle").textContent = `${mac} · ${d.transport === "bridge" ? "Bridge" : "Local"}`;
+            showRename(d.name || "");
         }
-
-        function sensorOtaSection(d) {
-            const o = fwData.dongles?.[d.mac]?.ota;
-            if (!o) return '';
-            const running = fwData.sensor_job && ['download','running'].includes(fwData.sensor_job.step);
-            let body;
-            if (!o.supported) body = `<p class="text-xs text-slate-500">This gateway's firmware can't update sensors; update the gateway first.</p>`;
-            else if (!o.sensors.length) body = `<p class="text-xs text-slate-500">No v1 contact or v1 motion sensors on this gateway.</p>`;
-            else {
-                const known = [...new Set(o.sensors.map(x => x.board).filter(Boolean))];
-                const opt = (v, t) => `<option value="${v}" ${known[0]===v?'selected':''}>${t}</option>`;
-                body = `<p class="text-xs text-slate-500 mb-2">For sensors running OpenWyzeSense (stock sensors never take an update). After you start, briefly press each sensor's button (under a second; a long press pairs). Each takes about 3 minutes; the others keep reporting.</p>
-                <div class="space-y-1 mb-2">${o.sensors.map(x => `<label class="flex items-center gap-2 text-xs text-slate-300"><input type="checkbox" class="ota-pick" value="${esc(x.mac)}" data-board="${esc(x.board||'')}"> <span class="font-mono">${esc(x.mac)}</span> <span class="text-slate-500">${x.board ? esc(x.board) : 'type not reported yet'}${x.heard_here ? '' : ` · last heard by ${esc(x.heard_by||'none')}`}</span></label>`).join('')}</div>
-                <p class="text-xs text-slate-600 mb-2">Each update goes through the gateway the sensor talks to (its owner when roaming, else the one that hears it best), whichever dialog you start from.</p>
-                <select id="ota-board" class="w-full mb-3 bg-slate-950 border border-slate-800 text-sm rounded-xl px-3 py-2">${opt('contact-v1','Firmware: v1 contact')}${opt('motion-v1','Firmware: v1 motion')}</select>`;
-                body += `<button ${running?'disabled':''} onclick="fwSensors('${d.mac}')" class="w-full py-2.5 bg-emerald-700 hover:bg-emerald-600 disabled:opacity-40 text-white text-sm font-semibold rounded-xl transition">Update selected sensors to OpenWyzeSense ${esc(fwData.release)}</button>`;
+        function showRename(value) {
+            document.getElementById("rename-error").classList.add("hidden");
+            document.getElementById("rename-input").value = value;
+            document.getElementById("rename-modal").classList.add("open");
+            setTimeout(() => { const i = document.getElementById("rename-input"); i.focus(); i.select(); }, 0);
+        }
+        function closeRename() {
+            document.getElementById("rename-modal").classList.remove("open");
+            renameTarget = null;
+        }
+        async function saveRename() {
+            if (!renameTarget) return;
+            const input = document.getElementById("rename-input");
+            const name = input.value.trim();
+            if (!name) {
+                document.getElementById("rename-error").classList.remove("hidden");
+                input.focus();
+                return;
             }
-            return `<hr class="border-slate-800"><div><h3 class="text-sm font-semibold text-slate-300 mb-2">📶 Sensor updates</h3>${body}</div>`;
+            const path = renameTarget.kind === "sensor"
+                ? `/api/sensors/${encodeURIComponent(renameTarget.key)}/rename`
+                : `/api/dongles/${encodeURIComponent(renameTarget.key)}/rename`;
+            const {ok, data} = await postJson(path, {name});
+            if (!ok) {
+                toast(data.error || `Rename failed (${data.status || "error"})`, "error");
+                return;
+            }
+            closeRename();
+            await loadDongles();
+            toast(`Renamed to "${name}"`, "ok");
         }
 
-        function sensorJobCard() {
-            const j = fwData.sensor_job;
-            if (!j || j.id === fwDismissed) return '';
-            const active = ['download','running'].includes(j.step);
-            const label = {queued:'Waiting for its turn', press_button:'Press its button briefly now (under 1 s)', updating:'Updating', done:'Done', refused:'Turned down', failed:'Failed', timed_out:'Timed out (button not pressed, or not running OpenWyzeSense)', stopped:'Stopped'};
-            const color = {done:'text-emerald-400', refused:'text-amber-400', failed:'text-rose-400', timed_out:'text-amber-400', press_button:'text-teal-300 font-semibold'};
-            const rows = j.sensors.map(r => {
-                const pct = r.total ? Math.floor(r.done * 100 / r.total) : null;
-                return `<div class="py-1"><div class="flex justify-between text-xs"><span class="font-mono text-slate-300">${esc(r.mac)}</span>
-                    <span class="${color[r.state]||'text-slate-400'}">${label[r.state]||esc(r.state)}${r.state==='updating'&&pct!==null?` ${pct}%`:''}${r.message?`: ${esc(r.message)}`:''}</span></div>
-                    ${r.state==='updating'&&pct!==null?`<div class="w-full bg-slate-800 rounded-full h-1.5 mt-1"><div class="bg-emerald-500 h-1.5 rounded-full" style="width:${pct}%"></div></div>`:''}</div>`;
-            }).join('');
-            const head = j.step === 'download' ? 'Downloading the sensor firmware…'
-                : j.step === 'running' ? 'Offers are up for 6 minutes after the last activity.'
-                : j.step === 'failed' ? `<span class="text-rose-400">Failed: ${esc(j.message)}</span>`
-                : j.step === 'cancelled' ? 'Cancelled.' : 'Finished.';
-            const btn = active
-                ? `<button onclick="fwPost('sensors/cancel')" class="py-1.5 px-4 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-lg border border-slate-700">Stop</button>`
-                : `<button onclick="fwDismissed=${j.id};render()" class="py-1.5 px-4 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-lg border border-slate-700">Dismiss</button>`;
-            return `<div class="bg-slate-900 rounded-2xl border border-emerald-900 shadow-xl px-5 py-4 mb-4">
-                <div class="font-bold text-sm text-emerald-400">📶 Updating ${esc(j.board)} sensors to ${esc(j.target)} · gateway ${esc(j.gateway)}</div>
-                <div class="text-xs text-slate-400 mt-1 mb-2">${head}</div>${rows}
-                <div class="flex gap-2 mt-3">${btn}</div></div>`;
+        // ===== Scan =====
+        function clearScanTimers(mac) {
+            const s = scanState[mac];
+            if (!s) return;
+            clearInterval(s.timer);
+            clearInterval(s.poll);
+        }
+        function updatePairButton(mac) {
+            const s = scanState[mac] || {active: false};
+            document.querySelectorAll(`[data-pair-btn="${mac}"]`).forEach(btn => {
+                btn.textContent = s.active ? `⏹ Stop scan${s.secondsLeft != null ? ` (${s.secondsLeft}s)` : ""}` : "📡 Pair new sensor";
+                btn.classList.toggle("bg-rose-700", !!s.active);
+                btn.classList.toggle("hover:bg-rose-600", !!s.active);
+                btn.classList.toggle("bg-teal-600", !s.active);
+                btn.classList.toggle("hover:bg-teal-500", !s.active);
+            });
+        }
+        async function toggleScan(mac) {
+            const ss = scanState[mac] || {active: false};
+            try {
+                const {ok, data} = await postJson("/api/scan", {enable: !ss.active, dongle_mac: mac});
+                if (!ok) { toast(data.error || "Scan toggle failed", "error"); return; }
+                if (data.scan_active) {
+                    scanState[mac] = {active: true, secondsLeft: 60};
+                    clearScanTimers(mac);
+                    scanState[mac].timer = setInterval(() => {
+                        const s = scanState[mac];
+                        if (!s) return;
+                        s.secondsLeft--;
+                        if (s.secondsLeft <= 0) forceStopScan(mac); else updatePairButton(mac);
+                    }, 1000);
+                    scanState[mac].poll = setInterval(async () => {
+                        try {
+                            const r = await fetch(`${API}/api/scan`);
+                            const d = await r.json();
+                            if (!d.scan_active) {
+                                clearScanTimers(mac);
+                                scanState[mac].active = false;
+                                updatePairButton(mac);
+                                toast("Sensor paired", "ok");
+                                await loadDongles();
+                            }
+                        } catch (e) {}
+                    }, 1500);
+                    toast(`Scanning on ${dongleName(mac)} (60s)`, "ok");
+                } else {
+                    clearScanTimers(mac);
+                    scanState[mac] = {active: false};
+                }
+                updatePairButton(mac);
+                await loadDongles();
+            } catch (e) { toast("Scan toggle failed", "error"); }
+        }
+        async function forceStopScan(mac) {
+            try { await postJson("/api/scan", {enable: false, dongle_mac: mac}); } catch (e) {}
+            clearScanTimers(mac);
+            scanState[mac] = {active: false};
+            updatePairButton(mac);
+            await loadDongles();
         }
 
-        async function fwSensors(gw) {
-            const picks = [...document.querySelectorAll('.ota-pick:checked')];
-            if (!picks.length) { alertMsg('Choose at least one sensor.'); return; }
-            const board = document.getElementById('ota-board').value;
-            if (picks.some(p => p.dataset.board && p.dataset.board !== board)) { alertMsg('Update one kind of sensor at a time (contact or motion).'); return; }
+        // ===== Maintenance / raw =====
+        async function runFix(mac, btn) {
+            toast(`Purging ghost sensors on ${dongleName(mac)}…`, "ok");
+            try {
+                const r = await fetch(`${API}/api/fix`, {method: "POST"});
+                const d = await r.json().catch(() => ({}));
+                if (!r.ok) { toast(d.error || "Purge failed", "error"); return; }
+                toast(`Purged ${d.purged_count || 0} ghost sensor${d.purged_count === 1 ? "" : "s"}`, "ok");
+                await loadDongles();
+            } catch (e) { toast("Purge failed", "error"); }
+        }
+        async function sendRaw(mac) {
+            const input = document.querySelector(`[data-hex-input="${mac}"]`);
+            if (!input) return;
+            const raw = input.value.trim();
+            if (!raw) return;
+            const bytes = raw.split(",").map(s => s.trim()).filter(Boolean).map(s => parseInt(s, 16));
+            if (!bytes.length || bytes.some(isNaN)) { toast("Invalid hex bytes", "error"); return; }
+            const ts = new Date().toLocaleTimeString();
+            pushHex(mac, `[${ts}] ===> [${raw.toUpperCase()}]`);
+            try {
+                const r = await fetch(`${API}/api/raw`, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({bytes, dongle_mac: mac})});
+                if (!r.ok) { pushHex(mac, `[${ts}] <=== error: ${await r.text()}`, "text-rose-400"); return; }
+                const d = await r.json();
+                const hex = (d.response_bytes || []).map(b => b.toString(16).padStart(2, "0").toUpperCase()).join(", ");
+                pushHex(mac, `[${ts}] <=== [${hex}]`, "text-slate-400");
+                input.value = "";
+            } catch (e) { pushHex(mac, `[${ts}] <=== send failed`, "text-rose-400"); }
+        }
+
+        // ===== Firmware =====
+        async function fwPost(path, body) {
+            const {ok, data} = await postJson(`/api/firmware/${path}`, body);
+            await loadDongles();
+            if (!ok) toast(data.error || "Firmware request failed", "error");
+            return ok;
+        }
+        async function fwInstall(mac) { fwDismissed = null; if (await fwPost("install", {dongle: mac})) toast(`Firmware install started on ${dongleName(mac)}`, "ok"); }
+        async function fwConfirm() { await fwPost("confirm"); }
+        async function fwCancel() { await fwPost("cancel"); }
+        async function fwRestore(mac) { fwDismissed = null; if (await fwPost("restore", {dongle: mac})) toast(`Restoring stock firmware on ${dongleName(mac)}`, "ok"); }
+        async function fwRelay(mac) {
             fwDismissed = null;
-            if (await fwPost('sensors', {gateway: gw, sensors: picks.map(p => p.value), board})) closeModal();
+            const password = document.querySelector(`[data-relay-pass="${mac}"]`)?.value || null;
+            if (await fwPost("relay", {dongle: mac, password})) toast(`Relay update started on ${dongleName(mac)}`, "ok");
+        }
+        async function fwUpdateSensor(gateway, mac, board) {
+            sensorDismissed = null;
+            if (await fwPost("sensors", {gateway, sensors: [mac], board})) toast(`Sensor update queued for ${sensorName(mac)}`, "ok");
         }
 
-        function relaySection(d, r, busy) {
-            if (!r) return '';
-            const current = r.build && fwData.release && r.build.startsWith(fwData.release);
-            const pw = r.auth ? `<input id="relay-pass" type="password" placeholder="Relay admin password (not stored)" class="w-full mb-2 bg-slate-950 border border-slate-800 text-sm rounded-xl px-3 py-2 focus:outline-none focus:border-teal-500">` : '';
-            return `<hr class="border-slate-800">
-                <div>
-                    <h3 class="text-sm font-semibold text-slate-300 mb-2">🔧 Relay firmware</h3>
-                    <p class="text-xs text-slate-500 mb-3">${esc(r.name)}: <span class="text-slate-300">${esc(r.chip)} · ${esc(r.build)}</span>.
-                        The relay restarts into the new firmware and updates its contact board's radio, then reconnects (about a minute).
-                        A build that can't rejoin Wi-Fi rolls back by itself.</p>
-                    ${r.product ? `${pw}<button ${busy?'disabled':''} onclick="fwRelay('${d.mac}')" class="w-full py-2.5 bg-emerald-700 hover:bg-emerald-600 disabled:opacity-40 text-white text-sm font-semibold rounded-xl transition">${current ? 'Reinstall' : 'Update relay to'} OpenWyzeSense ${esc(fwData.release)}</button>`
-                        : `<p class="text-xs text-amber-400">No relay firmware for a ${esc(r.chip)}.</p>`}
-                </div>`;
-        }
-
+        // ===== Firmware job cards =====
         function fwJobCard() {
             const j = fwData.job;
-            if (!j || j.id === fwDismissed || j.step === 'cancelled') return '';
+            if (!j || j.id === fwDismissed || j.step === "cancelled") return "";
             const pct = j.total ? Math.floor(j.done * 100 / j.total) : null;
-            const bar = pct === null ? '' : `<div class="w-full bg-slate-800 rounded-full h-2 mt-2"><div class="bg-emerald-500 h-2 rounded-full transition-all" style="width:${pct}%"></div></div>`;
-            const what = j.kind === 'restore' ? 'Restoring stock firmware'
-                : j.kind === 'relay' ? `Updating relay firmware to ${esc(j.target||fwData.release)}`
-                : `Installing OpenWyzeSense ${esc(j.target||fwData.release)}`;
-            let body = '', buttons = '';
+            const bar = pct === null ? "" : `<div class="w-full bg-slate-800 rounded-full h-2 mt-2"><div class="bg-emerald-500 h-2 rounded-full transition-all" style="width:${pct}%"></div></div>`;
+            const what = j.kind === "restore" ? "Restoring stock firmware"
+                : j.kind === "relay" ? `Updating relay firmware to ${esc(j.target || fwData.release)}`
+                : `Installing OpenWyzeSense ${esc(j.target || fwData.release)}`;
+            let body = "", buttons = "";
             const dismiss = `<button onclick="fwDismissed=${j.id};render()" class="py-1.5 px-4 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-lg border border-slate-700">Dismiss</button>`;
             switch (j.step) {
-                case 'download': body = 'Downloading and checking the firmware…'; break;
-                case 'backup': body = `Backing up the whole chip. The dongle is offline meanwhile.${pct!==null?` ${pct}%`:''}`; break;
-                case 'review': {
+                case "download": body = "Downloading and checking the firmware…"; break;
+                case "backup": body = `Backing up the whole chip. The dongle is offline meanwhile.${pct !== null ? ` ${pct}%` : ""}`; break;
+                case "review": {
                     const c = j.carried || {sensors: []};
                     const repair = j.dropped.filter(x => x.mac);
                     body = `Backed up (it was running <b>${esc(j.current)}</b>; saved as ${esc(j.backup)}).<br>
-                        <span class="text-emerald-400">${c.sensors.length} sensor${c.sensors.length!==1?'s':''} carry over</span>${c.sensors.length?': '+c.sensors.map(esc).join(', '):''}${c.network?'':' · <span class="text-amber-400">no network identity found</span>'}.
-                        ${j.dropped.length ? `<div class="mt-2 text-amber-400">Not carried over${repair.length ? ` (pair ${repair.map(x=>esc(x.mac)).join(', ')} again afterwards)` : ''}:<ul class="list-disc ml-5">${j.dropped.map(x => `<li>${esc(x.what)}: ${esc(x.why)}</li>`).join('')}</ul></div>` : ''}`;
+                        <span class="text-emerald-400">${c.sensors.length} sensor${c.sensors.length !== 1 ? "s" : ""} carry over</span>${c.sensors.length ? ": " + c.sensors.map(esc).join(", ") : ""}${c.network ? "" : " · <span class=\"text-amber-400\">no network identity found</span>"}.
+                        ${j.dropped.length ? `<div class="mt-2 text-amber-400">Not carried over${repair.length ? ` (pair ${repair.map(x => esc(x.mac)).join(", ")} again afterwards)` : ""}:<ul class="list-disc ml-5">${j.dropped.map(x => `<li>${esc(x.what)}: ${esc(x.why)}</li>`).join("")}</ul></div>` : ""}`;
                     buttons = `<button onclick="fwConfirm()" class="py-1.5 px-4 bg-emerald-700 hover:bg-emerald-600 text-white text-xs font-semibold rounded-lg">Install now</button>
                         <button onclick="fwCancel()" class="py-1.5 px-4 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-lg border border-slate-700">Cancel</button>`;
                     break;
                 }
-                case 'flash': body = j.kind === 'relay'
-                    ? `Uploading to the relay (it was running ${esc(j.current)}).${pct!==null?` ${pct}%`:''}`
-                    : `Writing (${esc(j.phase||'starting')}). Don't unplug the dongle.${pct!==null?` ${pct}%`:''}`; break;
-                case 'restart': body = 'The relay is restarting into the new firmware and updating its radio; it reconnects in about a minute.'; break;
-                case 'replug': body = '<span class="text-amber-400 font-semibold">Written and verified. Unplug the dongle and plug it back in.</span>'; break;
-                case 'done': body = `<span class="text-emerald-400">Done.</span> ${j.kind==='relay' ? `The relay runs ${esc(j.current)}.` : j.kind==='restore' ? 'The dongle runs stock firmware again; sensors paired since the backup need pairing again.' : 'The dongle runs OpenWyzeSense; its features stay off until turned on in the openwyzesense config section.'}
-                        ${j.dropped.filter(x=>x.mac).length ? `<span class="text-amber-400">Pair ${j.dropped.filter(x=>x.mac).map(x=>esc(x.mac)).join(', ')} again.</span>` : ''}`;
+                case "flash": body = j.kind === "relay"
+                    ? `Uploading to the relay (it was running ${esc(j.current)}).${pct !== null ? ` ${pct}%` : ""}`
+                    : `Writing (${esc(j.phase || "starting")}). Don't unplug the dongle.${pct !== null ? ` ${pct}%` : ""}`; break;
+                case "restart": body = "The relay is restarting into the new firmware and updating its radio; it reconnects in about a minute."; break;
+                case "replug": body = '<span class="text-amber-400 font-semibold">Written and verified. Unplug the dongle and plug it back in.</span>'; break;
+                case "done": body = `<span class="text-emerald-400">Done.</span> ${j.kind === "relay" ? `The relay runs ${esc(j.current)}.` : j.kind === "restore" ? "The dongle runs stock firmware again; sensors paired since the backup need pairing again." : "The dongle runs OpenWyzeSense; its features stay off until turned on in the openwyzesense config section."}
+                        ${j.dropped.filter(x => x.mac).length ? `<span class="text-amber-400">Pair ${j.dropped.filter(x => x.mac).map(x => esc(x.mac)).join(", ")} again.</span>` : ""}`;
                     buttons = dismiss; break;
-                case 'failed': body = `<span class="text-rose-400">Failed: ${esc(j.message)}</span>`; buttons = dismiss; break;
+                case "failed": body = `<span class="text-rose-400">Failed: ${esc(j.message)}</span>`; buttons = dismiss; break;
             }
             return `<div class="bg-slate-900 rounded-2xl border border-emerald-900 shadow-xl px-5 py-4 mb-4">
-                <div class="font-bold text-sm text-emerald-400">🔧 ${what} · dongle ${esc(j.dongle)}</div>
-                <div class="text-xs text-slate-400 mt-1">${body}</div>${bar}
-                ${buttons ? `<div class="flex gap-2 mt-3">${buttons}</div>` : ''}
+                <div class="font-bold text-sm text-emerald-400 break-words">🔧 ${what} · dongle ${esc(j.dongle)}</div>
+                <div class="text-xs text-slate-400 mt-1 break-words">${body}</div>${bar}
+                ${buttons ? `<div class="flex flex-wrap gap-2 mt-3">${buttons}</div>` : ""}
             </div>`;
         }
 
-        async function fwPost(path, body) {
-            const r = await fetch(`${API}/api/firmware/${path}`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body||{})});
-            const d = await r.json().catch(() => ({}));
-            await loadDongles();
-            // After the reload: the page re-renders the message box.
-            if (!r.ok) { log(`Firmware: ${d.error || r.status}`); alertMsg(d.error || `HTTP ${r.status}`); }
-            return r.ok;
-        }
-        function alertMsg(t) {
-            // A toast above everything (the dialog included).
-            const el = document.createElement('div');
-            el.className = 'fixed top-4 left-1/2 -translate-x-1/2 z-[100] max-w-lg w-[calc(100%-2rem)] text-sm text-rose-200 bg-rose-950 border border-rose-800 rounded-xl px-4 py-3 shadow-2xl';
-            el.textContent = t;
-            el.onclick = () => el.remove();
-            document.body.appendChild(el);
-            setTimeout(() => el.remove(), 10000);
-        }
-        async function fwInstall(mac) { fwDismissed = null; if (await fwPost('install', {dongle: mac})) closeModal(); }
-        async function fwConfirm() { await fwPost('confirm'); }
-        async function fwCancel() { await fwPost('cancel'); }
-        async function fwRelay(mac) {
-            fwDismissed = null;
-            const password = document.getElementById('relay-pass')?.value || null;
-            if (await fwPost('relay', {dongle: mac, password})) closeModal();
-        }
-        async function fwRestore(mac) {
-            fwDismissed = null;
-            if (await fwPost('restore', {dongle: mac})) closeModal();
+        function sensorJobCard() {
+            const j = fwData.sensor_job;
+            if (!j || j.id === sensorDismissed) return "";
+            const active = ["download", "running"].includes(j.step);
+            const label = {queued: "Waiting for its turn", press_button: "Press its button briefly now (under 1 s)", updating: "Updating", done: "Done", refused: "Turned down", failed: "Failed", timed_out: "Timed out (button not pressed, or not running OpenWyzeSense)", stopped: "Stopped"};
+            const color = {done: "text-emerald-400", refused: "text-amber-400", failed: "text-rose-400", timed_out: "text-amber-400", press_button: "text-teal-300 font-semibold"};
+            const rows = j.sensors.map(r => {
+                const pct = r.total ? Math.floor(r.done * 100 / r.total) : null;
+                return `<div class="py-1"><div class="flex flex-wrap justify-between gap-x-2 text-xs"><span class="font-mono text-slate-300 break-all">${esc(r.mac)}</span>
+                    <span class="min-w-0 break-words ${color[r.state] || "text-slate-400"}">${label[r.state] || esc(r.state)}${r.state === "updating" && pct !== null ? ` ${pct}%` : ""}${r.message ? `: ${esc(r.message)}` : ""}</span></div>
+                    ${r.state === "updating" && pct !== null ? `<div class="w-full bg-slate-800 rounded-full h-1.5 mt-1"><div class="bg-emerald-500 h-1.5 rounded-full" style="width:${pct}%"></div></div>` : ""}</div>`;
+            }).join("");
+            const head = j.step === "download" ? "Downloading the sensor firmware…"
+                : j.step === "running" ? "Offers are up for 6 minutes after the last activity."
+                : j.step === "failed" ? `<span class="text-rose-400">Failed: ${esc(j.message)}</span>`
+                : j.step === "cancelled" ? "Cancelled." : "Finished.";
+            const btn = active
+                ? `<button onclick="fwPost('sensors/cancel')" class="py-1.5 px-4 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-lg border border-slate-700">Stop</button>`
+                : `<button onclick="sensorDismissed=${j.id};render()" class="py-1.5 px-4 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-lg border border-slate-700">Dismiss</button>`;
+            return `<div class="bg-slate-900 rounded-2xl border border-emerald-900 shadow-xl px-5 py-4 mb-4">
+                <div class="font-bold text-sm text-emerald-400 break-words">📶 Updating ${esc(j.board)} sensors to ${esc(j.target)} · gateway ${esc(j.gateway)}</div>
+                <div class="text-xs text-slate-400 mt-1 mb-2 break-words">${head}</div>${rows}
+                <div class="flex flex-wrap gap-2 mt-3">${btn}</div></div>`;
         }
 
-        // ===== Data =====
-        async function loadDongles() {
-            try {
-                const [r, fr] = await Promise.all([fetch(`${API}/api/dongles`), fetch(`${API}/api/firmware`)]);
-                donglesData = await r.json();
-                fwData = await fr.json().catch(() => fwData);
-                render(); updateHeader();
-                if (modalDongle) renderModal();
-            } catch(e) {
-                document.getElementById("dongles-container").innerHTML = `<div class="text-center text-sm text-rose-500 py-12">Failed to load</div>`;
-            }
-        }
-
-        function render() {
-            const c = document.getElementById("dongles-container");
-            if (!donglesData.dongles.length && !(donglesData.unassociated_sensors||[]).length) {
-                c.innerHTML = fwJobCard() + sensorJobCard() + `<div class="text-center py-16"><div class="text-4xl mb-3">📡</div>
-                    <div class="text-slate-400 text-sm">No dongles connected</div>
-                    <div class="text-slate-600 text-xs mt-1">Connect a USB dongle or start a WebSocket bridge</div></div>`;
-                return;
-            }
-            c.innerHTML = `<div id="fw-error" class="hidden mb-4 text-xs text-rose-400 bg-rose-950/30 border border-rose-900 rounded-xl px-4 py-2"></div>` + fwJobCard() + sensorJobCard()
-                + donglesData.dongles.map((d,i) => dongleCard(d,i)).join("") + orphanCard(donglesData.unassociated_sensors);
-        }
-
+        // ===== Load / render =====
         function updateHeader() {
             const dot = document.getElementById("status-dot"), txt = document.getElementById("status-text");
             const badge = document.getElementById("header-badge");
-            const n = donglesData.dongles.length;
+            const n = (donglesData.dongles || []).length;
             if (n > 0) {
                 dot.className = "w-2 h-2 rounded-full bg-teal-400";
-                txt.innerText = `${n} dongle${n>1?'s':''} online`;
+                txt.innerText = `${n} dongle${n > 1 ? "s" : ""} online`;
                 badge.className = "flex items-center space-x-2 bg-teal-900/20 border border-teal-800/30 px-3 py-1.5 rounded-full text-xs font-semibold text-teal-400";
             } else {
                 dot.className = "w-2 h-2 rounded-full bg-rose-500 animate-pulse";
@@ -1343,75 +1782,69 @@ const HTML_CONTENT: &str = concat!(r##"
             }
         }
 
-        // ===== Scan =====
-        async function toggleScan(mac) {
-            const ss = scanState[mac] || { active: false };
+        function render() {
+            const c = document.getElementById("dongles-container");
+            const dongles = donglesData.dongles || [];
+            const orphans = donglesData.unassociated_sensors || [];
+            if (!dongles.length && !orphans.length) {
+                c.innerHTML = fwJobCard() + sensorJobCard() + `<div class="text-center py-16"><div class="text-4xl mb-3">📡</div>
+                    <div class="text-slate-400 text-sm">No dongles connected</div>
+                    <div class="text-slate-600 text-xs mt-1">Connect a USB dongle or start a WebSocket bridge</div></div>`;
+                return;
+            }
+            c.innerHTML = fwJobCard() + sensorJobCard()
+                + dongles.map(dongleCard).join("") + orphanCard(orphans);
+        }
+
+        function editingInline() {
+            const el = document.activeElement;
+            const c = document.getElementById("dongles-container");
+            return !!(el && c && c.contains(el) && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT"));
+        }
+
+        async function loadDongles() {
             try {
-                const r = await fetch(`${API}/api/scan`, {
-                    method:"POST", headers:{"Content-Type":"application/json"},
-                    body: JSON.stringify({ enable: !ss.active, dongle_mac: mac })
+                const [r, fr, rr] = await Promise.all([
+                    fetch(`${API}/api/dongles`),
+                    fetch(`${API}/api/firmware`),
+                    fetch(`${API}/api/roaming`),
+                ]);
+                if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                donglesData = await r.json();
+                fwData = await fr.json().catch(() => fwData);
+                roamingData = await rr.json().catch(() => roamingData);
+                // Reflect a scan started elsewhere; local timers own their countdown.
+                (donglesData.dongles || []).forEach(d => {
+                    const ss = scanState[d.mac];
+                    if (d.scanning && !ss?.active) scanState[d.mac] = {active: true, secondsLeft: null};
+                    if (!d.scanning && ss?.active && !ss.timer) scanState[d.mac] = {active: false};
                 });
-                const data = await r.json();
-                if (data.scan_active) {
-                    scanState[mac] = { active: true, secondsLeft: 60 };
-                    clearInterval(scanState[mac].timer); clearInterval(scanState[mac].poll);
-                    scanState[mac].timer = setInterval(() => {
-                        scanState[mac].secondsLeft--;
-                        if (scanState[mac].secondsLeft <= 0) forceStopScan(mac);
-                        else renderModal();
-                    }, 1000);
-                    scanState[mac].poll = setInterval(async () => {
-                        try {
-                            const r2 = await fetch(`${API}/api/scan`); const d2 = await r2.json();
-                            if (!d2.scan_active) { clearScanTimers(mac); scanState[mac].active=false; log(`🎉 Sensor paired!`); await loadDongles(); }
-                        } catch(e){}
-                    }, 1500);
-                    log(`Scanning on dongle ${mac}...`);
-                } else {
-                    clearScanTimers(mac); scanState[mac] = { active:false };
-                    log("Scan stopped.");
-                }
-                renderModal();
-            } catch(e) { log("Scan toggle failed!"); }
+                updateHeader();
+                if (editingInline()) { pendingRender = true; return; }
+                render();
+                pendingRender = false;
+            } catch (e) {
+                document.getElementById("dongles-container").innerHTML = `<div class="text-center text-sm text-rose-500 py-12">Failed to load</div>`;
+            }
         }
 
-        function clearScanTimers(mac) {
-            const s = scanState[mac]; if (!s) return;
-            clearInterval(s.timer); clearInterval(s.poll);
+        // ===== Toast =====
+        function toast(message, tone) {
+            const el = document.createElement("div");
+            const error = tone === "error";
+            el.className = `fixed top-4 left-1/2 -translate-x-1/2 z-[110] max-w-lg w-[calc(100%-2rem)] text-sm ${error ? "text-rose-200 bg-rose-950 border-rose-800" : "text-teal-200 bg-teal-950 border-teal-800"} border rounded-xl px-4 py-3 shadow-2xl`;
+            el.textContent = message;
+            el.onclick = () => el.remove();
+            document.body.appendChild(el);
+            setTimeout(() => el.remove(), error ? 8000 : 4000);
         }
 
-        async function forceStopScan(mac) {
-            try { await fetch(`${API}/api/scan`, {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({enable:false,dongle_mac:mac})}); } catch(e){}
-            clearScanTimers(mac); scanState[mac] = { active:false };
-            log("Scan timeout."); renderModal(); loadDongles();
-        }
-
-        // ===== Actions =====
-        async function runFix(mac) {
-            log(`Purging ghosts on ${mac}...`);
-            try { const r = await fetch(`${API}/api/fix`,{method:"POST"}); const d = await r.json(); log(`Purged ${d.purged_count}: [${d.purged_macs.join(", ")}]`); loadDongles(); } catch(e){log("Fix failed!");}
-        }
-
-        async function sendRaw() {
-            const input = document.getElementById("hex-input")?.value;
-            if (!input) return;
-            const bytes = input.split(",").map(s=>s.trim()).filter(s=>s.length>0).map(s=>parseInt(s,16));
-            if (bytes.some(isNaN)) { log("Invalid hex!"); return; }
-            log(`===> [${input.toUpperCase()}]`);
-            try {
-                const r = await fetch(`${API}/api/raw`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({bytes, dongle_mac: modalDongle})});
-                if (r.status!==200){log(`Error: ${await r.text()}`);return;}
-                const d = await r.json(); log(`<=== [${d.response_bytes.map(b=>b.toString(16).padStart(2,"0").toUpperCase()).join(",")}]`);
-            } catch(e){log("Send failed");}
-        }
-
-        function log(msg) {
-            const el = document.getElementById("console-log");
-            if (!el) return;
-            const d = document.createElement("div");
-            d.innerText = `[${new Date().toLocaleTimeString()}] ${msg}`;
-            el.appendChild(d); el.scrollTop = el.scrollHeight;
-        }
+        document.addEventListener("focusout", () => {
+            if (!pendingRender) return;
+            setTimeout(() => {
+                if (!editingInline()) { pendingRender = false; render(); }
+            }, 0);
+        });
 
         // ===== Init =====
         loadDongles();
@@ -1420,6 +1853,7 @@ const HTML_CONTENT: &str = concat!(r##"
     </script>
 </body>
 </html>
+
 "##);
 
 
@@ -1445,6 +1879,8 @@ mod tests {
                 "/nonexistent/sensors.yaml".to_string(),
                 "/nonexistent/state.yaml".to_string(),
             ))),
+            dongle_names: Arc::new(std::sync::Mutex::new(DonglesConfig::default())),
+            dongle_config_path: "/nonexistent/dongles.yaml".to_string(),
             broadcast_tx: tokio::sync::broadcast::channel(16).0,
             event_tx,
             dongle_status_tx,
