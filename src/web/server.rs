@@ -995,10 +995,10 @@ const HTML_CONTENT: &str = concat!(r##"
         .chevron.open { transform: rotate(90deg); }
         .detail-wrap { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .25s ease; }
         .detail-wrap.open { grid-template-rows: 1fr; }
-        .detail-inner { overflow: hidden; }
+        .detail-inner { overflow: hidden; min-height: 0; }
         .dongle-detail { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .25s ease; }
         .dongle-detail.open { grid-template-rows: 1fr; }
-        .dongle-detail-inner { overflow: hidden; }
+        .dongle-detail-inner { overflow: hidden; min-height: 0; }
         .sensor-row { transition: background-color .15s ease; }
         .sensor-row:hover, .sensor-row.open { background: rgba(30, 41, 59, .35); }
         .sensor-card { transition: border-color .2s ease; }
@@ -1314,7 +1314,7 @@ const HTML_CONTENT: &str = concat!(r##"
                 </tr>
                 <tr data-sensor-detail-tr="${mac}" class="${open ? '' : 'hidden'}">
                     <td colspan="7" class="p-0">
-                        <div data-sensor-wrap="${mac}" class="detail-wrap${open ? ' open' : ''}"><div class="detail-inner px-3 pb-3 pt-0">${detailCard(s, d)}</div></div>
+                        <div data-sensor-wrap="${mac}" class="detail-wrap${open ? ' open' : ''}"><div class="detail-inner"><div class="px-3 pb-3 pt-0">${detailCard(s, d)}</div></div></div>
                     </td>
                 </tr>`;
         }
@@ -1340,7 +1340,7 @@ const HTML_CONTENT: &str = concat!(r##"
                         </div>
                     </div>
                 </button>
-                <div data-sensor-wrap="${mac}" class="detail-wrap${open ? ' open' : ''}"><div class="detail-inner px-4 pb-3">${detailCard(s, d)}</div></div>
+                <div data-sensor-wrap="${mac}" class="detail-wrap${open ? ' open' : ''}"><div class="detail-inner"><div class="px-4 pb-3">${detailCard(s, d)}</div></div></div>
             </div>`;
         }
 
