@@ -36,7 +36,7 @@ pub struct KeypadController {
     engines: EnginesMap,
     alarm_state_topic: String,
     alarm_state: watch::Sender<Option<String>>,
-    pin_rejected: Notify,
+    pin_rejected: Mutex<HashMap<String, Arc<Notify>>>,
     pending: Mutex<HashMap<String, (KeypadAction, Instant)>>,
     timeout: Duration,
 }
@@ -53,7 +53,7 @@ impl KeypadController {
             engines,
             alarm_state_topic,
             alarm_state: watch::channel(None).0,
-            pin_rejected: Notify::new(),
+            pin_rejected: Mutex::new(HashMap::new()),
             pending: Mutex::new(HashMap::new()),
             timeout: Duration::from_millis(config.response_timeout_ms),
         })
@@ -68,6 +68,25 @@ impl KeypadController {
         format!("{}/keypad/pin_result", self.topic_root)
     }
 
+    /// Per-keypad variant of the PIN result topic, subscribed alongside the
+    /// shared one so a rejection can name its keypad.
+    pub fn pin_result_wildcard(&self) -> String {
+        format!("{}/keypad/+/pin_result", self.topic_root)
+    }
+
+    /// Whether `topic` is the shared PIN result topic or a per-keypad one.
+    pub fn is_pin_result_topic(&self, topic: &str) -> bool {
+        topic == self.pin_result_topic() || self.keypad_from_topic(topic).is_some()
+    }
+
+    /// The keypad named in `<root>/keypad/<MAC>/pin_result`, if that is the topic.
+    fn keypad_from_topic(&self, topic: &str) -> Option<String> {
+        let mac = topic
+            .strip_prefix(&format!("{}/keypad/", self.topic_root))?
+            .strip_suffix("/pin_result")?;
+        (!mac.is_empty() && !mac.contains('/')).then(|| mac.to_ascii_uppercase())
+    }
+
     pub fn on_alarm_state(&self, payload: &str) {
         let state = payload.trim().to_string();
         if KeypadStatus::from_ha_state(&state).is_none() {
@@ -78,10 +97,51 @@ impl KeypadController {
         self.alarm_state.send_replace(Some(state));
     }
 
-    pub fn on_pin_result(&self, payload: &str) {
-        if payload.trim().eq_ignore_ascii_case("invalid") {
-            self.pin_rejected.notify_waiters();
+    /// HA publishes `invalid` here to reject a PIN without waiting for the
+    /// timeout, on the shared topic or on `<root>/keypad/<MAC>/pin_result`,
+    /// and/or naming the keypad in the payload. Either form rejects only that
+    /// keypad's pending request; a bare `invalid` rejects every pending one.
+    pub fn on_pin_result(&self, topic: &str, payload: &str) {
+        let (invalid, mut keypad) = match serde_json::from_str::<serde_json::Value>(payload) {
+            Ok(value) => {
+                let result = value
+                    .get("result")
+                    .or_else(|| value.get("pin_result"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
+                let keypad = value.get("keypad").and_then(|v| v.as_str()).map(str::to_ascii_uppercase);
+                (result.trim().eq_ignore_ascii_case("invalid"), keypad)
+            }
+            Err(_) => (payload.trim().eq_ignore_ascii_case("invalid"), None),
+        };
+        if !invalid {
+            debug!("Keypad: ignoring PIN result {:?}", payload);
+            return;
         }
+        if keypad.is_none() {
+            keypad = self.keypad_from_topic(topic);
+        }
+        let waiters = self.pin_rejected.lock().unwrap();
+        match keypad {
+            Some(mac) => match waiters.get(&mac) {
+                Some(notify) => {
+                    info!("Keypad {}: PIN rejected by Home Assistant", mac);
+                    notify.notify_waiters();
+                }
+                None => debug!("Keypad {}: PIN rejected with no pending request", mac),
+            },
+            None => waiters.values().for_each(|n| n.notify_waiters()),
+        }
+    }
+
+    /// The rejection signal for one keypad's pending request.
+    fn pin_rejection(&self, mac: &str) -> Arc<Notify> {
+        self.pin_rejected
+            .lock()
+            .unwrap()
+            .entry(mac.to_ascii_uppercase())
+            .or_insert_with(|| Arc::new(Notify::new()))
+            .clone()
     }
 
     fn current_status(&self) -> KeypadStatus {
@@ -154,7 +214,8 @@ impl KeypadController {
     /// Asks HA to carry out `action` and returns the reply for the keypad.
     async fn request(&self, mac: &str, action: KeypadAction, pin: Option<KeypadPin>) -> KeypadReply {
         let mut state_rx = self.alarm_state.subscribe();
-        let rejected = self.pin_rejected.notified();
+        let rejection = self.pin_rejection(mac);
+        let rejected = rejection.notified();
         tokio::pin!(rejected);
         rejected.as_mut().enable();
 

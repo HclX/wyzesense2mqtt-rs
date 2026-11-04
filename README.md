@@ -217,7 +217,7 @@ The Wyze Sense keypad never learns the alarm state on its own: it asks, and the 
 | :--- | :--- | :--- | :--- |
 | `<root>/keypad/alarm_state` (or `keypad.alarm_state_topic`) | HA → gateway | yes | HA alarm state: `disarmed`, `arming`, `armed_home`, `armed_away`, `pending`, `triggered`, … |
 | `<root>/<MAC>/keypad/action` | gateway → HA | **no** | `{"action": "disarm" \| "arm_home" \| "arm_away", "code": "1234", "keypad": "<MAC>"}` (`code` only when a PIN was typed) |
-| `<root>/keypad/pin_result` | HA → gateway | no | `invalid` rejects the PIN immediately instead of after `response_timeout_ms` |
+| `<root>/keypad/pin_result` or `<root>/keypad/<MAC>/pin_result` | HA → gateway | no | `invalid` rejects the pending PIN immediately instead of after `response_timeout_ms`; the per-keypad topic (or `"keypad": "<MAC>"` in the payload) rejects only that keypad's request |
 | `<root>/<MAC>/keypad/event` | gateway → HA | no | `{"event_type": "disarm" \| "arm_home" \| "arm_away" \| "panic"}` (HA event entity, never a PIN) |
 | `homeassistant/status` | HA → gateway | no | HA birth (`online`): the gateway re-announces every known sensor's availability and state |
 
@@ -225,7 +225,7 @@ How requests are answered:
 - **Disarm button:** the keypad is asked for a PIN. The PIN is then sent as a `disarm` action.
 - **Home / Away button:** an `arm_*` action without a code is sent. If the alarm state changes to `arming` or the armed state within the timeout, the keypad shows it; otherwise it asks for a PIN and the PIN is sent with the same action.
 - **PIN without a button** (e.g. during the entry delay): sent as `disarm`.
-- **PIN result:** accepted once the alarm state reaches the requested state, rejected on `invalid`, `alarmo_failed_to_arm` with reason `invalid_code`, or timeout.
+- **PIN result:** accepted once the alarm state reaches the requested state, rejected on `invalid` (publish to `<root>/keypad/<MAC>/pin_result` or name the `keypad` in the payload to reject just that one; a bare `invalid` on the shared topic rejects every pending request), `alarmo_failed_to_arm` with reason `invalid_code`, or timeout.
 - **Side button:** only the `panic` event is published; what it does is up to your automations.
 
 Keypad battery: every keypad event carries a battery byte on its own 0–155 scale (not the AON_BATMON encoding other sensors use). The gateway publishes it as an estimated `Battery` percentage (raw ÷ 155) plus a `Battery Voltage` diagnostic (an internal reading of ≈4.5 V on healthy packs — not a direct cell voltage). The percentage is a linear estimate; the true discharge shape is not yet characterized, so treat low readings as a prompt to recharge soon rather than an exact gauge.
@@ -283,6 +283,9 @@ Example Home Assistant automations for Alarmo (the same works for any `alarm_con
     - action: mqtt.publish
       data:
         topic: "wyzesense2mqtt/keypad/pin_result"
+        # Use "wyzesense2mqtt/keypad/<MAC>/pin_result" (or {"keypad": "<MAC>",
+        # "result": "invalid"}) to reject only that keypad; a bare "invalid"
+        # here rejects every pending PIN request.
         payload: "invalid"
 ```
 

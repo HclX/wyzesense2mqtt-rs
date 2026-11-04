@@ -126,7 +126,7 @@ impl MqttGateway {
         let hass_birth_topic = "homeassistant/status".to_string();
         let keypad_loop = self.keypad.clone();
         let keypad_topics: Vec<String> = self.keypad.as_ref()
-            .map(|k| vec![k.alarm_state_topic().to_string(), k.pin_result_topic()])
+            .map(|k| vec![k.alarm_state_topic().to_string(), k.pin_result_topic(), k.pin_result_wildcard()])
             .unwrap_or_default();
 
         // DEDICATED EVENT LOOP TASK
@@ -184,8 +184,8 @@ impl MqttGateway {
 
                                 if let Some(keypad) = keypad_loop.as_ref().filter(|k| topic == k.alarm_state_topic()) {
                                     keypad.on_alarm_state(&payload);
-                                } else if let Some(keypad) = keypad_loop.as_ref().filter(|k| topic == k.pin_result_topic()) {
-                                    keypad.on_pin_result(&payload);
+                                } else if let Some(keypad) = keypad_loop.as_ref().filter(|k| k.is_pin_result_topic(&topic)) {
+                                    keypad.on_pin_result(&topic, &payload);
                                 } else if is_ha_birth(&topic, &payload) {
                                     // HA MQTT integration birth: everything we published
                                     // before HA restarted may be stale for entities whose
