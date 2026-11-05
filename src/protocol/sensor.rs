@@ -946,6 +946,26 @@ impl SensorManager {
         Ok(())
     }
 
+    /// Re-reads `sensors.yaml` and updates `friendly_name`, `timeout_sec`, and `sw_version`
+    /// for all known sensors in memory.
+    pub fn reload_config(&mut self) -> Result<usize, Box<dyn std::error::Error>> {
+        let sensors_config = SensorsConfig::load_from_yaml(&self.config_path)?;
+        let mut updated = 0;
+        for (mac, metadata) in &sensors_config.sensors {
+            if let Some(sensor) = self.sensors.get_mut(mac) {
+                sensor.friendly_name = metadata.name.clone();
+                if let Some(t) = metadata.timeout_sec {
+                    sensor.timeout_sec = t;
+                }
+                if let Some(ref v) = metadata.sw_version {
+                    sensor.sw_version = v.clone();
+                }
+                updated += 1;
+            }
+        }
+        Ok(updated)
+    }
+
     /// Loads sensors from state.yaml that are NOT already in the manager.
     /// These represent sensors persisted from previous sessions whose dongle
     /// is currently offline — they show as "unassociated" in the dashboard.
