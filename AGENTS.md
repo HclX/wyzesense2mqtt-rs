@@ -36,7 +36,7 @@ Several agents may work here at once, with the user (HclX) reviewing. Read this 
 | `src/firmware/` | Dongle install and restore, relay updates, sensor OTA (through `ows-host`) |
 | `src/gateway/mqtt.rs` | MQTT and Home Assistant discovery |
 | `src/web/server.rs` | REST API, WebSocket bridge, and the dashboard (inline HTML/JS, Tailwind from a CDN) |
-| `src/config/` | `config.yaml`, `sensors.yaml`, `state.yaml` |
+| `src/config/` | `config.yaml`, `sensors.yaml`, `dongles.yaml`, `state.yaml` |
 | `tests/` | Integration tests, using `transport::virtual_dongle::VirtualDongle` and `ows_host::sim::SimDongle` instead of hardware |
 
 ## Workflow
@@ -54,7 +54,7 @@ Several agents may work here at once, with the user (HclX) reviewing. Read this 
      `SimDongle`.
 5. Dashboard changes: check the page at phone width (about 390 px) as well as desktop, in both light and dark mode.
    Say in the PR how you checked.
-6. Update `README.md` (and `config/config.yaml.template` for a new setting) in the same branch.
+6. Update `README.md` (and `release/config.yaml.template` for a new setting) in the same branch.
 7. Open a PR to `main`:
    - a title that says what changed;
    - a body with `Closes #<number>`, what you changed, how you tested it (paste the test summary lines), and anything

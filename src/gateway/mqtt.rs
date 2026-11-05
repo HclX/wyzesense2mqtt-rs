@@ -34,13 +34,6 @@ fn is_ha_birth(topic: &str, payload: &str) -> bool {
     topic == "homeassistant/status" && payload.trim() == "online"
 }
 
-/// The availability retain policy: `online` is retained so it replays to
-/// Home Assistant after HA/broker restarts, `offline` is not so a sleeping
-/// sensor's status doesn't poison the broker's persistence DB for hours.
-fn availability_retain(is_online: bool) -> bool {
-    is_online
-}
-
 pub struct MqttGateway {
     client: AsyncClient,
     event_loop: rumqttc::v5::EventLoop,
@@ -353,16 +346,10 @@ async fn announce_sensor(
         }
     }
 
-    // Publish availability topic. Only `online` is retained: a retained
-    // `offline` outlives the outage in the broker's persistence DB and keeps
-    // Home Assistant entities unavailable for hours/days on sleeping sensors,
-    // healing only when that sensor happens to report again. Non-retained
-    // offline still marks the entity unavailable immediately for every
-    // subscriber that is listening at that moment, and the boot-time
-    // re-announce below restores the correct state after any reconnect.
+    // Publish availability topic
     let availability_topic = format!("{}/{}/status", topic_root, mac);
     let availability_payload = if is_online { "online" } else { "offline" };
-    if let Err(e) = client.publish(&availability_topic, QoS::AtLeastOnce, availability_retain(is_online), availability_payload).await {
+    if let Err(e) = client.publish(&availability_topic, QoS::AtLeastOnce, true, availability_payload).await {
         error!("Failed to publish availability for {}: {}", mac, e);
     }
 

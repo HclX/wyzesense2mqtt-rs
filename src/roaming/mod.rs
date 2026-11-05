@@ -403,7 +403,8 @@ fn report_rssi(evt: &DongleEvent) -> Option<i8> {
         | TelemetryData::Alarm { rssi, .. }
         | TelemetryData::Climate { rssi, .. }
         | TelemetryData::AlarmData { rssi, .. }
-        | TelemetryData::Leak { rssi, .. } => Some(rssi),
+        | TelemetryData::Leak { rssi, .. }
+        | TelemetryData::Keypad { rssi, .. } => Some(rssi),
         _ => None,
     }
 }
@@ -415,7 +416,8 @@ fn set_report_rssi(evt: &mut DongleEvent, to: i8) {
         | TelemetryData::Alarm { rssi, .. }
         | TelemetryData::Climate { rssi, .. }
         | TelemetryData::AlarmData { rssi, .. }
-        | TelemetryData::Leak { rssi, .. } => *rssi = to,
+        | TelemetryData::Leak { rssi, .. }
+        | TelemetryData::Keypad { rssi, .. } => *rssi = to,
         _ => {}
     }
 }
@@ -431,6 +433,7 @@ fn report_key(evt: &DongleEvent) -> Option<(ReportKey, Option<u16>)> {
         TelemetryData::AlarmData { ring_buffer, .. } => {
             (ring_buffer.iter().fold(0xCBF2_9CE4_8422_2325u64, |h, b| (h ^ *b as u64).wrapping_mul(0x100_0000_01B3)), None)
         }
+        TelemetryData::Keypad { sequence, .. } => (*sequence as u64, None),
         _ => return None,
     };
     Some(((evt.mac.clone(), evt.event_type, id), counter))

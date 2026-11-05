@@ -299,8 +299,8 @@ impl WyzeSensor {
                 (Some(*battery), Some(*rssi), Some(*die_temperature_c), Some(*event_sequence)),
             TelemetryData::Leak { battery, rssi, .. } =>
                 (Some(*battery), Some(*rssi), None, None),
-            TelemetryData::Keypad { battery, rssi, .. } =>
-                (Some(*battery), Some(*rssi), None, None),
+            TelemetryData::Keypad { battery, rssi, sequence, .. } =>
+                (Some(*battery), Some(*rssi), None, Some(*sequence as u16)),
             TelemetryData::Scanned { .. } => (Some(100), Some(0), None, None),
             _ => (None, None, None, None),
         };
