@@ -35,6 +35,15 @@ async fn test_single_dongle_sensor_lifecycle() {
     assert_eq!(dongles[0]["mac"], "DONGLE_A");
     assert_eq!(dongles[0]["sensor_count"], 0);
 
+    // Rename dongle via API
+    let resp = harness.client
+        .post(&format!("{}/api/dongles/DONGLE_A/rename", harness.base_url))
+        .json(&serde_json::json!({ "name": "Hallway" }))
+        .send().await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let body = harness.get_dongles().await;
+    assert_eq!(body["dongles"][0]["name"], "Hallway");
+
     // Enable scan
     let resp = harness.set_scan("DONGLE_A", true).await;
     assert_eq!(resp.status(), 200);

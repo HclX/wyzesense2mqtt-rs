@@ -28,11 +28,15 @@ use tower_http::cors::{Any, CorsLayer};
 use tracing::{info, debug, error, warn};
 
 use crate::protocol::sensor::SensorManager;
+use crate::config::dongles::DonglesConfig;
 use crate::gateway::mqtt::DongleStatus;
 
 pub struct WebState {
     pub engines: EnginesMap,
     pub sensor_manager: Arc<std::sync::Mutex<SensorManager>>,
+    /// User-assigned dongle names, persisted in config/dongles.yaml.
+    pub dongle_names: Arc<std::sync::Mutex<DonglesConfig>>,
+    pub dongle_config_path: String,
     pub broadcast_tx: tokio::sync::broadcast::Sender<()>,
     pub event_tx: tokio::sync::mpsc::Sender<crate::protocol::telemetry::DongleEvent>,
     /// Bridge dongle connects/disconnects, for the MQTT dongle status topic.
@@ -86,6 +90,11 @@ pub struct SuccessResponse {
     pub message: String,
 }
 
+#[derive(Deserialize)]
+pub struct RenameRequest {
+    pub name: String,
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct ScanRequest {
     pub enable: bool,
@@ -130,10 +139,14 @@ pub async fn start_web_server(
     port: u16,
     bridge_auth_token: Option<String>,
     dongle_status_tx: tokio::sync::mpsc::Sender<DongleStatus>,
+    dongle_config_path: String,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let dongle_names = DonglesConfig::load_from_yaml(&dongle_config_path).unwrap_or_default();
     let shared_state = Arc::new(WebState {
         engines,
         sensor_manager,
+        dongle_names: Arc::new(std::sync::Mutex::new(dongle_names)),
+        dongle_config_path,
         broadcast_tx,
         event_tx,
         dongle_status_tx,
@@ -162,6 +175,8 @@ fn router(shared_state: Arc<WebState>) -> Router {
         .route("/api/sensors", get(list_sensors))
         .route("/api/sensors/cached", get(list_cached_sensors))
         .route("/api/sensors/:mac", delete(unpair_sensor))
+        .route("/api/sensors/:mac/rename", post(rename_sensor))
+        .route("/api/dongles/:mac/rename", post(rename_dongle))
         .route("/api/scan", get(get_scan_status).post(toggle_scan))
         .route("/api/verify", post(verify_scanned_sensor))
         .route("/api/chime/:mac", post(trigger_chime))
@@ -432,17 +447,22 @@ async fn list_dongles(
 ) -> impl IntoResponse {
     let engines = state.engines.lock().await;
     let manager = state.sensor_manager.lock().unwrap();
+    let names = state.dongle_names.lock().unwrap();
 
     // Group sensors by dongle_mac from the single source of truth (SensorManager)
-    let dongles: Vec<serde_json::Value> = engines.iter().map(|(mac, engine)| {
-        let sensors: Vec<serde_json::Value> = manager.get_sensors().values()
+    let mut dongles: Vec<serde_json::Value> = engines.iter().map(|(mac, engine)| {
+        let mut sensors: Vec<serde_json::Value> = manager.get_sensors().values()
             .filter(|s| s.dongle_mac.as_deref() == Some(mac.as_str()))
             .map(|s| sensor_info_to_json(s))
             .collect();
+        sensors.sort_by_key(|s| {
+            (s["name"].as_str().unwrap_or("").to_string(), s["mac"].as_str().unwrap_or("").to_string())
+        });
         let sensor_count = sensors.len();
 
         serde_json::json!({
             "mac": mac,
+            "name": names.name_of(mac),
             "version": engine.dongle_version(),
             "scanning": engine.is_scanning(),
             "transport": engine.transport_label,
@@ -452,12 +472,18 @@ async fn list_dongles(
             "sensor_count": sensor_count,
         })
     }).collect();
+    dongles.sort_by_key(|d| {
+        (d["name"].as_str().unwrap_or("").to_string(), d["mac"].as_str().unwrap_or("").to_string())
+    });
 
     // Unassociated sensors: dongle_mac is None
-    let unassociated: Vec<serde_json::Value> = manager.get_sensors().values()
+    let mut unassociated: Vec<serde_json::Value> = manager.get_sensors().values()
         .filter(|s| s.dongle_mac.is_none())
         .map(|s| sensor_info_to_json(s))
         .collect();
+    unassociated.sort_by_key(|s| {
+        (s["name"].as_str().unwrap_or("").to_string(), s["mac"].as_str().unwrap_or("").to_string())
+    });
 
     Json(json!({
         "dongles": dongles,
@@ -468,11 +494,17 @@ async fn list_dongles(
 fn sensor_info_to_json(s: &crate::protocol::sensor::WyzeSensor) -> serde_json::Value {
     serde_json::json!({
         "mac": s.mac,
+        "name": s.friendly_name,
         "sensor_type": s.sensor_type.as_str(),
+        "sw_version": s.sw_version,
         "last_seen": s.last_seen,
         "battery": s.battery_pct,
+        "battery_raw": s.battery_raw,
         "signal": s.rssi_dbm,
+        "die_temperature_c": s.die_temperature_c,
+        "event_sequence": s.event_sequence,
         "state": s.state,
+        "dongle_mac": s.dongle_mac,
     })
 }
 
@@ -548,6 +580,61 @@ async fn unpair_sensor(
         }),
     )
         .into_response()
+}
+
+// --- POST /api/sensors/:mac/rename ---
+async fn rename_sensor(
+    Path(mac): Path<String>,
+    State(state): State<Arc<WebState>>,
+    Json(req): Json<RenameRequest>,
+) -> impl IntoResponse {
+    let name = req.name.trim().to_string();
+    if name.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "name must not be empty" }))).into_response();
+    }
+
+    let result = {
+        let mut manager = state.sensor_manager.lock().unwrap();
+        manager.rename_sensor(&mac, &name)
+    };
+
+    match result {
+        Ok(()) => {
+            let _ = state.broadcast_tx.send(());
+            (StatusCode::OK, Json(json!({ "success": true, "name": name }))).into_response()
+        }
+        Err(e) => (StatusCode::NOT_FOUND, Json(json!({ "error": e }))).into_response(),
+    }
+}
+
+// --- POST /api/dongles/:mac/rename ---
+async fn rename_dongle(
+    Path(mac): Path<String>,
+    State(state): State<Arc<WebState>>,
+    Json(req): Json<RenameRequest>,
+) -> impl IntoResponse {
+    let name = req.name.trim().to_string();
+    if name.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "name must not be empty" }))).into_response();
+    }
+
+    let result = {
+        let mut names = state.dongle_names.lock().unwrap();
+        names.set_name(&mac, &name);
+        names.save_to_yaml_atomic(&state.dongle_config_path)
+    };
+
+    match result {
+        Ok(()) => {
+            let _ = state.broadcast_tx.send(());
+            (StatusCode::OK, Json(json!({ "success": true, "name": name }))).into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("could not save dongle name: {}", e) })),
+        )
+            .into_response(),
+    }
 }
 
 // --- GET /api/scan ---
@@ -1192,6 +1279,8 @@ mod tests {
                 "/nonexistent/sensors.yaml".to_string(),
                 "/nonexistent/state.yaml".to_string(),
             ))),
+            dongle_names: Arc::new(std::sync::Mutex::new(DonglesConfig::default())),
+            dongle_config_path: "/nonexistent/dongles.yaml".to_string(),
             broadcast_tx: tokio::sync::broadcast::channel(16).0,
             event_tx,
             dongle_status_tx,
@@ -1340,6 +1429,8 @@ mod tests {
                 "/nonexistent/sensors.yaml".to_string(),
                 "/nonexistent/state.yaml".to_string(),
             ))),
+            dongle_names: Arc::new(std::sync::Mutex::new(DonglesConfig::default())),
+            dongle_config_path: "/nonexistent/dongles.yaml".to_string(),
             broadcast_tx: tokio::sync::broadcast::channel(16).0,
             event_tx,
             dongle_status_tx,
@@ -1461,6 +1552,8 @@ mod tests {
                 "/nonexistent/sensors.yaml".to_string(),
                 "/nonexistent/state.yaml".to_string(),
             ))),
+            dongle_names: Arc::new(std::sync::Mutex::new(DonglesConfig::default())),
+            dongle_config_path: "/nonexistent/dongles.yaml".to_string(),
             broadcast_tx: tokio::sync::broadcast::channel(16).0,
             event_tx: event_tx.clone(),
             dongle_status_tx,

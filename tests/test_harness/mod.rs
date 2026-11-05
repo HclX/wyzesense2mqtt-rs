@@ -115,11 +115,15 @@ impl TestHarness {
         let sm_server = Arc::clone(&sensor_manager);
         let broadcast_server = broadcast_tx.clone();
         let event_tx_server = event_tx.clone();
-        let temp_files = vec![config_path, state_path];
+        let dongle_config_path = std::env::temp_dir()
+            .join(format!("wyze-dongles-{}.yaml", port))
+            .to_string_lossy()
+            .to_string();
+        let temp_files = vec![config_path, state_path, dongle_config_path.clone()];
         tokio::spawn(async move {
             if let Err(e) = start_web_server(
                 engines_server, sm_server, broadcast_server, event_tx_server, port, None,
-                tokio::sync::mpsc::channel(1).0,
+                tokio::sync::mpsc::channel(1).0, dongle_config_path,
             ).await {
                 panic!("Web server failed: {}", e);
             }

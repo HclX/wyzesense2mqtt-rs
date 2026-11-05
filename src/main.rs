@@ -417,7 +417,7 @@ async fn run_daemon(
 
     // Route B: Web REST Control Server (if enabled)
     if config.web.enabled {
-        start_web_server(Arc::clone(&engines), Arc::clone(&sensor_manager), broadcast_tx.clone(), event_tx.clone(), config.web.port, config.bridge.auth_token.clone(), dongle_status_tx.clone()).await?;
+        start_web_server(Arc::clone(&engines), Arc::clone(&sensor_manager), broadcast_tx.clone(), event_tx.clone(), config.web.port, config.bridge.auth_token.clone(), dongle_status_tx.clone(), "config/dongles.yaml".to_string()).await?;
     } else {
         info!("Web Panel is disabled. Running in headless daemon mode.");
         if let Some(handle) = mqtt_gateway_handle {
