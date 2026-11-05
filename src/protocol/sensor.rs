@@ -271,6 +271,28 @@ impl WyzeSensor {
         matches!(self.state, SensorState::Chime)
     }
 
+    /// Restores persisted telemetry state and computes whether the sensor is
+    /// currently online from `last_seen` and `timeout_sec`.
+    fn restore_from_cached(&mut self, cached: &PersistedSensorState, now: u64) {
+        if let Some(b) = cached.battery {
+            self.battery_pct = Some(b);
+        }
+        if let Some(b_raw) = cached.battery_raw {
+            self.battery_raw = Some(b_raw);
+        }
+        if let Some(dt) = cached.die_temperature_c {
+            self.die_temperature_c = Some(dt);
+        }
+        if let Some(seq) = cached.event_sequence {
+            self.event_sequence = Some(seq);
+        }
+        self.rssi_dbm = cached.signal;
+        self.heard = cached.heard.iter().map(|(g, h)| (g.clone(), (h.rssi, h.at))).collect();
+        self.last_seen = cached.last_seen;
+        self.state = cached.state.clone();
+        self.is_online = now.saturating_sub(self.last_seen) <= self.timeout_sec;
+    }
+
     /// Update common metadata (battery, rssi, online status, last_seen) from a telemetry event.
     fn update_common_metadata(&mut self, event: &DongleEvent) {
         match &event.data {
@@ -279,7 +301,6 @@ impl WyzeSensor {
                 return;
             }
             TelemetryData::UnknownEvent(_) => {
-                self.is_online = true;
                 return;
             }
             _ => {}
@@ -751,6 +772,10 @@ impl SensorManager {
         let sensors_config = SensorsConfig::load_from_yaml(&self.config_path).unwrap_or_else(|_| SensorsConfig {
             sensors: HashMap::new(),
         });
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
         let mut count = 0;
 
         for (mac, cached) in &system_state.sensors {
@@ -761,14 +786,6 @@ impl SensorManager {
 
             match WyzeSensor::from_type_str(mac.clone(), &cached.sensor_type, friendly_name) {
                 Ok(mut sensor) => {
-                    if let Some(b) = cached.battery {
-                        sensor.battery_pct = Some(b);
-                    }
-                    sensor.rssi_dbm = cached.signal;
-                    sensor.heard = cached.heard.iter().map(|(g, h)| (g.clone(), (h.rssi, h.at))).collect();
-                    sensor.last_seen = cached.last_seen;
-                    sensor.state = cached.state.clone();
-                    sensor.dongle_mac = cached.dongle_mac.clone();
                     // Load custom timeout if it exists
                     if let Some(m) = metadata {
                         if let Some(t) = m.timeout_sec {
@@ -778,6 +795,8 @@ impl SensorManager {
                             sensor.sw_version = v.clone();
                         }
                     }
+                    sensor.restore_from_cached(cached, now);
+                    sensor.dongle_mac = cached.dongle_mac.clone();
                     self.sensors.insert(mac.clone(), sensor);
                     count += 1;
                 }
@@ -826,6 +845,10 @@ impl SensorManager {
 
         // 2. Load system state cache (config/state.yaml)
         let system_state = SystemState::load_from_yaml(&self.state_path).unwrap_or_default();
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
 
         let mut config_changed = false;
 
@@ -878,22 +901,7 @@ impl SensorManager {
 
                     // Restore full state from system state cache if available
                     if let Some(cached) = system_state.sensors.get(mac) {
-                        if let Some(b) = cached.battery {
-                            sensor.battery_pct = Some(b);
-                        }
-                        if let Some(b_raw) = cached.battery_raw {
-                            sensor.battery_raw = Some(b_raw);
-                        }
-                        if let Some(dt) = cached.die_temperature_c {
-                            sensor.die_temperature_c = Some(dt);
-                        }
-                        if let Some(seq) = cached.event_sequence {
-                            sensor.event_sequence = Some(seq);
-                        }
-                        sensor.rssi_dbm = cached.signal;
-                    sensor.heard = cached.heard.iter().map(|(g, h)| (g.clone(), (h.rssi, h.at))).collect();
-                        sensor.last_seen = cached.last_seen;
-                        sensor.state = cached.state.clone(); // Full type-specific state restored!
+                        sensor.restore_from_cached(cached, now);
                     }
                     self.sensors.insert(mac.clone(), sensor);
                 }
@@ -921,6 +929,10 @@ impl SensorManager {
     #[allow(dead_code)]
     pub fn load_state_orphans(&mut self) -> Result<usize, Box<dyn std::error::Error>> {
         let system_state = SystemState::load_from_yaml(&self.state_path).unwrap_or_default();
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
         let mut count = 0;
         for (mac, cached) in &system_state.sensors {
             if self.sensors.contains_key(mac) {
@@ -929,13 +941,7 @@ impl SensorManager {
             let friendly_name = format!("Wyze Sense {}", mac);
             match WyzeSensor::from_type_str(mac.clone(), &cached.sensor_type, friendly_name) {
                 Ok(mut sensor) => {
-                    if let Some(b) = cached.battery {
-                        sensor.battery_pct = Some(b);
-                    }
-                    sensor.rssi_dbm = cached.signal;
-                    sensor.heard = cached.heard.iter().map(|(g, h)| (g.clone(), (h.rssi, h.at))).collect();
-                    sensor.last_seen = cached.last_seen;
-                    sensor.state = cached.state.clone();
+                    sensor.restore_from_cached(cached, now);
                     self.sensors.insert(mac.clone(), sensor);
                     count += 1;
                 }
@@ -1432,6 +1438,89 @@ mod tests {
         assert_eq!(config.sensors["AABBCCDD"].name, "Front Door");
 
         assert!(manager.rename_sensor("NOPE0000", "x").is_err());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn timed_out_sensor_loads_offline_and_stays_offline_on_discovery_event() {
+        let dir = std::env::temp_dir().join(format!("wyze-offline-{}", std::process::id()));
+        let config_path = dir.join("sensors.yaml");
+        let state_path = dir.join("state.yaml");
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        let mut state = SystemState::default();
+        state.sensors.insert(
+            "77C6853E".to_string(),
+            PersistedSensorState {
+                mac: "77C6853E".to_string(),
+                sensor_type: "leak".to_string(),
+                last_seen: now.saturating_sub(104 * 86400),
+                battery: Some(80),
+                battery_raw: Some(92),
+                signal: -73,
+                die_temperature_c: Some(21),
+                event_sequence: Some(42),
+                state: SensorState::Leak { is_wet: false, probe_is_wet: None },
+                dongle_mac: Some("778B5F63".to_string()),
+                heard: Default::default(),
+            },
+        );
+        state.sensors.insert(
+            "77C685E4".to_string(),
+            PersistedSensorState {
+                mac: "77C685E4".to_string(),
+                sensor_type: "leak".to_string(),
+                last_seen: now.saturating_sub(60),
+                battery: Some(90),
+                battery_raw: None,
+                signal: -74,
+                die_temperature_c: None,
+                event_sequence: None,
+                state: SensorState::Leak { is_wet: false, probe_is_wet: None },
+                dongle_mac: Some("778B5F63".to_string()),
+                heard: Default::default(),
+            },
+        );
+        state.save_to_yaml_atomic(&state_path).unwrap();
+
+        let mut manager = SensorManager::new(
+            config_path.to_string_lossy().to_string(),
+            state_path.to_string_lossy().to_string(),
+        );
+        manager.load_all_from_state().unwrap();
+
+        let dead = &manager.get_sensors()["77C6853E"];
+        assert!(!dead.is_online, "104-day-old sensor should load as offline");
+        assert_eq!(dead.battery_raw, Some(92));
+        assert_eq!(dead.die_temperature_c, Some(21));
+        assert_eq!(dead.event_sequence, Some(42));
+        assert_eq!(dead.get_state_payload()["online"], json!(false));
+
+        let live = &manager.get_sensors()["77C685E4"];
+        assert!(live.is_online, "recently seen sensor should load as online");
+
+        // Startup NVRAM load + synthetic UnknownEvent discovery trigger must keep dead sensor offline.
+        manager
+            .load_sensors(&["77C6853E".to_string(), "77C685E4".to_string()])
+            .unwrap();
+        let discovery_evt = DongleEvent {
+            mac: "77C6853E".to_string(),
+            timestamp: SystemTime::now(),
+            sensor_type: SensorType::LeakV2,
+            event_type: 0xFF,
+            data: TelemetryData::UnknownEvent(Vec::new()),
+            dongle_mac: None,
+            overheard_short: None,
+        };
+        assert!(manager.dispatch_event(&discovery_evt));
+        assert!(
+            !manager.get_sensors()["77C6853E"].is_online,
+            "synthetic UnknownEvent must not mark a timed-out sensor online"
+        );
+
         let _ = std::fs::remove_dir_all(dir);
     }
 }
