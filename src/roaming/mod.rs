@@ -1158,6 +1158,7 @@ impl Roaming {
             "flags_enabled": format!("{:08X}", g.enabled),
             "flags_configured": format!("{:08X}", g.wanted),
             "roaming": g.can_roam() && st.is_roaming(g.identity),
+            "network": g.identity.to_string(),
         }))
     }
 

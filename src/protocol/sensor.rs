@@ -961,6 +961,37 @@ impl SensorManager {
         Ok(())
     }
 
+    /// Renames a sensor in memory and persists the new name to sensors.yaml.
+    pub fn rename_sensor(&mut self, mac: &str, name: &str) -> Result<(), String> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err("name must not be empty".to_string());
+        }
+
+        let timeout_sec = {
+            let sensor = self
+                .sensors
+                .get_mut(mac)
+                .ok_or_else(|| format!("sensor {} not found", mac))?;
+            sensor.friendly_name = name.to_string();
+            sensor.timeout_sec
+        };
+
+        let mut config =
+            SensorsConfig::load_from_yaml(&self.config_path).map_err(|e| e.to_string())?;
+        let metadata = config.sensors.entry(mac.to_string()).or_insert_with(|| SensorMetadata {
+            name: name.to_string(),
+            r#type: None,
+            timeout_sec: Some(timeout_sec),
+            sw_version: None,
+        });
+        metadata.name = name.to_string();
+        config
+            .save_to_yaml_atomic(&self.config_path)
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
     /// Deletes a sensor from both configuration files and in-memory registry
     pub fn delete_and_persist_sensor(&mut self, mac: &str) -> Result<(), Box<dyn std::error::Error>> {
         // 1. Remove from memory
@@ -1243,5 +1274,28 @@ mod tests {
     #[test]
     fn test_default_state_for_unknown_type_returns_none() {
         assert!(WyzeSensor::default_state_for_type(SensorType::Unknown(0)).is_none());
+    }
+
+    #[test]
+    fn rename_updates_memory_and_sensors_yaml() {
+        let dir = std::env::temp_dir().join(format!("wyze-rename-{}", std::process::id()));
+        let config_path = dir.join("sensors.yaml");
+        let state_path = dir.join("state.yaml");
+        let mut manager = SensorManager::new(
+            config_path.to_string_lossy().to_string(),
+            state_path.to_string_lossy().to_string(),
+        );
+        manager
+            .get_sensors_mut()
+            .insert("AABBCCDD".to_string(), make_sensor(SensorType::ContactV1));
+
+        manager.rename_sensor("AABBCCDD", "Front Door").unwrap();
+        assert_eq!(manager.get_sensors()["AABBCCDD"].friendly_name, "Front Door");
+
+        let config = SensorsConfig::load_from_yaml(&config_path).unwrap();
+        assert_eq!(config.sensors["AABBCCDD"].name, "Front Door");
+
+        assert!(manager.rename_sensor("NOPE0000", "x").is_err());
+        let _ = std::fs::remove_dir_all(dir);
     }
 }
