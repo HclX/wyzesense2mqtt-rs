@@ -38,6 +38,15 @@ struct World {
     raw_tx: mpsc::Sender<DongleEvent>,
     events: mpsc::Receiver<DongleEvent>,
     exits: Vec<tokio::sync::oneshot::Sender<()>>,
+    temp_files: Vec<String>,
+}
+
+impl Drop for World {
+    fn drop(&mut self) {
+        for path in &self.temp_files {
+            let _ = std::fs::remove_file(path);
+        }
+    }
 }
 
 impl World {
@@ -45,9 +54,11 @@ impl World {
         let _ = tracing_subscriber::fmt().with_max_level(tracing::Level::DEBUG).try_init();
         let id = format!("{}_{:?}", std::process::id(), std::time::SystemTime::now());
         let id: String = id.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
+        let config_path = format!("/tmp/roam_{}_config.yaml", id);
+        let state_path = format!("/tmp/roam_{}_state.yaml", id);
         let sensors = Arc::new(Mutex::new(SensorManager::new(
-            format!("/tmp/roam_{}_config.yaml", id),
-            format!("/tmp/roam_{}_state.yaml", id),
+            config_path.clone(),
+            state_path.clone(),
         )));
         let engines: EnginesMap = Arc::new(tokio::sync::Mutex::new(Default::default()));
         let (broadcast_tx, _) = tokio::sync::broadcast::channel(16);
@@ -55,7 +66,7 @@ impl World {
         let (raw_tx, raw_rx) = mpsc::channel(128);
         let (event_tx, events) = mpsc::channel(128);
         roaming.spawn(raw_rx, event_tx);
-        World { engines, sensors, roaming, raw_tx, events, exits: Vec::new() }
+        World { engines, sensors, roaming, raw_tx, events, exits: Vec::new(), temp_files: vec![config_path, state_path] }
     }
 
     /// Connects a dongle the way the daemon does: handshake, sensor list,

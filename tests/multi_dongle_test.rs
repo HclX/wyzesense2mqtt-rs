@@ -1,6 +1,5 @@
 use std::fs;
 use std::path::PathBuf;
-use std::sync::Mutex;
 
 use wyzesense2mqtt_rs::config::state::{HeardBy, SystemState, PersistedSensorState};
 use wyzesense2mqtt_rs::protocol::sensor::{SensorManager, SensorState, WyzeSensor};
