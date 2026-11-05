@@ -483,8 +483,13 @@ async fn run_daemon(
                     for mut engine in engine_clones {
                         let _ = engine.delete_sensor(&sensor_mac).await;
                     }
-                    let mut manager = sensor_manager_cmd_clone.lock().unwrap();
-                    let _ = manager.delete_and_persist_sensor(&sensor_mac);
+                    {
+                        let mut manager = sensor_manager_cmd_clone.lock().unwrap();
+                        let _ = manager.delete_and_persist_sensor(&sensor_mac);
+                    }
+                    if let Some(r) = &roaming_cmd {
+                        r.remove_sensor(&sensor_mac);
+                    }
                 }
                 GatewayCommand::Reload => {
                     info!("Reload command received via gateway.");

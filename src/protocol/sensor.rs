@@ -107,7 +107,8 @@ pub fn report_rssi(data: &TelemetryData) -> Option<i8> {
         | TelemetryData::Alarm { rssi, .. }
         | TelemetryData::AlarmData { rssi, .. }
         | TelemetryData::Climate { rssi, .. }
-        | TelemetryData::Leak { rssi, .. } => Some(*rssi),
+        | TelemetryData::Leak { rssi, .. }
+        | TelemetryData::Keypad { rssi, .. } => Some(*rssi),
         _ => None,
     }
 }
@@ -737,6 +738,9 @@ pub struct SensorManager {
     /// Invalid MACs already warned about, so a sensor reporting one every few
     /// minutes doesn't fill the log.
     warned_macs: std::collections::HashSet<String>,
+    /// Authoritative roaming owner per sensor MAC when managed by `Roaming`.
+    /// Prevents `best_recent` from overriding the roaming coordinator's owner.
+    roaming_owners: HashMap<String, String>,
 }
 
 /// Whether `mac` can name a sensor: 8 printable ASCII characters, as Wyze
@@ -754,7 +758,27 @@ impl SensorManager {
             config_path,
             state_path,
             warned_macs: Default::default(),
+            roaming_owners: Default::default(),
         }
+    }
+
+    /// Records that `gateway` heard `mac` at `rssi` (`at` in UNIX seconds), and
+    /// marks `owner` as the authoritative roaming owner for `mac`.
+    pub fn record_roaming_heard(&mut self, mac: &str, gateway: &str, rssi: Option<i8>, at: u64, owner: &str) {
+        self.roaming_owners.insert(mac.to_string(), owner.to_string());
+        if let (Some(rssi), Some(sensor)) = (rssi, self.sensors.get_mut(mac)) {
+            sensor.heard.insert(gateway.to_string(), (rssi, at));
+        }
+    }
+
+    /// Updates the authoritative roaming owner for `mac`.
+    pub fn set_roaming_owner(&mut self, mac: &str, owner: &str) {
+        self.roaming_owners.insert(mac.to_string(), owner.to_string());
+    }
+
+    /// Clears the roaming owner for `mac` when roaming no longer manages it.
+    pub fn clear_roaming_owner(&mut self, mac: &str) {
+        self.roaming_owners.remove(mac);
     }
 
     pub fn get_sensors(&self) -> &HashMap<String, WyzeSensor> {
@@ -1035,6 +1059,11 @@ impl SensorManager {
             custom_timeout = Some(sensor.timeout_sec);
         }
 
+        if let Some(prev) = self.sensors.get(&mac) {
+            sensor.heard = prev.heard.clone();
+            sensor.dongle_mac = prev.dongle_mac.clone();
+        }
+
         // 4. Update metadata in config (name + timeout only, no type)
         config.sensors.insert(mac.clone(), SensorMetadata {
             name,
@@ -1087,6 +1116,7 @@ impl SensorManager {
     pub fn delete_and_persist_sensor(&mut self, mac: &str) -> Result<(), Box<dyn std::error::Error>> {
         // 1. Remove from memory
         self.sensors.remove(mac);
+        self.roaming_owners.remove(mac);
 
         // 2. Remove from sensors.yaml
         if let Ok(mut config) = SensorsConfig::load_from_yaml(&self.config_path) {
@@ -1142,16 +1172,29 @@ impl SensorManager {
         }
 
         // Associate sensor with its source dongle (if the event carries dongle identity)
+        let roaming_owner = self.roaming_owners.get(&event.mac).cloned();
         if let Some(ref dmac) = event.dongle_mac {
             if let Some(sensor) = self.sensors.get_mut(&event.mac) {
                 let at = event.timestamp.duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs();
-                if let Some(rssi) = report_rssi(&event.data) {
-                    sensor.heard.insert(dmac.clone(), (rssi, at));
-                }
-                // Gateways sharing a network each pass the report on: the sensor
-                // belongs with the one that hears it best lately, not with
-                // whichever copy came last.
-                let home = best_recent(&sensor.heard, at).unwrap_or_else(|| dmac.clone());
+                let home = if let Some(owner) = roaming_owner {
+                    // Roaming already records `heard` per receiving gateway and
+                    // decides the owner; only populate `heard` here if the sensor
+                    // was just auto-discovered on a direct report.
+                    if event.overheard_short.is_none() && !sensor.heard.contains_key(dmac) {
+                        if let Some(rssi) = report_rssi(&event.data) {
+                            sensor.heard.insert(dmac.clone(), (rssi, at));
+                        }
+                    }
+                    owner
+                } else {
+                    if let Some(rssi) = report_rssi(&event.data) {
+                        sensor.heard.insert(dmac.clone(), (rssi, at));
+                    }
+                    // Gateways sharing a network each pass the report on: the sensor
+                    // belongs with the one that hears it best lately, not with
+                    // whichever copy came last.
+                    best_recent(&sensor.heard, at).unwrap_or_else(|| dmac.clone())
+                };
                 if sensor.dongle_mac.as_ref() != Some(&home) {
                     info!("Associating sensor {} with dongle {}", event.mac, home);
                     sensor.dongle_mac = Some(home);

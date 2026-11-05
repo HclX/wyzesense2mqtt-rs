@@ -336,6 +336,14 @@ impl Tracker {
     pub fn evidence(&self, sensor: &str) -> Evidence {
         self.evidence.get(sensor).cloned().unwrap_or_default()
     }
+
+    pub fn remove(&mut self, sensor: &str) {
+        self.links.remove(sensor);
+        self.seen.retain(|k, _| k.0 != sensor);
+        self.counters.retain(|(mac, _), _| mac != sensor);
+        self.pending.retain(|k, _| k.0 != sensor);
+        self.evidence.remove(sensor);
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -810,6 +818,33 @@ impl Roaming {
         }
     }
 
+    /// Removes a deleted sensor from every gateway's cached table, the owner
+    /// map, the signal/report tracker, and any address conflicts.
+    pub fn remove_sensor(&self, sensor: &str) {
+        let owners = {
+            let mut st = self.state.lock().unwrap();
+            for g in st.gateways.values_mut() {
+                g.table.retain(|s| s.mac != sensor);
+            }
+            st.tracker.remove(sensor);
+            st.last_handover.remove(sensor);
+            st.busy.remove(sensor);
+            st.conflicts.retain(|mac, ((_, held_by, _), _)| mac != sensor && held_by.as_deref() != Some(sensor));
+            st.owners.remove(sensor).map(|_| st.owners.clone())
+        };
+        if let (Some(owners), Some(path)) = (owners, &self.cfg.owners_path) {
+            let tmp = path.with_extension("yaml.tmp");
+            let saved = serde_yaml::to_string(&owners)
+                .map_err(|e| e.to_string())
+                .and_then(|text| std::fs::write(&tmp, text).map_err(|e| e.to_string()))
+                .and_then(|_| std::fs::rename(&tmp, path).map_err(|e| e.to_string()));
+            if let Err(e) = saved {
+                warn!("Roaming: saving sensor owners to {:?} failed: {}", path, e);
+            }
+        }
+        self.sensors.lock().unwrap().clear_roaming_owner(sensor);
+    }
+
     /// Sets the configured flags on a gateway if it does not have them (the
     /// flags this host does not manage are left as they are).
     async fn ensure_flags(&self, gateway: &str) {
@@ -877,10 +912,14 @@ impl Roaming {
             if matches!(evt.data, TelemetryData::Paired { .. }) && st.gateways.contains_key(&gateway) {
                 actions.push(Action::RefreshTable(gateway.clone()));
             }
+            drop(st);
+            self.sensors.lock().unwrap().clear_roaming_owner(&evt.mac);
             return (evt.overheard_short.is_none().then_some(evt), actions);
         };
         if matches!(evt.data, TelemetryData::Paired { .. }) {
             st.tracker.forget_counters(&evt.mac);
+            drop(st);
+            self.sensors.lock().unwrap().set_roaming_owner(&evt.mac, &gateway);
             return (Some(evt), vec![Action::RefreshTable(gateway)]);
         }
 
@@ -948,9 +987,11 @@ impl Roaming {
             }
         };
 
+        let raw_rssi = report_rssi(&evt);
+        let at = evt.timestamp.duration_since(std::time::SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs();
         let mut actions: Vec<Action> = st.settle(now, &self.cfg).into_iter().map(Action::Handover).collect();
         let mut duplicate = false;
-        if let Some(rssi) = report_rssi(&evt) {
+        if let Some(rssi) = raw_rssi {
             st.tracker.record(&evt.mac, &gateway, rssi, now);
             if let Some((key, counter)) = report_key(&evt) {
                 let owner_online = st.gateways.get(&owner).is_some_and(|g| g.online);
@@ -961,18 +1002,23 @@ impl Roaming {
             // Signal strength can be judged at once.
             actions.extend(st.consider(&evt.mac, identity, now, &self.cfg).map(Action::Handover));
         }
-        if duplicate {
-            return (None, actions);
-        }
         // The first copy may come from another gateway (an overheard copy
         // over a faster link): the event speaks for the owner, so it carries
         // the owner's signal, not the far gateway's.
-        if gateway != owner {
+        if !duplicate && gateway != owner {
             if let Some(link) = st.tracker.links(&evt.mac).and_then(|l| l.get(&owner)) {
                 if now.duration_since(link.last) <= self.cfg.stale {
                     set_report_rssi(&mut evt, link.rssi.round() as i8);
                 }
             }
+        }
+        drop(st);
+
+        let sensor_mac = evt.mac.clone();
+        self.sensors.lock().unwrap().record_roaming_heard(&sensor_mac, &gateway, raw_rssi, at, &owner);
+
+        if duplicate {
+            return (None, actions);
         }
         evt.dongle_mac = Some(owner);
         (Some(evt), actions)
@@ -1087,6 +1133,7 @@ impl Roaming {
             }
         }
         let mut mgr = self.sensors.lock().unwrap();
+        mgr.set_roaming_owner(sensor, gateway);
         if let Some(s) = mgr.get_sensors_mut().get_mut(sensor) {
             s.dongle_mac = Some(gateway.to_string());
         }

@@ -596,8 +596,13 @@ async fn unpair_sensor(
     for mut engine in engine_clones {
         let _ = engine.delete_sensor(&mac).await;
     }
-    let mut manager = state.sensor_manager.lock().unwrap();
-    let _ = manager.delete_and_persist_sensor(&mac);
+    {
+        let mut manager = state.sensor_manager.lock().unwrap();
+        let _ = manager.delete_and_persist_sensor(&mac);
+    }
+    if let Some(r) = &state.roaming {
+        r.remove_sensor(&mac);
+    }
     let _ = state.broadcast_tx.send(());
     (
         StatusCode::OK,
@@ -913,10 +918,15 @@ async fn fix_sensors(
                 for mac in sensors {
                     let is_invalid = mac.chars().any(|c| !c.is_alphanumeric()) || invalid_ghosts.contains(&mac.as_str());
                     if is_invalid {
-                        if let Ok(_) = engine.delete_sensor(&mac).await {
+                        if engine.delete_sensor(&mac).await.is_ok() {
                             purged.push(mac.clone());
-                            let mut manager = state.sensor_manager.lock().unwrap();
-                            let _ = manager.delete_and_persist_sensor(&mac);
+                            {
+                                let mut manager = state.sensor_manager.lock().unwrap();
+                                let _ = manager.delete_and_persist_sensor(&mac);
+                            }
+                            if let Some(r) = &state.roaming {
+                                r.remove_sensor(&mac);
+                            }
                         }
                     }
                 }
