@@ -25,6 +25,15 @@ pub struct TestHarness {
     pub sensor_manager: Arc<Mutex<SensorManager>>,
     pub event_rx: mpsc::Receiver<DongleEvent>,
     _exit_handles: Vec<tokio::sync::oneshot::Sender<()>>,
+    temp_files: Vec<String>,
+}
+
+impl Drop for TestHarness {
+    fn drop(&mut self) {
+        for path in &self.temp_files {
+            let _ = std::fs::remove_file(path);
+        }
+    }
 }
 
 impl TestHarness {
@@ -58,8 +67,8 @@ impl TestHarness {
         let state_path = format!("/tmp/test_harness_{}_state.yaml", test_id);
 
         let sensor_manager = Arc::new(Mutex::new(SensorManager::new(
-            config_path,
-            state_path,
+            config_path.clone(),
+            state_path.clone(),
         )));
 
         let mut exit_handles = Vec::new();
@@ -106,6 +115,7 @@ impl TestHarness {
         let sm_server = Arc::clone(&sensor_manager);
         let broadcast_server = broadcast_tx.clone();
         let event_tx_server = event_tx.clone();
+        let temp_files = vec![config_path, state_path];
         tokio::spawn(async move {
             if let Err(e) = start_web_server(
                 engines_server, sm_server, broadcast_server, event_tx_server, port, None,
@@ -125,6 +135,7 @@ impl TestHarness {
             sensor_manager,
             event_rx,
             _exit_handles: exit_handles,
+            temp_files,
         }
     }
 
