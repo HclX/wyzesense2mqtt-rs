@@ -309,6 +309,11 @@ async fn announce_sensor(
     published_discovery: &Arc<tokio::sync::Mutex<HashSet<String>>>,
     force_discovery: bool,
 ) {
+    // A MAC that can't name a sensor (8 NUL bytes, say) would make an invalid
+    // topic, and the broker drops the whole connection over it.
+    if !crate::protocol::sensor::is_valid_mac(mac) {
+        return;
+    }
     // Publish discovery config if not already published (or if forced)
     {
         let mut published = published_discovery.lock().await;
@@ -418,16 +423,19 @@ async fn announce_on_connect(
     }
     info!("Subscribed to MQTT control topics.");
 
-    // Publish dongle discovery for all registered engines
-    {
+    // Publish dongle discovery for all registered engines. The list is copied
+    // first: a publish can wait for a long time while the broker connection is
+    // down, and holding the engines lock that long stalls the dashboard and
+    // every dongle command.
+    let dongles: Vec<(String, String)> = {
         let map = engines.lock().await;
-        for (mac, engine) in map.iter() {
-            let version = engine.dongle_version().unwrap_or("unknown").to_string();
-            if let Err(e) = publish_dongle_discovery(client, topic_root, mac, &version).await {
-                error!("Failed to publish dongle discovery for {}: {}", mac, e);
-            } else {
-                info!("Published HA dongle discovery for {}", mac);
-            }
+        map.iter().map(|(mac, e)| (mac.clone(), e.dongle_version().unwrap_or("unknown").to_string())).collect()
+    };
+    for (mac, version) in dongles {
+        if let Err(e) = publish_dongle_discovery(client, topic_root, &mac, &version).await {
+            error!("Failed to publish dongle discovery for {}: {}", mac, e);
+        } else {
+            info!("Published HA dongle discovery for {}", mac);
         }
     }
 
