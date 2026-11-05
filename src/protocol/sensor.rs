@@ -259,6 +259,9 @@ impl WyzeSensor {
         sensor_type_str: &str,
         friendly_name: String,
     ) -> Result<Self, String> {
+        if !is_valid_mac(&mac) {
+            return Err(format!("{:?} is not a sensor MAC", mac));
+        }
         let sensor_type = sensor_type_str.parse::<SensorType>()?;
         Ok(Self::new(mac, sensor_type, friendly_name))
     }
@@ -710,6 +713,17 @@ pub struct SensorManager {
     sensors: HashMap<String, WyzeSensor>,
     config_path: String,
     state_path: String,
+    /// Invalid MACs already warned about, so a sensor reporting one every few
+    /// minutes doesn't fill the log.
+    warned_macs: std::collections::HashSet<String>,
+}
+
+/// Whether `mac` can name a sensor: 8 printable ASCII characters, as Wyze
+/// MACs are ("77BD514D"). It ends up in MQTT topics, file keys and URLs, so
+/// control characters (a v1 contact's all-zero MAC is 8 NUL bytes), spaces
+/// and MQTT's `/`, `+` and `#` are refused, and so is "00000000".
+pub fn is_valid_mac(mac: &str) -> bool {
+    mac.len() == 8 && mac.bytes().all(|b| b.is_ascii_graphic() && !b"/+#".contains(&b)) && mac != "00000000"
 }
 
 impl SensorManager {
@@ -718,6 +732,7 @@ impl SensorManager {
             sensors: HashMap::new(),
             config_path,
             state_path,
+            warned_macs: Default::default(),
         }
     }
 
@@ -767,7 +782,7 @@ impl SensorManager {
                     count += 1;
                 }
                 Err(e) => {
-                    warn!("Failed to load sensor {} from state: {}", mac, e);
+                    warn!("Failed to load sensor {:?} from state: {}", mac, e);
                 }
             }
         }
@@ -965,6 +980,9 @@ impl SensorManager {
         sensor_type: SensorType,
         version: Option<u8>,
     ) -> Result<(), Box<dyn std::error::Error>> {
+        if !is_valid_mac(&mac) {
+            return Err(format!("{:?} is not a sensor MAC", mac).into());
+        }
         let type_str = sensor_type.as_str();
         
         // 1. Load existing user configuration
@@ -1079,6 +1097,21 @@ impl SensorManager {
     /// Dispatches a telemetry event to the correct sensor in memory and saves updated states.
     /// If the sensor is not yet in our registry, dynamically registers and persists it.
     pub fn dispatch_event(&mut self, event: &DongleEvent) -> bool {
+        if !is_valid_mac(&event.mac) {
+            if self.warned_macs.insert(event.mac.clone()) {
+                if crate::protocol::ows::is_zero_mac(&event.mac) {
+                    warn!(
+                        "Ignoring reports from a sensor with an all-zero MAC{}: a v1 contact that lost its MAC (a stock \
+                         firmware bug). With an OpenWyzeSense gateway, set `openwyzesense.fix_zero_mac: true` and the \
+                         gateway names it by the MAC it was paired with.",
+                        event.dongle_mac.as_deref().map(|d| format!(" via {}", d)).unwrap_or_default()
+                    );
+                } else {
+                    warn!("Ignoring reports from a sensor with an invalid MAC {:?}", event.mac);
+                }
+            }
+            return false;
+        }
         if !self.sensors.contains_key(&event.mac) {
             if matches!(event.data, TelemetryData::Scanned { .. }) || matches!(event.data, TelemetryData::Offline) {
                 return false;
@@ -1193,6 +1226,42 @@ mod tests {
             data: TelemetryData::Alarm { battery: 90, rssi: -40, state, die_temperature_c: 22, event_sequence: 0 },
             dongle_mac: None, overheard_short: None,
         }
+    }
+
+    #[test]
+    fn sensor_macs_must_be_eight_letters_or_digits() {
+        assert!(is_valid_mac("77BD514D"));
+        assert!(!is_valid_mac("\0\0\0\0\0\0\0\0"), "a v1 contact's all-zero MAC");
+        assert!(!is_valid_mac("00000000"));
+        assert!(!is_valid_mac("77BD514"));
+        assert!(!is_valid_mac("77BD/14D"));
+        assert!(WyzeSensor::from_type_str("\0\0\0\0\0\0\0\0".into(), "switch", "x".into()).is_err());
+    }
+
+    #[test]
+    fn a_report_with_an_all_zero_mac_creates_no_sensor() {
+        let dir = std::env::temp_dir().join(format!("w2m_zero_mac_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // A state file from before the fix, holding a zero-MAC sensor.
+        std::fs::write(
+            dir.join("state.yaml"),
+            "sensors:\n  \"\\0\\0\\0\\0\\0\\0\\0\\0\":\n    mac: \"\\0\\0\\0\\0\\0\\0\\0\\0\"\n    sensor_type: switch\n    last_seen: 1\n    signal: -60\n  77BD514D:\n    mac: 77BD514D\n    sensor_type: switch\n    last_seen: 1\n    signal: -60\n",
+        )
+        .unwrap();
+        let mut m = SensorManager::new(
+            dir.join("sensors.yaml").to_string_lossy().to_string(),
+            dir.join("state.yaml").to_string_lossy().to_string(),
+        );
+        assert_eq!(m.load_all_from_state().unwrap(), 1, "the persisted zero-MAC sensor is skipped, the other loaded");
+
+        let mut evt = alarm_event(1);
+        evt.mac = "\0\0\0\0\0\0\0\0".into();
+        evt.sensor_type = SensorType::ContactV1;
+        assert!(!m.dispatch_event(&evt));
+        assert!(!m.dispatch_event(&evt), "and again, without registering it");
+        assert_eq!(m.get_sensors().keys().collect::<Vec<_>>(), vec!["77BD514D"]);
+        assert!(m.register_and_persist_sensor(evt.mac.clone(), SensorType::ContactV1, None).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     fn climate_event(temp: f32, hum: u8) -> DongleEvent {
