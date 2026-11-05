@@ -1,4 +1,5 @@
 use crate::protocol::packet::{Packet, CommandType, PacketPayload, commands};
+use crate::protocol::keypad::KeypadReply;
 use crate::protocol::telemetry::{DongleEvent, SensorType, TelemetryData};
 use crate::transport::GatewayTransport;
 use crate::transport::AsyncTransport;
@@ -672,6 +673,16 @@ impl Engine {
         let pkt = Packet::new_async((commands::CMD_PLAY_CHIME & 0xFF) as u8, payload);
         // Expect 0x5371 response
         let _resp = self.do_command(pkt, commands::CMD_PLAY_CHIME_RESPONSE).await?;
+        Ok(())
+    }
+
+    /// Sends a reply to a keypad request (`0x5353`) and waits for the dongle's ACK.
+    pub async fn send_keypad_reply(&mut self, keypad_mac: &str, reply: KeypadReply) -> Result<()> {
+        let pkt = reply.to_packet(keypad_mac)
+            .map_err(|e| Error::new(ErrorKind::InvalidInput, e))?;
+        debug!("Keypad {}: sending reply {:?}", keypad_mac, reply);
+        // The dongle answers 0x5353 with an ACK only, keyed by the acked command.
+        self.do_command(pkt, commands::CMD_SEND_KEYPAD).await?;
         Ok(())
     }
 }

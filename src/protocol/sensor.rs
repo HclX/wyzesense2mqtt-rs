@@ -3,7 +3,18 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::time::SystemTime;
 use crate::protocol::battery::{BatteryChemistry, raw_to_capacity};
+use crate::protocol::keypad::KeypadEvent;
 use crate::protocol::telemetry::{DongleEvent, SensorType, TelemetryData};
+
+/// Non-retained topic for keypad button presses (HA `event` entity).
+pub fn keypad_event_topic(topic_root: &str, mac: &str) -> String {
+    format!("{}/{}/keypad/event", topic_root, mac)
+}
+
+/// Non-retained topic carrying alarm requests from a keypad, including the PIN.
+pub fn keypad_action_topic(topic_root: &str, mac: &str) -> String {
+    format!("{}/{}/keypad/action", topic_root, mac)
+}
 
 // ---------------------------------------------------------
 // SensorState: Type-specific state enum
@@ -27,6 +38,9 @@ pub enum SensorState {
         humidity: u8,
     },
     Chime,   // Actuator: no inbound telemetry state, receives play_chime commands
+    /// Keypad: only the built-in motion sensor is state. Button presses and
+    /// PINs are events, handled by the gateway and never persisted.
+    Keypad { motion_active: bool },
     Unknown,
 }
 
@@ -86,7 +100,9 @@ fn build_device_metadata(mac: &str, friendly_name: &str, sensor_type: SensorType
     })
 }
 
-// Helper to build common sensor discovery configs (battery, signal)
+// Helper to build common sensor discovery configs (battery, signal).
+// Keypads never report a die temperature, so pass `include_die_temperature:
+// false` to avoid advertising an entity that can never get a value.
 fn push_common_discovery_payloads(
     mac: &str,
     friendly_name: &str,
@@ -94,6 +110,7 @@ fn push_common_discovery_payloads(
     battery_pct: Option<u8>,
     topic_root: &str,
     payloads: &mut Vec<(String, Value)>,
+    include_die_temperature: bool,
 ) {
     let device_id = format!("wyzesense_{}", mac);
     let device = build_device_metadata(mac, friendly_name, sensor_type);
@@ -140,23 +157,25 @@ fn push_common_discovery_payloads(
             })
         ));
 
-        // Die temperature diagnostic entity
-        payloads.push((
-            format!("homeassistant/sensor/{}/die_temperature/config", device_id),
-            json!({
-                "name": "Die Temperature",
-                "state_topic": state_topic,
-                "value_template": "{{ value_json.die_temperature }}",
-                "device_class": "temperature",
-                "unit_of_measurement": "°C",
-                "state_class": "measurement",
-                "unique_id": format!("{}_die_temperature", device_id),
-                "device": device.clone(),
-                "availability": availability.clone(),
-                "availability_mode": "all",
-                "entity_category": "diagnostic",
-            })
-        ));
+        // Die temperature diagnostic entity (keypads have no such byte)
+        if include_die_temperature {
+            payloads.push((
+                format!("homeassistant/sensor/{}/die_temperature/config", device_id),
+                json!({
+                    "name": "Die Temperature",
+                    "state_topic": state_topic,
+                    "value_template": "{{ value_json.die_temperature }}",
+                    "device_class": "temperature",
+                    "unit_of_measurement": "°C",
+                    "state_class": "measurement",
+                    "unique_id": format!("{}_die_temperature", device_id),
+                    "device": device.clone(),
+                    "availability": availability.clone(),
+                    "availability_mode": "all",
+                    "entity_category": "diagnostic",
+                })
+            ));
+        }
     }
 
     payloads.push((
@@ -183,6 +202,8 @@ impl WyzeSensor {
             SensorType::ContactV2 | SensorType::MotionV2 |
             SensorType::LeakV2 | SensorType::ClimateV2 => (3600 * 4, Some(100u8)),
             SensorType::Chime => (3600 * 24, None), // Mains-powered, no battery
+            // 0–155 battery scale, reported per event; heartbeat interval unknown
+            SensorType::Keypad => (3600 * 24, Some(100u8)),
             SensorType::Unknown(_) => (1800, Some(100u8)),
         };
         let state = Self::default_state_for_type(sensor_type).unwrap_or(SensorState::Unknown);
@@ -253,6 +274,8 @@ impl WyzeSensor {
                 (Some(*battery), Some(*rssi), Some(*die_temperature_c), Some(*event_sequence)),
             TelemetryData::Leak { battery, rssi, .. } =>
                 (Some(*battery), Some(*rssi), None, None),
+            TelemetryData::Keypad { battery, rssi, .. } =>
+                (Some(*battery), Some(*rssi), None, None),
             TelemetryData::Scanned { .. } => (Some(100), Some(0), None, None),
             _ => (None, None, None, None),
         };
@@ -317,6 +340,12 @@ impl WyzeSensor {
                 *humidity = *h;
                 Ok(())
             }
+            (SensorState::Keypad { motion_active }, TelemetryData::Keypad { event, .. }) => {
+                if let KeypadEvent::Motion(detected) = event {
+                    *motion_active = *detected;
+                }
+                Ok(())
+            }
             // Chime: accept all events gracefully, nothing to update
             (SensorState::Chime, _) => Ok(()),
             // Common events handled by all sensor types (including Unknown that couldn't be upgraded)
@@ -344,6 +373,8 @@ impl WyzeSensor {
                 Some(SensorState::Climate { temperature: 0.0, humidity: 0 }),
             SensorType::Chime =>
                 Some(SensorState::Chime),
+            SensorType::Keypad =>
+                Some(SensorState::Keypad { motion_active: false }),
             SensorType::Unknown(_) => None,
         }
     }
@@ -401,6 +432,9 @@ impl WyzeSensor {
             }
             SensorState::Chime => {
                 payload["state"] = json!("idle");
+            }
+            SensorState::Keypad { motion_active } => {
+                payload["state"] = json!(if *motion_active { "active" } else { "inactive" });
             }
             SensorState::Unknown => {
                 payload["state"] = json!("unknown");
@@ -474,6 +508,7 @@ impl WyzeSensor {
         push_common_discovery_payloads(
             &self.mac, &self.friendly_name, self.sensor_type, self.battery_pct,
             topic_root, &mut payloads,
+            !matches!(self.sensor_type, SensorType::Keypad),
         );
 
         match &self.state {
@@ -563,6 +598,38 @@ impl WyzeSensor {
                         "device": device,
                         "availability_mode": "all",
                         "json_attributes_topic": state_topic,
+                    })
+                ));
+            }
+            SensorState::Keypad { .. } => {
+                payloads.push((
+                    format!("homeassistant/binary_sensor/{}/state/config", device_id),
+                    json!({
+                        "name": "Motion",
+                        "state_topic": state_topic.clone(),
+                        "value_template": "{{ value_json.state }}",
+                        "device_class": "motion",
+                        "payload_on": "active",
+                        "payload_off": "inactive",
+                        "unique_id": format!("{}_state", device_id),
+                        "device": device.clone(),
+                        "availability": availability.clone(),
+                        "availability_mode": "all",
+                        "json_attributes_topic": state_topic,
+                    })
+                ));
+                // Button presses (never PINs) as an HA event entity
+                payloads.push((
+                    format!("homeassistant/event/{}/button/config", device_id),
+                    json!({
+                        "name": "Button",
+                        "state_topic": keypad_event_topic(topic_root, &self.mac),
+                        "event_types": ["disarm", "arm_home", "arm_away", "panic"],
+                        "unique_id": format!("{}_button", device_id),
+                        "device": device,
+                        "availability": availability,
+                        "availability_mode": "all",
+                        "icon": "mdi:dialpad",
                     })
                 ));
             }
