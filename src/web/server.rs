@@ -1113,6 +1113,7 @@ const HTML_CONTENT: &str = concat!(r##"
                 switch: "Contact v1", switchv2: "Contact v2",
                 motion: "Motion v1", motionv2: "Motion v2",
                 leak: "Leak v2", climate: "Climate v2", chime: "Chime v1",
+                keypad: "Keypad",
             }[t] || (t ? String(t) : "Unknown");
         }
         function typeTag(s) {
@@ -1121,6 +1122,7 @@ const HTML_CONTENT: &str = concat!(r##"
             if (t.includes("motion")) return `<span class="tag border border-purple-900 bg-purple-950/20 text-purple-400">🏃 Motion</span>`;
             if (t.includes("climate")) return `<span class="tag border border-sky-900 bg-sky-950/20 text-sky-400">🌡️ Climate</span>`;
             if (t.includes("leak")) return `<span class="tag border border-blue-900 bg-blue-950/20 text-blue-400">💧 Leak</span>`;
+            if (t.includes("keypad")) return `<span class="tag border border-fuchsia-900 bg-fuchsia-950/20 text-fuchsia-400">⌨️ Keypad</span>`;
             return `<span class="tag border border-slate-800 bg-slate-900 text-slate-300">${esc(s.sensor_type || "unknown")}</span>`;
         }
         function stateTag(s) {
@@ -1130,6 +1132,7 @@ const HTML_CONTENT: &str = concat!(r##"
                 case "Contact": return st.is_open ? `<span class="text-rose-400 font-bold text-xs">Open</span>` : `<span class="text-emerald-400 font-bold text-xs">Closed</span>`;
                 case "Motion": return st.is_active ? `<span class="text-rose-400 font-bold text-xs">Active</span>` : `<span class="text-emerald-400 font-bold text-xs">Clear</span>`;
                 case "Leak": return st.is_wet ? `<span class="text-blue-400 font-bold text-xs">Wet</span>` : `<span class="text-emerald-400 font-bold text-xs">Dry</span>`;
+                case "Keypad": return st.motion_active ? `<span class="text-rose-400 font-bold text-xs">Motion</span>` : `<span class="text-emerald-400 font-bold text-xs">Clear</span>`;
                 case "Climate": {
                     const t = Number(st.temperature);
                     return `<span class="text-cyan-400 font-mono text-xs">${isFinite(t) ? t.toFixed(1) : "—"}°C / ${esc(st.humidity ?? "—")}%</span>`;

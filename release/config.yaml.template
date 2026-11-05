@@ -25,6 +25,14 @@ mqtt:
   self_topic_root: "wyzesense2mqtt"
   hass_topic_root: "homeassistant"
 
+# Keypad Settings
+# The gateway answers keypad requests with the Home Assistant alarm state and
+# forwards arm/disarm requests (with the PIN) to Home Assistant over MQTT.
+keypad:
+  enabled: true
+  # alarm_state_topic: "alarmo/state"   # default: <self_topic_root>/keypad/alarm_state
+  # response_timeout_ms: 2000
+
 # Diagnostics Structural Logging Level
 # (Options: trace, debug, info, warn, error)
 # Set log_file to enable daily-rotating file logging (default: stdout only)
