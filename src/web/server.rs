@@ -496,7 +496,10 @@ async fn list_dongles(
             .map(|s| with_conflict(sensor_info_to_json(s)))
             .collect();
         sensors.sort_by_key(|s| {
-            (s["name"].as_str().unwrap_or("").to_string(), s["mac"].as_str().unwrap_or("").to_string())
+            (
+                s["name"].as_str().unwrap_or_else(|| s["mac"].as_str().unwrap_or("")).to_ascii_lowercase(),
+                s["mac"].as_str().unwrap_or("").to_string(),
+            )
         });
         let sensor_count = sensors.len();
 
@@ -515,7 +518,10 @@ async fn list_dongles(
         })
     }).collect();
     dongles.sort_by_key(|d| {
-        (d["name"].as_str().unwrap_or("").to_string(), d["mac"].as_str().unwrap_or("").to_string())
+        (
+            d["name"].as_str().unwrap_or_else(|| d["mac"].as_str().unwrap_or("")).to_ascii_lowercase(),
+            d["mac"].as_str().unwrap_or("").to_string(),
+        )
     });
 
     // Unassociated sensors: dongle_mac is None
@@ -524,12 +530,22 @@ async fn list_dongles(
         .map(|s| sensor_info_to_json(s))
         .collect();
     unassociated.sort_by_key(|s| {
-        (s["name"].as_str().unwrap_or("").to_string(), s["mac"].as_str().unwrap_or("").to_string())
+        (
+            s["name"].as_str().unwrap_or_else(|| s["mac"].as_str().unwrap_or("")).to_ascii_lowercase(),
+            s["mac"].as_str().unwrap_or("").to_string(),
+        )
     });
+
+    let dongle_names: std::collections::HashMap<String, String> = names
+        .dongles
+        .iter()
+        .map(|(k, v)| (k.clone(), v.name.clone()))
+        .collect();
 
     Json(json!({
         "dongles": dongles,
         "unassociated_sensors": unassociated,
+        "dongle_names": dongle_names,
     }))
 }
 
@@ -1165,6 +1181,8 @@ const HTML_CONTENT: &str = concat!(r##"
         let scanState = {};
         let openSensors = new Set();
         let openDongles = new Set();
+        let gatewaysFolderOpen = false;
+        let sensorsFolderOpen = true;
         let heardExpanded = new Set();
         let hexLogs = {};
         let renameTarget = null;
@@ -1201,12 +1219,22 @@ const HTML_CONTENT: &str = concat!(r##"
             return new Date(ts * 1000).toLocaleString();
         }
 
-        function dongleByMac(mac) { return (donglesData.dongles || []).find(d => d.mac === mac) || null; }
+        function dongleByMac(mac) {
+            if (!mac) return null;
+            const m = String(mac).toUpperCase();
+            return (donglesData.dongles || []).find(d => String(d.mac || "").toUpperCase() === m) || null;
+        }
         function allSensors() {
             return [...(donglesData.dongles || []).flatMap(d => d.sensors || []), ...(donglesData.unassociated_sensors || [])];
         }
         function sensorByMac(mac) { return allSensors().find(s => s.mac === mac) || null; }
-        function dongleName(mac) { const d = dongleByMac(mac); return d?.name || mac; }
+        function dongleName(mac) {
+            if (!mac) return "";
+            const d = dongleByMac(mac);
+            if (d?.name) return d.name;
+            const cfgName = donglesData.dongle_names?.[String(mac).toUpperCase()];
+            return cfgName || mac;
+        }
         function sensorName(mac) { const s = sensorByMac(mac); return s?.name || mac; }
 
         function typeLabel(t) {
@@ -1278,9 +1306,10 @@ const HTML_CONTENT: &str = concat!(r##"
             </div>`;
         }
         function conflictText(c) {
+            const gw = dongleName(c.gateway);
             return c.held_by
-                ? `It uses short address ${c.short}, which ${c.held_by} holds on ${c.gateway}`
-                : `Gateway ${c.gateway} answers it without holding it in its table`;
+                ? `It uses short address ${c.short}, which ${sensorName(c.held_by)} holds on ${gw}`
+                : `Gateway ${gw} answers it without holding it in its table`;
         }
 
         // ===== OTA / firmware state =====
@@ -1330,7 +1359,7 @@ const HTML_CONTENT: &str = concat!(r##"
                 return `<div data-sensor-ota="${emac}" class="mt-3 rounded-xl border border-emerald-900/60 bg-emerald-950/20 px-3 py-2.5">
                     <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
                         <div class="text-xs min-w-0">
-                            <div class="font-semibold text-emerald-400">📶 Updating ${esc(j.board)} to OpenWyzeSense ${esc(j.target)} · gateway ${esc(j.gateway)}</div>
+                            <div class="font-semibold text-emerald-400">📶 Updating ${esc(j.board)} to OpenWyzeSense ${esc(j.target)} · gateway ${esc(dongleName(j.gateway))}</div>
                             <div class="mt-0.5 break-words ${statusCls}">${statusText}</div>
                         </div>
                         ${btn}
@@ -1364,10 +1393,12 @@ const HTML_CONTENT: &str = concat!(r##"
                 const hidden = !open && i >= 3;
                 const owner = s.dongle_mac === h.mac;
                 const cls = sigText(h.rssi).cls;
+                const hName = dongleName(h.mac);
+                const hNamed = hName && hName !== h.mac;
                 return `<div data-heard-extra="${emac}" class="${hidden ? 'hidden ' : ''}flex items-center justify-between gap-2 rounded-lg border ${owner ? 'border-teal-800/60 bg-teal-950/20' : 'border-slate-800 bg-slate-900/40'} px-3 py-1.5 text-xs">
                     <div class="flex items-center gap-2 min-w-0">
                         <span class="w-1.5 h-1.5 rounded-full ${owner ? 'bg-teal-400' : 'bg-slate-600'} shrink-0"></span>
-                        <span class="font-mono text-slate-300 truncate">${esc(h.mac)}</span>
+                        <span class="${hNamed ? 'font-semibold text-slate-200' : 'font-mono text-slate-300'} truncate" title="${esc(h.mac)}">${esc(hName)}</span>
                         ${owner ? '<span class="tag border border-teal-900 bg-teal-950/30 text-teal-400">owner</span>' : (h.rssi === best ? '<span class="tag border border-emerald-900 bg-emerald-950/20 text-emerald-400">best</span>' : '')}
                     </div>
                     <div class="flex items-center gap-2 shrink-0">
@@ -1399,6 +1430,12 @@ const HTML_CONTENT: &str = concat!(r##"
         // ===== Sensor detail =====
         function detailCard(s, d) {
             const gatewayMac = d?.mac || s.dongle_mac || null;
+            const gatewayLabel = gatewayMac ? (d?.name || dongleName(gatewayMac)) : null;
+            const gatewayNamed = gatewayMac && gatewayLabel && gatewayLabel !== gatewayMac;
+            const gatewayValue = gatewayLabel
+                ? `<span class="${gatewayNamed ? 'font-semibold text-slate-200' : 'font-mono'}">${esc(gatewayLabel)}</span>`
+                : "—";
+            const gatewaySub = gatewayNamed ? `<span class="font-mono">${esc(gatewayMac)}</span>` : null;
             const volts = s.battery_raw != null ? (s.battery_raw / 32).toFixed(2) + " V" : null;
             const conflict = s.address_conflict;
             const emac = esc(s.mac);
@@ -1414,7 +1451,7 @@ const HTML_CONTENT: &str = concat!(r##"
                     ${detailCell("Sensor type", esc(typeLabel(s.sensor_type)))}
                     ${detailCell("Firmware", esc(s.sw_version || "Unknown"))}
                     ${detailCell("MAC", `<span class="font-mono">${emac}</span>`)}
-                    ${detailCell("Gateway", `<span class="font-mono">${esc(gatewayMac || "—")}</span>`)}
+                    ${detailCell("Gateway", gatewayValue, gatewaySub)}
                     ${detailCell("Last seen", esc(absSeen(s.last_seen)), esc(relSeen(s.last_seen)))}
                     ${detailCell("Signal", signalInline(s.signal), sigText(s.signal).label)}
                     ${detailCell("Battery", s.battery == null ? `${batteryIcon(null)} External power` : batteryTag(s.battery), volts)}
@@ -1441,12 +1478,16 @@ const HTML_CONTENT: &str = concat!(r##"
                 : '';
         }
         function gatewayTag(s, d) {
-            if (!d) {
-                const mac = s.dongle_mac ? ` (${esc(s.dongle_mac)})` : '';
-                return `<span class="tag border border-slate-700 bg-slate-900/60 text-slate-400">📦 Unassociated${mac}</span>`;
+            const mac = d?.mac || s.dongle_mac || null;
+            if (!d && !mac) {
+                return `<span class="tag border border-slate-700 bg-slate-900/60 text-slate-400">📦 Unassociated</span>`;
             }
-            const label = d.name || d.mac;
-            return `<span class="tag border border-slate-800 bg-slate-950/60 text-slate-300" title="${esc(d.mac)}">🕹️ ${esc(label)}</span>`;
+            const label = d?.name || dongleName(mac);
+            if (!d) {
+                return `<span class="tag border border-slate-700 bg-slate-900/60 text-slate-400" title="${esc(mac)}">📦 ${esc(label)}</span>`;
+            }
+            const title = label !== mac ? `${label} (${mac})` : mac;
+            return `<span class="tag border border-slate-800 bg-slate-950/60 text-slate-300" title="${esc(title)}">🕹️ ${esc(label)}</span>`;
         }
 
         // ===== Sensor sorting =====
@@ -1454,7 +1495,8 @@ const HTML_CONTENT: &str = concat!(r##"
             return String(s.name || s.mac || "").toLowerCase();
         }
         function sensorGatewayLabel(s, d) {
-            return String(d ? (d.name || d.mac) : (s.dongle_mac || "unassociated")).toLowerCase();
+            const mac = d?.mac || s.dongle_mac || null;
+            return String(d?.name || (mac ? dongleName(mac) : "unassociated")).toLowerCase();
         }
         function sensorStateRank(s) {
             const st = s.state;
@@ -1588,7 +1630,7 @@ const HTML_CONTENT: &str = concat!(r##"
                 const arrow = active ? (sensorSort.dir === "asc" ? " ▲" : " ▼") : "";
                 return `<th onclick="clickSensorSort('${c.key}')" class="py-1.5 px-2 cursor-pointer select-none hover:text-slate-300 transition ${active ? 'text-teal-400 font-bold' : ''}">${c.label}${arrow}</th>`;
             }).join("");
-            const sortControls = `<div class="flex items-center gap-1.5 text-xs">
+            const sortControls = `<div class="flex items-center gap-1.5 text-xs" onclick="event.stopPropagation()">
                 <span class="text-slate-500">Sort:</span>
                 <select onchange="changeSensorSortKey(this.value)" class="bg-slate-950 border border-slate-800 text-slate-200 text-xs font-semibold rounded-lg px-2.5 py-1 focus:outline-none focus:border-teal-500">
                     ${SORT_COLS.map(c => `<option value="${c.key}" ${sensorSort.key === c.key ? 'selected' : ''}>${c.label}</option>`).join("")}
@@ -1608,15 +1650,26 @@ const HTML_CONTENT: &str = concat!(r##"
                 </table>
                 <div class="sm:hidden">${items.map(({s, d}) => mobileCard(s, d)).join("")}</div>`;
             return `<div class="bg-slate-900 rounded-2xl border border-slate-800 shadow-xl overflow-hidden">
-                <div class="px-4 sm:px-5 py-3 flex flex-wrap items-center justify-between gap-2 border-b border-slate-800/60">
-                    <div class="flex items-center gap-2">
+                <div class="px-4 sm:px-5 py-3 flex flex-wrap items-center justify-between gap-2 cursor-pointer hover:bg-slate-800/40 transition" onclick="toggleSensorsFolder()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleSensorsFolder()}" tabindex="0">
+                    <div class="flex items-center gap-2.5">
+                        <span id="sensors-folder-chev" class="chevron text-slate-500 text-[10px] shrink-0${sensorsFolderOpen ? ' open' : ''}">▶</span>
                         <span class="font-bold text-sm text-slate-200">📡 Sensors</span>
                         <span class="tag border border-slate-800 text-slate-400">${items.length}</span>
                     </div>
                     ${sortControls}
                 </div>
-                <div class="px-2 py-1">${body}</div>
+                <div id="sensors-folder-body" class="dongle-detail${sensorsFolderOpen ? ' open' : ''}">
+                    <div class="dongle-detail-inner">
+                        <div class="border-t border-slate-800/60 px-2 py-1">${body}</div>
+                    </div>
+                </div>
             </div>`;
+        }
+
+        function toggleSensorsFolder() {
+            sensorsFolderOpen = !sensorsFolderOpen;
+            document.getElementById("sensors-folder-body")?.classList.toggle("open", sensorsFolderOpen);
+            document.getElementById("sensors-folder-chev")?.classList.toggle("open", sensorsFolderOpen);
         }
 
         function toggleSensor(mac) {
@@ -1751,7 +1804,7 @@ const HTML_CONTENT: &str = concat!(r##"
             const tr = d.transport === "bridge"
                 ? `<span class="tag border border-violet-900 bg-violet-950/20 text-violet-400">🌐 Bridge</span><span class="text-xs text-slate-500 font-mono ml-1">${esc(d.remote_addr || "?")}</span>`
                 : `<span class="tag border border-teal-900 bg-teal-950/20 text-teal-400">🔌 Local</span><span class="text-xs text-slate-500 font-mono ml-1">${esc(d.device_path || "?")}</span>`;
-            return `<div class="bg-slate-900 rounded-2xl border border-slate-800 shadow-xl overflow-hidden">
+            return `<div class="border-t border-slate-800/60 first:border-t-0">
                 <div class="px-4 sm:px-5 py-3.5 flex items-center gap-3 cursor-pointer hover:bg-slate-800/40 transition" onclick="toggleDongleDetails('${emac}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleDongleDetails('${emac}')}" tabindex="0">
                     <span data-dongle-chev="${emac}" class="chevron text-slate-500 text-[10px] shrink-0${open ? ' open' : ''}">▶</span>
                     ${dot}
@@ -1772,6 +1825,35 @@ const HTML_CONTENT: &str = concat!(r##"
                 </div>
                 <div data-dongle-detail="${emac}" class="dongle-detail${open ? ' open' : ''}"><div class="dongle-detail-inner">${dongleDetails(d)}</div></div>
             </div>`;
+        }
+
+        function gatewaysCard(dongles) {
+            const list = dongles || [];
+            if (!list.length) return '';
+            const anyScanning = list.some(d => d.scanning);
+            const names = list.map(d => esc(d.name || d.mac)).join(", ");
+            return `<div class="bg-slate-900 rounded-2xl border border-slate-800 shadow-xl overflow-hidden">
+                <div class="px-4 sm:px-5 py-3 flex items-center justify-between gap-2 cursor-pointer hover:bg-slate-800/40 transition" onclick="toggleGatewaysFolder()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleGatewaysFolder()}" tabindex="0">
+                    <div class="flex items-center gap-2.5 min-w-0">
+                        <span id="gateways-folder-chev" class="chevron text-slate-500 text-[10px] shrink-0${gatewaysFolderOpen ? ' open' : ''}">▶</span>
+                        <span class="font-bold text-sm text-slate-200">🕹️ Gateways</span>
+                        <span class="tag border border-slate-800 text-slate-400">${list.length}</span>
+                        ${anyScanning ? '<span class="tag border border-amber-900 bg-amber-950/20 text-amber-400">SCANNING</span>' : ''}
+                    </div>
+                    <div class="text-xs text-slate-500 font-mono truncate">${names}</div>
+                </div>
+                <div id="gateways-folder-body" class="dongle-detail${gatewaysFolderOpen ? ' open' : ''}">
+                    <div class="dongle-detail-inner">
+                        <div class="border-t border-slate-800/60">${list.map(dongleCard).join("")}</div>
+                    </div>
+                </div>
+            </div>`;
+        }
+
+        function toggleGatewaysFolder() {
+            gatewaysFolderOpen = !gatewaysFolderOpen;
+            document.getElementById("gateways-folder-body")?.classList.toggle("open", gatewaysFolderOpen);
+            document.getElementById("gateways-folder-chev")?.classList.toggle("open", gatewaysFolderOpen);
         }
 
         function toggleDongleDetails(mac) {
@@ -1981,7 +2063,7 @@ const HTML_CONTENT: &str = concat!(r##"
                 case "failed": body = `<span class="text-rose-400">Failed: ${esc(j.message)}</span>`; buttons = dismiss; break;
             }
             return `<div class="bg-slate-900 rounded-2xl border border-emerald-900 shadow-xl px-5 py-4 mb-4">
-                <div class="font-bold text-sm text-emerald-400 break-words">🔧 ${what} · dongle ${esc(j.dongle)}</div>
+                <div class="font-bold text-sm text-emerald-400 break-words">🔧 ${what} · dongle ${esc(dongleName(j.dongle))}</div>
                 <div class="text-xs text-slate-400 mt-1 break-words">${body}</div>${bar}
                 ${buttons ? `<div class="flex flex-wrap gap-2 mt-3">${buttons}</div>` : ""}
             </div>`;
@@ -2014,7 +2096,7 @@ const HTML_CONTENT: &str = concat!(r##"
                 return;
             }
             c.innerHTML = fwJobCard()
-                + dongles.map(dongleCard).join("")
+                + gatewaysCard(dongles)
                 + sensorsCard(dongles, orphans);
         }
 
