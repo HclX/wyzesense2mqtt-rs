@@ -402,40 +402,16 @@ async fn run_daemon(
     // Spawn gateway callback command listener task (multi-engine aware)
     let engines_cmd = Arc::clone(&engines);
     let sensor_manager_cmd_clone = Arc::clone(&sensor_manager);
+    let broadcast_tx_cmd = broadcast_tx.clone();
     tokio::spawn(async move {
         while let Some(cmd) = gateway_cmd_rx.recv().await {
-            match cmd {
-                GatewayCommand::Scan { enable, dongle_mac } => {
-                    // Clone engine to avoid holding lock across await
-                    let engine = {
-                        let map = engines_cmd.lock().await;
-                        map.get(&dongle_mac).cloned()
-                    };
-                    if let Some(mut engine) = engine {
-                        let _ = engine.set_scan(enable).await;
-                    } else {
-                        warn!("Scan command for unknown dongle: {}", dongle_mac);
-                    }
-                }
-                GatewayCommand::Delete { sensor_mac, dongle_mac } => {
-                    // Clone engines to avoid holding lock across await
-                    let engine_clones: Vec<Engine> = if let Some(target_mac) = dongle_mac {
-                        let map = engines_cmd.lock().await;
-                        map.get(&target_mac).cloned().into_iter().collect()
-                    } else {
-                        let map = engines_cmd.lock().await;
-                        map.values().cloned().collect()
-                    };
-                    for mut engine in engine_clones {
-                        let _ = engine.delete_sensor(&sensor_mac).await;
-                    }
-                    let mut manager = sensor_manager_cmd_clone.lock().unwrap();
-                    let _ = manager.delete_and_persist_sensor(&sensor_mac);
-                }
-                GatewayCommand::Reload => {
-                    info!("Reload command received via gateway.");
-                }
-            }
+            wyzesense2mqtt_rs::gateway::mqtt::handle_gateway_command(
+                cmd,
+                &engines_cmd,
+                &sensor_manager_cmd_clone,
+                &broadcast_tx_cmd,
+            )
+            .await;
         }
     });
 
