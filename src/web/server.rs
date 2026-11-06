@@ -1588,8 +1588,9 @@ const HTML_CONTENT: &str = concat!(r##"
                 ? `<span class="tag border border-violet-900 bg-violet-950/20 text-violet-400">🌐 Bridge</span><span class="text-xs text-slate-500 font-mono ml-1">${esc(d.remote_addr || "?")}</span>`
                 : `<span class="tag border border-teal-900 bg-teal-950/20 text-teal-400">🔌 Local</span><span class="text-xs text-slate-500 font-mono ml-1">${esc(d.device_path || "?")}</span>`;
             return `<div class="bg-slate-900 rounded-2xl border border-slate-800 shadow-xl overflow-hidden">
-                <div class="px-4 sm:px-5 py-3.5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-0">
+                <div class="px-4 sm:px-5 py-3.5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-0 cursor-pointer hover:bg-slate-800/40 transition" onclick="toggleDongleDetails('${emac}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleDongleDetails('${emac}')}" tabindex="0">
                     <div class="flex items-center gap-3 min-w-0">
+                        <span data-dongle-chev="${emac}" class="chevron text-slate-500 text-[10px] shrink-0${open ? ' open' : ''}">▶</span>
                         ${dot}
                         <div class="min-w-0">
                             <div class="flex items-center gap-2 flex-wrap">
@@ -1606,7 +1607,7 @@ const HTML_CONTENT: &str = concat!(r##"
                             </div>
                         </div>
                     </div>
-                    <button data-dongle-btn="${emac}" onclick="toggleDongleDetails('${emac}')" class="w-full sm:w-auto sm:ml-3 shrink-0 py-1.5 px-4 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-lg border border-slate-700 transition flex items-center justify-center gap-1.5 whitespace-nowrap">${open ? 'ⓘ Hide details' : 'ⓘ Details'}</button>
+                    <button data-dongle-btn="${emac}" onclick="event.stopPropagation();toggleDongleDetails('${emac}')" class="w-full sm:w-auto sm:ml-3 shrink-0 py-1.5 px-4 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-lg border border-slate-700 transition flex items-center justify-center gap-1.5 whitespace-nowrap">${open ? 'ⓘ Hide details' : 'ⓘ Details'}</button>
                 </div>
                 <div data-dongle-detail="${emac}" class="dongle-detail${open ? ' open' : ''}"><div class="dongle-detail-inner">${dongleDetails(d)}</div></div>
                 <div class="border-t border-slate-800/50">
@@ -1633,6 +1634,7 @@ const HTML_CONTENT: &str = concat!(r##"
             if (open) openDongles.add(mac); else openDongles.delete(mac);
             const sel = CSS.escape(mac);
             document.querySelectorAll(`[data-dongle-detail="${sel}"]`).forEach(el => el.classList.toggle('open', open));
+            document.querySelectorAll(`[data-dongle-chev="${sel}"]`).forEach(el => el.classList.toggle('open', open));
             document.querySelectorAll(`[data-dongle-btn="${sel}"]`).forEach(btn => { btn.innerHTML = open ? 'ⓘ Hide details' : 'ⓘ Details'; });
         }
 
