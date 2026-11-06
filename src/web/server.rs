@@ -65,7 +65,8 @@ impl Default for BridgeSettings {
     }
 }
 
-type BridgeWriter = Arc<tokio::sync::Mutex<futures_util::stream::SplitSink<WebSocket, Message>>>;
+type BridgeReader = Arc<tokio::sync::Mutex<crate::transport::WsStream>>;
+type BridgeWriter = Arc<tokio::sync::Mutex<crate::transport::WsSink>>;
 
 #[derive(Serialize, Deserialize)]
 pub struct DongleStateResponse {
@@ -200,11 +201,13 @@ async fn handle_bridge_connection(
     info!("New WebSocket bridge connection from {} (device: {:?})", remote_addr, device_path);
 
     let (writer, reader) = socket.split();
-    let writer: BridgeWriter = Arc::new(tokio::sync::Mutex::new(writer));
+    let reader: BridgeReader = Arc::new(tokio::sync::Mutex::new(Box::new(reader)));
+    let writer: BridgeWriter = Arc::new(tokio::sync::Mutex::new(Box::new(writer)));
     let pongs = Arc::new(AtomicU64::new(0));
     let transport = GatewayTransport::WebSocket {
-        reader: Arc::new(tokio::sync::Mutex::new(reader)),
+        reader: Arc::clone(&reader),
         writer: Arc::clone(&writer),
+        pending: Arc::new(tokio::sync::Mutex::new(std::collections::VecDeque::new())),
         pongs: Arc::clone(&pongs),
     };
 
@@ -226,7 +229,7 @@ async fn handle_bridge_connection(
         drop(exit_tx);
         // Without a close frame the client keeps thinking it is connected and
         // never reconnects for a new handshake.
-        close_bridge(&writer, 1011, &format!("handshake failed: {}", reason)).await;
+        close_bridge(&reader, &writer, 1011, &format!("handshake failed: {}", reason)).await;
         return;
     }
 
@@ -267,7 +270,7 @@ async fn handle_bridge_connection(
         }
         _ = heartbeat(&writer, &pongs, state.bridge.ping_interval, state.bridge.max_missed_pongs) => {
             warn!("Bridge dongle {} missed {} pings, dropping connection", mac, state.bridge.max_missed_pongs);
-            close_bridge(&writer, 1011, "heartbeat timeout").await;
+            close_bridge(&reader, &writer, 1011, "heartbeat timeout").await;
         }
     }
     drop(exit_tx);
@@ -325,7 +328,7 @@ async fn heartbeat(writer: &BridgeWriter, pongs: &AtomicU64, interval: Duration,
 }
 
 /// Sends a close frame so the bridge client knows to reconnect.
-async fn close_bridge(writer: &BridgeWriter, code: u16, reason: &str) {
+async fn close_bridge(reader: &BridgeReader, writer: &BridgeWriter, code: u16, reason: &str) {
     // Close reasons are limited to 123 bytes.
     let mut end = reason.len().min(123);
     while !reason.is_char_boundary(end) {
@@ -338,7 +341,24 @@ async fn close_bridge(writer: &BridgeWriter, code: u16, reason: &str) {
     .await;
     if !matches!(sent, Ok(Ok(()))) {
         debug!("Could not send close frame to bridge client");
+        return;
     }
+    // Keep the socket open briefly until the peer completes the close
+    // handshake; dropping it at once while the peer still has Pong/Close frames
+    // in flight makes the kernel answer with a TCP RST that discards our Close.
+    let (reader, writer) = (Arc::clone(reader), Arc::clone(writer));
+    tokio::spawn(async move {
+        let _ = tokio::time::timeout(Duration::from_secs(1), async {
+            let mut r = reader.lock().await;
+            while let Some(Ok(msg)) = r.next().await {
+                if matches!(msg, Message::Close(_)) {
+                    break;
+                }
+            }
+        })
+        .await;
+        drop(writer);
+    });
 }
 
 /// Injects dummy events for each sensor MAC to trigger initial MQTT discovery & state sync.

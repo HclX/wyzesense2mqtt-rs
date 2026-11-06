@@ -70,6 +70,11 @@ impl ReplayTransport {
         let queue = self.read_queue.lock().unwrap();
         !queue.is_empty()
     }
+
+    /// Number of live clones of this transport handle.
+    pub fn clone_count(&self) -> usize {
+        Arc::strong_count(&self.read_queue)
+    }
 }
 
 #[async_trait]
