@@ -104,6 +104,12 @@ pub struct VerifyRequest {
     pub dongle_mac: String,
 }
 
+#[derive(Serialize, Deserialize, Default)]
+pub struct FixRequest {
+    #[serde(default)]
+    pub dongle_mac: Option<String>,
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct RawPacketRequest {
     pub bytes: Vec<u8>,
@@ -622,15 +628,37 @@ async fn verify_scanned_sensor(
     };
     let sensor_type = payload.sensor_type.parse::<SensorType>().unwrap_or(SensorType::Unknown(0x00));
 
+    // Match the pairing sequence in Engine's auto-verify worker:
+    // 1. Exchange R1 token with the sensor
+    if let Err(e) = engine.get_sensor_r1(&payload.mac).await {
+        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+    }
+    // 2. Disable scan mode before committing verification
+    let _ = engine.set_scan(false).await;
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+
+    // 3. Commit sensor verification to NVRAM and emit Paired event
     match engine.verify_sensor(&payload.mac, sensor_type).await {
-        Ok(_) => (
-            StatusCode::OK,
-            Json(SuccessResponse {
-                success: true,
-                message: format!("Sensor {} verified successfully", payload.mac),
-            }),
-        )
-            .into_response(),
+        Ok(_) => {
+            let paired_evt = crate::protocol::telemetry::DongleEvent {
+                mac: payload.mac.clone(),
+                timestamp: std::time::SystemTime::now(),
+                sensor_type,
+                event_type: 0xFE,
+                data: crate::protocol::telemetry::TelemetryData::Paired { version: 0 },
+                dongle_mac: Some(payload.dongle_mac.clone()),
+            };
+            let _ = state.event_tx.send(paired_evt).await;
+            let _ = state.broadcast_tx.send(());
+            (
+                StatusCode::OK,
+                Json(SuccessResponse {
+                    success: true,
+                    message: format!("Sensor {} verified successfully", payload.mac),
+                }),
+            )
+                .into_response()
+        }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
@@ -661,11 +689,38 @@ async fn trigger_chime(
 // --- POST /api/fix ---
 async fn fix_sensors(
     State(state): State<Arc<WebState>>,
+    body: axum::body::Bytes,
 ) -> impl IntoResponse {
-    // Clone engines to avoid holding lock across await
+    let req: FixRequest = if body.iter().all(|b| b.is_ascii_whitespace()) {
+        FixRequest::default()
+    } else {
+        match serde_json::from_slice(&body) {
+            Ok(r) => r,
+            Err(e) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({ "error": e.to_string() })),
+                )
+                    .into_response();
+            }
+        }
+    };
+    // Clone targeted engine (or all engines when dongle_mac is omitted) to avoid holding lock across await
     let mut engine_clones: Vec<Engine> = {
         let engines = state.engines.lock().await;
-        engines.values().cloned().collect()
+        match req.dongle_mac.as_deref() {
+            Some(mac) if !mac.is_empty() => match engines.get(mac) {
+                Some(e) => vec![e.clone()],
+                None => {
+                    return (
+                        StatusCode::NOT_FOUND,
+                        Json(json!({ "error": format!("Dongle {} not found", mac) })),
+                    )
+                        .into_response();
+                }
+            },
+            _ => engines.values().cloned().collect(),
+        }
     };
     let mut purged = Vec::new();
     let invalid_ghosts = ["00000000", "\0\0\0\0\0\0\0\0"];
@@ -1118,7 +1173,7 @@ const HTML_CONTENT: &str = concat!(r##"
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::packet::commands;
+    use crate::protocol::packet::{commands, PacketPayload};
     use crate::transport::AsyncTransport;
     use crate::transport::replay::ReplayTransport;
     use crate::transport::virtual_dongle::VirtualDongle;
@@ -1323,5 +1378,144 @@ mod tests {
         .expect("ACK-only command via /api/raw must not time out")
         .into_response();
         assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    fn parse_written_commands(bytes: &[u8]) -> Vec<u16> {
+        let mut cmds = Vec::new();
+        let mut slice = bytes;
+        while !slice.is_empty() {
+            match Packet::parse(slice) {
+                Ok((pkt, consumed)) => {
+                    if !matches!(pkt.payload, PacketPayload::Ack(_)) {
+                        cmds.push(pkt.cmd());
+                    }
+                    slice = &slice[consumed..];
+                }
+                Err(_) => break,
+            }
+        }
+        cmds
+    }
+
+    #[tokio::test]
+    async fn api_fix_targets_requested_dongle_only() {
+        let (_client, state, _status_rx) = start_server(fast_settings()).await;
+
+        let d1 = VirtualDongle::new("DONGLE01", "V1.0").with_sensors(vec!["00000000".into()]);
+        let d2 = VirtualDongle::new("DONGLE02", "V1.0").with_sensors(vec!["00000000".into()]);
+
+        let (tx1, _) = mpsc::channel(16);
+        let mut e1 = Engine::new(d1.transport(), tx1);
+        let _exit1 = e1.start();
+        e1.initialize_handshake().await.unwrap();
+
+        let (tx2, _) = mpsc::channel(16);
+        let mut e2 = Engine::new(d2.transport(), tx2);
+        let _exit2 = e2.start();
+        e2.initialize_handshake().await.unwrap();
+
+        d1.replay_transport().clear_written();
+        d2.replay_transport().clear_written();
+
+        {
+            let mut engines = state.engines.lock().await;
+            engines.insert("DONGLE01".into(), e1);
+            engines.insert("DONGLE02".into(), e2);
+        }
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = router(Arc::clone(&state)).into_make_service_with_connect_info::<SocketAddr>();
+        tokio::spawn(async move { axum::serve(listener, app).await });
+
+        let http = reqwest::Client::new();
+        let resp = http
+            .post(format!("http://{}/api/fix", addr))
+            .json(&serde_json::json!({ "dongle_mac": "DONGLE01" }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let cmds1 = parse_written_commands(&d1.replay_transport().get_written());
+        let cmds2 = parse_written_commands(&d2.replay_transport().get_written());
+        assert!(
+            cmds1.contains(&commands::CMD_DELETE_SENSOR),
+            "expected DONGLE01 to purge 00000000, got commands: {:04X?}",
+            cmds1
+        );
+        assert!(
+            cmds2.is_empty(),
+            "expected DONGLE02 not to be touched when dongle_mac=DONGLE01, got commands: {:04X?}",
+            cmds2
+        );
+    }
+
+    #[tokio::test]
+    async fn api_verify_exchanges_r1_stops_scan_and_emits_paired_event() {
+        let (event_tx, mut event_rx) = mpsc::channel(128);
+        let (dongle_status_tx, _) = mpsc::channel(8);
+        let state = Arc::new(WebState {
+            engines: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
+            sensor_manager: Arc::new(std::sync::Mutex::new(SensorManager::new(
+                "/nonexistent/sensors.yaml".to_string(),
+                "/nonexistent/state.yaml".to_string(),
+            ))),
+            broadcast_tx: tokio::sync::broadcast::channel(16).0,
+            event_tx: event_tx.clone(),
+            dongle_status_tx,
+            bridge_auth_token: None,
+            bridge: fast_settings(),
+        });
+
+        let d1 = VirtualDongle::new("DONGLE01", "V1.0");
+        d1.replay_transport().register_response(
+            commands::CMD_GET_R1,
+            Packet::new_async(0x22, vec![0x42; 16]).to_bytes(),
+        );
+
+        let mut e1 = Engine::new(d1.transport(), event_tx);
+        let _exit1 = e1.start();
+        e1.initialize_handshake().await.unwrap();
+        e1.set_scan(true).await.unwrap();
+        assert!(e1.is_scanning());
+        d1.replay_transport().clear_written();
+
+        state.engines.lock().await.insert("DONGLE01".into(), e1.clone());
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = router(Arc::clone(&state)).into_make_service_with_connect_info::<SocketAddr>();
+        tokio::spawn(async move { axum::serve(listener, app).await });
+
+        let http = reqwest::Client::new();
+        let resp = http
+            .post(format!("http://{}/api/verify", addr))
+            .json(&serde_json::json!({
+                "mac": "SENSOR01",
+                "dongle_mac": "DONGLE01",
+                "sensor_type": "contact_v2"
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let cmds = parse_written_commands(&d1.replay_transport().get_written());
+        assert_eq!(
+            cmds,
+            vec![
+                commands::CMD_GET_R1,
+                commands::CMD_SET_SCAN,
+                commands::CMD_VERIFY_SENSOR,
+            ],
+            "verify endpoint should exchange R1, stop scan, and verify sensor in order"
+        );
+        assert!(!e1.is_scanning(), "scan mode should be disabled after manual verify");
+
+        let evt = event_rx.try_recv().expect("expected Paired event to be emitted");
+        assert_eq!(evt.mac, "SENSOR01");
+        assert_eq!(evt.dongle_mac.as_deref(), Some("DONGLE01"));
+        assert!(matches!(evt.data, crate::protocol::telemetry::TelemetryData::Paired { .. }));
     }
 }
