@@ -1288,8 +1288,56 @@ const HTML_CONTENT: &str = concat!(r##"
         }
         function sensorJobRow(mac) {
             const j = fwData.sensor_job;
-            if (!j || !["download","running"].includes(j.step)) return null;
-            return (j.sensors || []).find(r => r.mac === mac) || null;
+            if (!j || j.id === sensorDismissed) return null;
+            const row = (j.sensors || []).find(r => r.mac === mac);
+            return row ? {job: j, row} : null;
+        }
+        function sensorOtaSection(s, d) {
+            const emac = esc(s.mac);
+            const sj = sensorJobRow(s.mac);
+            if (sj) {
+                const {job: j, row: r} = sj;
+                const active = ["download", "running"].includes(j.step);
+                const pct = r.total ? Math.floor(r.done * 100 / r.total) : null;
+                const barPct = r.state === "done" ? 100 : (pct ?? 0);
+                const label = {queued: "Waiting for its turn", press_button: "Press its button briefly now (under 1 s)", updating: "Updating", done: "Done", refused: "Turned down", failed: "Failed", timed_out: "Timed out (button not pressed, or not running OpenWyzeSense)", stopped: "Stopped"};
+                const color = {done: "text-emerald-400", refused: "text-amber-400", failed: "text-rose-400", timed_out: "text-amber-400", press_button: "text-teal-300 font-semibold"};
+                const statusText = j.step === "download"
+                    ? "Downloading the sensor firmware…"
+                    : (j.step === "failed" && r.state !== "done" && !r.message
+                        ? `Failed: ${esc(j.message || "update failed")}`
+                        : `${label[r.state] || esc(r.state)}${r.state === "updating" && pct !== null ? ` ${pct}%` : ""}${r.message ? `: ${esc(r.message)}` : ""}`);
+                const statusCls = j.step === "download"
+                    ? "text-slate-300"
+                    : (j.step === "failed" && r.state !== "done" && !r.message ? "text-rose-400" : (color[r.state] || "text-slate-300"));
+                const showBar = active || r.state === "updating" || r.state === "done";
+                const bar = showBar
+                    ? `<div class="w-full bg-slate-800 rounded-full h-1.5 mt-2"><div class="bg-emerald-500 h-1.5 rounded-full transition-all" style="width:${barPct}%"></div></div>`
+                    : "";
+                const btn = active
+                    ? `<button onclick="fwPost('sensors/cancel')" class="shrink-0 py-1.5 px-4 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-lg border border-slate-700 transition">Stop</button>`
+                    : `<button onclick="sensorDismissed=${j.id};render()" class="shrink-0 py-1.5 px-4 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-lg border border-slate-700 transition">Dismiss</button>`;
+                return `<div data-sensor-ota="${emac}" class="mt-3 rounded-xl border border-emerald-900/60 bg-emerald-950/20 px-3 py-2.5">
+                    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                        <div class="text-xs min-w-0">
+                            <div class="font-semibold text-emerald-400">📶 Updating ${esc(j.board)} to OpenWyzeSense ${esc(j.target)} · gateway ${esc(j.gateway)}</div>
+                            <div class="mt-0.5 break-words ${statusCls}">${statusText}</div>
+                        </div>
+                        ${btn}
+                    </div>
+                    ${bar}
+                </div>`;
+            }
+            const ota = otaEntry(d, s);
+            if (!ota) return "";
+            const busy = !!(fwData.sensor_job && ["download", "running"].includes(fwData.sensor_job.step));
+            return `<div data-sensor-ota="${emac}" class="mt-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 rounded-xl border border-emerald-900/60 bg-emerald-950/20 px-3 py-2.5">
+                <div class="text-xs min-w-0">
+                    <div class="font-semibold text-emerald-400">OpenWyzeSense ${esc(ota.target)} is available</div>
+                    <div class="text-slate-500 mt-0.5">Current ${esc(s.sw_version || "unknown")} · ${esc(ota.board)} · press the sensor's button briefly when asked</div>
+                </div>
+                <button ${busy ? 'disabled' : ''} onclick="fwUpdateSensor('${esc(d.mac)}', '${emac}', '${esc(ota.board)}')" class="ota-btn-${emac} shrink-0 py-2 px-4 ${busy ? 'bg-slate-700 cursor-not-allowed opacity-60' : 'bg-emerald-700 hover:bg-emerald-600'} text-white text-xs font-semibold rounded-lg transition">${busy ? 'Update busy…' : '⬆️ Update sensor'}</button>
+            </div>`;
         }
 
         // ===== Heard-by gateways =====
@@ -1342,9 +1390,6 @@ const HTML_CONTENT: &str = concat!(r##"
         function detailCard(s, d) {
             const gatewayMac = d?.mac || s.dongle_mac || null;
             const volts = s.battery_raw != null ? (s.battery_raw / 32).toFixed(2) + " V" : null;
-            const ota = otaEntry(d, s);
-            const job = sensorJobRow(s.mac);
-            const updating = !!job;
             const conflict = s.address_conflict;
             const emac = esc(s.mac);
             return `<div class="rounded-xl border border-slate-800 bg-slate-950/70 p-3 sm:p-4">
@@ -1367,13 +1412,7 @@ const HTML_CONTENT: &str = concat!(r##"
                     ${detailCell("Event sequence", s.event_sequence == null ? "—" : `#${esc(s.event_sequence)}`)}
                     ${detailCell("State", stateTag(s))}
                 </div>
-                ${ota ? `<div class="mt-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 rounded-xl border border-emerald-900/60 bg-emerald-950/20 px-3 py-2.5">
-                    <div class="text-xs min-w-0">
-                        <div class="font-semibold text-emerald-400">OpenWyzeSense ${esc(ota.target)} is available</div>
-                        <div class="text-slate-500 mt-0.5">Current ${esc(s.sw_version || "unknown")} · ${esc(ota.board)} · press the sensor's button briefly when asked</div>
-                    </div>
-                    <button ${updating ? 'disabled' : ''} onclick="fwUpdateSensor('${esc(d.mac)}', '${emac}', '${esc(ota.board)}')" class="ota-btn-${emac} shrink-0 py-2 px-4 ${updating ? 'bg-slate-700 cursor-not-allowed opacity-60' : 'bg-emerald-700 hover:bg-emerald-600'} text-white text-xs font-semibold rounded-lg transition">${updating ? 'Updating…' : '⬆️ Update sensor'}</button>
-                </div>` : ''}
+                ${sensorOtaSection(s, d)}
                 ${heardBlock(s)}
                 ${conflict ? `<div class="mt-3 text-xs text-amber-400 bg-amber-950/20 border border-amber-900/40 rounded-lg px-3 py-2">
                     This sensor ${esc(conflictText(conflict))}. It shares a short address with another sensor and can't roam — pair it again.
@@ -1841,31 +1880,6 @@ const HTML_CONTENT: &str = concat!(r##"
             </div>`;
         }
 
-        function sensorJobCard() {
-            const j = fwData.sensor_job;
-            if (!j || j.id === sensorDismissed) return "";
-            const active = ["download", "running"].includes(j.step);
-            const label = {queued: "Waiting for its turn", press_button: "Press its button briefly now (under 1 s)", updating: "Updating", done: "Done", refused: "Turned down", failed: "Failed", timed_out: "Timed out (button not pressed, or not running OpenWyzeSense)", stopped: "Stopped"};
-            const color = {done: "text-emerald-400", refused: "text-amber-400", failed: "text-rose-400", timed_out: "text-amber-400", press_button: "text-teal-300 font-semibold"};
-            const rows = j.sensors.map(r => {
-                const pct = r.total ? Math.floor(r.done * 100 / r.total) : null;
-                return `<div class="py-1"><div class="flex flex-wrap justify-between gap-x-2 text-xs"><span class="font-mono text-slate-300 break-all">${esc(r.mac)}</span>
-                    <span class="min-w-0 break-words ${color[r.state] || "text-slate-400"}">${label[r.state] || esc(r.state)}${r.state === "updating" && pct !== null ? ` ${pct}%` : ""}${r.message ? `: ${esc(r.message)}` : ""}</span></div>
-                    ${r.state === "updating" && pct !== null ? `<div class="w-full bg-slate-800 rounded-full h-1.5 mt-1"><div class="bg-emerald-500 h-1.5 rounded-full" style="width:${pct}%"></div></div>` : ""}</div>`;
-            }).join("");
-            const head = j.step === "download" ? "Downloading the sensor firmware…"
-                : j.step === "running" ? "Offers are up for 6 minutes after the last activity."
-                : j.step === "failed" ? `<span class="text-rose-400">Failed: ${esc(j.message)}</span>`
-                : j.step === "cancelled" ? "Cancelled." : "Finished.";
-            const btn = active
-                ? `<button onclick="fwPost('sensors/cancel')" class="py-1.5 px-4 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-lg border border-slate-700">Stop</button>`
-                : `<button onclick="sensorDismissed=${j.id};render()" class="py-1.5 px-4 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-lg border border-slate-700">Dismiss</button>`;
-            return `<div class="bg-slate-900 rounded-2xl border border-emerald-900 shadow-xl px-5 py-4 mb-4">
-                <div class="font-bold text-sm text-emerald-400 break-words">📶 Updating ${esc(j.board)} sensors to ${esc(j.target)} · gateway ${esc(j.gateway)}</div>
-                <div class="text-xs text-slate-400 mt-1 mb-2 break-words">${head}</div>${rows}
-                <div class="flex flex-wrap gap-2 mt-3">${btn}</div></div>`;
-        }
-
         // ===== Load / render =====
         function updateHeader() {
             const dot = document.getElementById("status-dot"), txt = document.getElementById("status-text");
@@ -1887,12 +1901,12 @@ const HTML_CONTENT: &str = concat!(r##"
             const dongles = donglesData.dongles || [];
             const orphans = donglesData.unassociated_sensors || [];
             if (!dongles.length && !orphans.length) {
-                c.innerHTML = fwJobCard() + sensorJobCard() + `<div class="text-center py-16"><div class="text-4xl mb-3">📡</div>
+                c.innerHTML = fwJobCard() + `<div class="text-center py-16"><div class="text-4xl mb-3">📡</div>
                     <div class="text-slate-400 text-sm">No dongles connected</div>
                     <div class="text-slate-600 text-xs mt-1">Connect a USB dongle or start a WebSocket bridge</div></div>`;
                 return;
             }
-            c.innerHTML = fwJobCard() + sensorJobCard()
+            c.innerHTML = fwJobCard()
                 + dongles.map(dongleCard).join("") + orphanCard(orphans);
         }
 
