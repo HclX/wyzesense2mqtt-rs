@@ -482,3 +482,107 @@ async fn a_gateway_reporting_a_sensor_it_does_not_hold_is_flagged() {
     w.next_event().await;
     assert!(w.roaming.status_json()["address_conflicts"].get("77A8C793").is_none());
 }
+
+#[tokio::test]
+async fn sensor_heard_records_all_roaming_gateways_and_preserves_roaming_owner() {
+    let (a, b) = gateways(vec![entry(S, S_SHORT)], vec![]);
+    let mut w = World::new(fast()).await;
+    w.connect(&a).await;
+    w.connect(&b).await;
+
+    // 1. Overheard copy from B arrives before owner A has any link reading:
+    // B's signal is recorded under B in `heard`, not under A.
+    b.inject_overheard(S_SHORT, S, SensorType::ContactV2, 1, 1, 64);
+    let e = w.next_event().await.expect("first event");
+    w.sensors.lock().unwrap().dispatch_event(&e);
+    {
+        let mgr = w.sensors.lock().unwrap();
+        let s = mgr.get_sensors().get(S).unwrap();
+        assert_eq!(s.heard.get("GWBBBBBB").map(|(r, _)| *r), Some(-64));
+        assert_eq!(
+            s.heard.get("GWAAAAAA"),
+            None,
+            "owner A has not heard the sensor yet; B's RSSI must not be stored under A"
+        );
+        assert_eq!(s.dongle_mac.as_deref(), Some("GWAAAAAA"));
+    }
+
+    // 2. Owner A hears S at -70 dBm and B overhears at -64 dBm (6 dB better,
+    // under the 8 dB hysteresis): both gateways appear in `heard`, and `dongle_mac`
+    // stays with roaming owner A (not overridden by `best_recent`).
+    a.inject_report(S, SensorType::ContactV2, 0, 2, 70);
+    b.inject_overheard(S_SHORT, S, SensorType::ContactV2, 0, 2, 64);
+    let e = w.next_event().await.expect("second event");
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    w.sensors.lock().unwrap().dispatch_event(&e);
+    {
+        let mgr = w.sensors.lock().unwrap();
+        let s = mgr.get_sensors().get(S).unwrap();
+        assert_eq!(s.heard.get("GWAAAAAA").map(|(r, _)| *r), Some(-70));
+        assert_eq!(s.heard.get("GWBBBBBB").map(|(r, _)| *r), Some(-64));
+        assert_eq!(
+            s.dongle_mac.as_deref(),
+            Some("GWAAAAAA"),
+            "best_recent must not override the roaming owner when signal difference is within hysteresis"
+        );
+    }
+
+    // 3. A hears S strongly at -50 dBm, then misses 3 reports that B overhears at -75 dBm.
+    // Roaming hands S over to B; subsequent dispatch_event must keep B as owner
+    // despite A having a stronger recent RSSI (-50 vs -75) in `heard`.
+    a.inject_report(S, SensorType::ContactV2, 1, 3, 50);
+    let e = w.next_event().await.expect("third event");
+    w.sensors.lock().unwrap().dispatch_event(&e);
+
+    for seq in 4..=6 {
+        b.inject_overheard(S_SHORT, S, SensorType::ContactV2, (seq % 2) as u8, seq, 75);
+        let e = w.next_event().await.expect("overheard during miss streak");
+        w.sensors.lock().unwrap().dispatch_event(&e);
+        tokio::time::sleep(Duration::from_millis(150)).await;
+    }
+    wait_for("handover to B", || b.ows().table.iter().any(|s| s.mac == S)).await;
+    wait_for("owner is B", || w.owner(S).as_deref() == Some("GWBBBBBB")).await;
+
+    b.inject_report(S, SensorType::ContactV2, 1, 7, 75);
+    let e = w.next_event().await.expect("report from new owner B");
+    w.sensors.lock().unwrap().dispatch_event(&e);
+    assert_eq!(
+        w.owner(S).as_deref(),
+        Some("GWBBBBBB"),
+        "dispatch_event must not flip dongle_mac back to old owner A via best_recent"
+    );
+}
+
+#[tokio::test]
+async fn removing_a_sensor_cleans_up_roaming_tables_and_conflicts() {
+    let (a, b) = gateways(vec![entry(S, S_SHORT)], vec![]);
+    let mut w = World::new(roam()).await;
+    w.connect(&a).await;
+    w.connect(&b).await;
+
+    // Trigger an address conflict involving S and another sensor, and record link state for S.
+    a.inject_report(S, SensorType::ContactV2, 1, 1, 60);
+    let _ = w.next_event().await;
+    a.inject_report("77A8C793", SensorType::ContactV2, 1, 2, 60);
+    let _ = w.next_event().await;
+    assert_eq!(w.roaming.roaming_owner("GWAAAAAA", S).as_deref(), Some("GWAAAAAA"));
+    assert!(w.roaming.status_json()["heard"].get(S).is_some());
+    assert!(w.roaming.status_json()["address_conflicts"].get("77A8C793").is_some());
+
+    w.roaming.remove_sensor(S);
+    w.roaming.remove_sensor("77A8C793");
+
+    assert_eq!(
+        w.roaming.roaming_owner("GWAAAAAA", S),
+        None,
+        "deleted sensor must be removed from gateway's cached roaming table"
+    );
+    assert!(
+        w.roaming.status_json()["heard"].get(S).is_none(),
+        "deleted sensor must be removed from roaming link tracker"
+    );
+    assert!(
+        w.roaming.status_json()["address_conflicts"].get("77A8C793").is_none(),
+        "deleted sensor must be removed from roaming address conflicts"
+    );
+}
