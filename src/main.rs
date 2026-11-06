@@ -480,6 +480,44 @@ fn strip_arg_bool(args: &mut Vec<String>, flag: &str) -> bool {
     }
 }
 
+fn parse_sensor_list_response(body: &serde_json::Value) -> Result<Vec<String>, String> {
+    let arr = body["sensors"]
+        .as_array()
+        .ok_or_else(|| "missing or invalid 'sensors' array in response".to_string())?;
+    let mut macs = Vec::with_capacity(arr.len());
+    for item in arr {
+        if let Some(mac) = item.as_str() {
+            macs.push(mac.to_string());
+        } else if let Some(mac) = item.get("mac").and_then(|m| m.as_str()) {
+            macs.push(mac.to_string());
+        } else {
+            return Err(format!("unexpected sensor entry in response: {}", item));
+        }
+    }
+    Ok(macs)
+}
+
+fn parse_hex_bytes(input: &str) -> Result<Vec<u8>, String> {
+    let mut bytes = Vec::new();
+    for raw_token in input.split(',') {
+        let token = raw_token.trim();
+        if token.is_empty() {
+            continue;
+        }
+        let hex = token
+            .strip_prefix("0x")
+            .or_else(|| token.strip_prefix("0X"))
+            .unwrap_or(token);
+        let b = u8::from_str_radix(hex, 16)
+            .map_err(|e| format!("Invalid hex byte {:?}: {}", token, e))?;
+        bytes.push(b);
+    }
+    if bytes.is_empty() {
+        return Err("No hex bytes provided".to_string());
+    }
+    Ok(bytes)
+}
+
 // --- REST CLIENT CLI MODE ---
 async fn run_cli_via_rest(
     client: &reqwest::Client,
@@ -491,7 +529,7 @@ async fn run_cli_via_rest(
         "list" => {
             let res = client.get(&format!("{}/api/sensors", base_url)).send().await?;
             let body: serde_json::Value = res.json().await?;
-            let sensors: Vec<String> = serde_json::from_value(body["sensors"].clone())?;
+            let sensors = parse_sensor_list_response(&body)?;
             println!("{} sensors paired to bridge:", sensors.len());
             for mac in sensors {
                 println!("\tSensor: {}", mac);
@@ -534,11 +572,7 @@ async fn run_cli_via_rest(
         }
         "raw" => {
             if args.is_empty() { return Err("Missing comma-separated hex bytes string argument".into()); }
-            let bytes: Vec<u8> = args[0].split(",")
-                .map(|s| s.trim())
-                .filter(|s| !s.is_empty())
-                .map(|s| u8::from_str_radix(s, 16).unwrap())
-                .collect();
+            let bytes = parse_hex_bytes(&args[0])?;
             // Fetch first available dongle MAC from the daemon
             let dongles_res = client.get(&format!("{}/api/dongles", base_url)).send().await?;
             let dongles_body: serde_json::Value = dongles_res.json().await?;
@@ -572,11 +606,7 @@ async fn run_cli_via_hid(
     // Special case: RAW command bypasses the Engine loop completely
     if cmd == "raw" {
         if args.is_empty() { return Err("Missing comma-separated hex bytes argument".into()); }
-        let raw_bytes: Vec<u8> = args[0].split(',')
-            .map(|s| s.trim())
-            .filter(|s| !s.is_empty())
-            .map(|s| u8::from_str_radix(s, 16).unwrap())
-            .collect();
+        let raw_bytes = parse_hex_bytes(&args[0])?;
         println!("Opening device {} for raw transmission...", device_path);
         let mut transport = HidrawTransport::open(device_path).await?;
         println!("===> Writing {} bytes...", raw_bytes.len());
@@ -768,4 +798,43 @@ DEBUGGING:
     Run with --log-level trace to capture raw USB wire data.
     Use tools/extract_packets.py to extract packets from trace logs for test replay.
 "#);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wyzesense2mqtt_rs::config::state::PersistedSensorState;
+    use wyzesense2mqtt_rs::protocol::sensor::SensorState;
+    use wyzesense2mqtt_rs::web::server::SensorsListResponse;
+
+    #[test]
+    fn cli_list_deserializes_api_sensors_response() {
+        let resp = SensorsListResponse {
+            sensors: vec![PersistedSensorState {
+                mac: "77BD514D".to_string(),
+                sensor_type: "switchv2".to_string(),
+                last_seen: 1700000000,
+                battery: Some(95),
+                battery_raw: Some(98),
+                signal: -62,
+                die_temperature_c: None,
+                event_sequence: Some(3),
+                state: SensorState::Contact { is_open: false },
+                dongle_mac: Some("GWAAAAAA".to_string()),
+            }],
+        };
+        let body = serde_json::to_value(resp).unwrap();
+        let macs = parse_sensor_list_response(&body).expect("must deserialize /api/sensors response");
+        assert_eq!(macs, vec!["77BD514D".to_string()]);
+    }
+
+    #[test]
+    fn parse_hex_bytes_handles_prefixes_and_rejects_invalid_input() {
+        assert_eq!(
+            parse_hex_bytes("0xAA, 0X55, 43, 04").unwrap(),
+            vec![0xAA, 0x55, 0x43, 0x04]
+        );
+        assert!(parse_hex_bytes("AA, ZZ").is_err(), "invalid hex must return Err without panicking");
+        assert!(parse_hex_bytes(" , ").is_err(), "empty byte list must return Err");
+    }
 }

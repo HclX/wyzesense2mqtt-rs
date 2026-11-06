@@ -726,7 +726,11 @@ async fn send_raw_packet(
     // Attempt to parse the raw packet to identify what response packet ID we should wait for
     match Packet::parse(&payload.bytes) {
         Ok((pkt, _)) => {
-            let expected_response = pkt.cmd() + 1;
+            let expected_response = match pkt.cmd() {
+                crate::protocol::packet::commands::CMD_GET_SENSOR_LIST
+                | crate::protocol::packet::commands::CMD_SEND_KEYPAD => pkt.cmd(),
+                cmd => cmd + 1,
+            };
             match engine.do_command(pkt, expected_response).await {
                 Ok(resp) => (
                     StatusCode::OK,
@@ -1260,5 +1264,64 @@ mod tests {
             .await
             .expect("no close frame");
         assert_eq!((code, reason.as_str()), (1011, "heartbeat timeout"));
+    }
+
+    #[tokio::test]
+    async fn api_raw_handles_standard_and_ack_only_commands() {
+        let dongle = VirtualDongle::new("DONGLE01", "V1.0");
+
+        let (event_tx, _event_rx) = tokio::sync::mpsc::channel(64);
+        let (dongle_status_tx, _dongle_status_rx) = tokio::sync::mpsc::channel(16);
+        let mut engine = Engine::new(dongle.transport(), event_tx.clone());
+        let _exit_tx = engine.start();
+        engine.initialize_handshake().await.unwrap();
+
+        let engines: EnginesMap = Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
+        engines.lock().await.insert("DONGLE01".to_string(), engine);
+
+        let state = Arc::new(WebState {
+            engines,
+            sensor_manager: Arc::new(std::sync::Mutex::new(SensorManager::new(
+                "/nonexistent/sensors.yaml".to_string(),
+                "/nonexistent/state.yaml".to_string(),
+            ))),
+            broadcast_tx: tokio::sync::broadcast::channel(16).0,
+            event_tx,
+            dongle_status_tx,
+            bridge_auth_token: None,
+            bridge: fast_settings(),
+        });
+
+        // 1. Standard command: CMD_GET_MAC (0x4304 -> 0x4305)
+        dongle.replay_transport().register_response(
+            commands::CMD_GET_MAC,
+            Packet::new_sync((commands::CMD_MAC_RESPONSE & 0xFF) as u8, b"DONGLE01".to_vec()).to_bytes(),
+        );
+        let get_mac = Packet::new_sync(0x04, vec![]).to_bytes();
+        let resp = send_raw_packet(
+            State(Arc::clone(&state)),
+            Json(RawPacketRequest { bytes: get_mac, dongle_mac: "DONGLE01".to_string() }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // 2. ACK-only command: CMD_SEND_KEYPAD (0x5353 -> ACK(0x5353))
+        dongle.replay_transport().register_response(
+            commands::CMD_SEND_KEYPAD,
+            Packet::new_ack(commands::CMD_SEND_KEYPAD).to_bytes(),
+        );
+        let keypad_pkt = Packet::new_async((commands::CMD_SEND_KEYPAD & 0xFF) as u8, b"77KEYPAD\x01".to_vec()).to_bytes();
+        let resp = tokio::time::timeout(
+            Duration::from_millis(500),
+            send_raw_packet(
+                State(Arc::clone(&state)),
+                Json(RawPacketRequest { bytes: keypad_pkt, dongle_mac: "DONGLE01".to_string() }),
+            ),
+        )
+        .await
+        .expect("ACK-only command via /api/raw must not time out")
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
     }
 }
