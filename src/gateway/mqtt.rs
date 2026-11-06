@@ -14,7 +14,167 @@ use std::sync::{Arc, Mutex};
 pub enum GatewayCommand {
     Scan { enable: bool, dongle_mac: String },
     Delete { sensor_mac: String, dongle_mac: Option<String> },
+    Chime { sensor_mac: String },
     Reload,
+}
+
+pub fn parse_control_command(topic_root: &str, topic: &str, payload: &str) -> Option<GatewayCommand> {
+    let control_topic_scan = format!("{}/scan", topic_root);
+    let control_topic_remove = format!("{}/remove", topic_root);
+    let control_topic_reload = format!("{}/reload", topic_root);
+    let dongle_topic_prefix = format!("{}/dongle/", topic_root);
+    let dongle_topic_suffix = "/scan/set";
+
+    if topic == control_topic_scan {
+        warn!("Legacy scan topic used without dongle_mac target. Ignoring. Use dongle/{{mac}}/scan instead.");
+        None
+    } else if topic.starts_with(&dongle_topic_prefix) && topic.ends_with(dongle_topic_suffix) {
+        let inner = &topic[dongle_topic_prefix.len()..topic.len() - dongle_topic_suffix.len()];
+        let dongle_mac = inner.to_string();
+        let enable = payload == "1" || payload.eq_ignore_ascii_case("ON") || payload.eq_ignore_ascii_case("true");
+        info!("Per-dongle scan command: dongle={}, enable={}", dongle_mac, enable);
+        Some(GatewayCommand::Scan { enable, dongle_mac })
+    } else if topic == control_topic_remove {
+        info!("Received remove command for MAC: {}", payload);
+        Some(GatewayCommand::Delete { sensor_mac: payload.to_string(), dongle_mac: None })
+    } else if topic == control_topic_reload {
+        info!("Received reload command");
+        Some(GatewayCommand::Reload)
+    } else if let Some(rest) = topic.strip_prefix(&format!("{}/", topic_root)) {
+        if let Some(mac) = rest.strip_suffix("/chime") {
+            if crate::protocol::sensor::is_valid_mac(mac) {
+                info!("Received chime command for MAC: {}", mac);
+                return Some(GatewayCommand::Chime { sensor_mac: mac.to_string() });
+            }
+        }
+        None
+    } else {
+        None
+    }
+}
+
+pub async fn build_dongle_state_payload(
+    dongle_mac: &str,
+    dongle_version: &str,
+    engines: &EnginesMap,
+    sensor_manager: &Arc<Mutex<SensorManager>>,
+) -> serde_json::Value {
+    let (version, scanning) = {
+        let map = engines.lock().await;
+        match map.get(dongle_mac) {
+            Some(e) => (
+                e.dongle_version().unwrap_or(dongle_version).to_string(),
+                e.is_scanning(),
+            ),
+            None => (dongle_version.to_string(), false),
+        }
+    };
+    let sensor_count = {
+        let manager = sensor_manager.lock().unwrap();
+        manager
+            .get_sensors()
+            .values()
+            .filter(|s| s.dongle_mac.as_deref() == Some(dongle_mac))
+            .count()
+    };
+    serde_json::json!({
+        "version": version,
+        "sensor_count": sensor_count,
+        "scanning": scanning
+    })
+}
+
+pub async fn handle_gateway_command(
+    cmd: GatewayCommand,
+    engines: &EnginesMap,
+    sensor_manager: &Arc<Mutex<SensorManager>>,
+    roaming: &Option<Arc<crate::roaming::Roaming>>,
+    broadcast_tx: &tokio::sync::broadcast::Sender<()>,
+) {
+    match cmd {
+        GatewayCommand::Scan { enable, dongle_mac } => {
+            if enable {
+                let map = engines.lock().await;
+                for (mac, e) in map.iter() {
+                    if mac != &dongle_mac && e.is_scanning() {
+                        warn!("Dongle {} is already scanning; ignoring scan request for {}", mac, dongle_mac);
+                        return;
+                    }
+                }
+            }
+            let engine = {
+                let map = engines.lock().await;
+                map.get(&dongle_mac).cloned()
+            };
+            if let Some(mut engine) = engine {
+                if let (true, Some(r)) = (enable, roaming) {
+                    if let Err(e) = r.prepare_pairing(&dongle_mac).await {
+                        error!("Not pairing on dongle {}: {}", dongle_mac, e);
+                        return;
+                    }
+                }
+                if engine.set_scan(enable).await.is_ok() {
+                    let _ = broadcast_tx.send(());
+                    if enable {
+                        let mut engine_timer = engine.clone();
+                        let btx = broadcast_tx.clone();
+                        tokio::spawn(async move {
+                            tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
+                            if engine_timer.is_scanning() && engine_timer.set_scan(false).await.is_ok() {
+                                let _ = btx.send(());
+                            }
+                        });
+                    }
+                }
+            } else {
+                warn!("Scan command for unknown dongle: {}", dongle_mac);
+            }
+        }
+        GatewayCommand::Delete { sensor_mac, dongle_mac } => {
+            let engine_clones: Vec<crate::engine::Engine> = if let Some(target_mac) = dongle_mac {
+                let map = engines.lock().await;
+                map.get(&target_mac).cloned().into_iter().collect()
+            } else {
+                let map = engines.lock().await;
+                map.values().cloned().collect()
+            };
+            for mut engine in engine_clones {
+                let _ = engine.delete_sensor(&sensor_mac).await;
+            }
+            {
+                let mut manager = sensor_manager.lock().unwrap();
+                let _ = manager.delete_and_persist_sensor(&sensor_mac);
+            }
+            if let Some(r) = roaming {
+                r.remove_sensor(&sensor_mac);
+            }
+            let _ = broadcast_tx.send(());
+        }
+        GatewayCommand::Chime { sensor_mac } => {
+            let owning_dongle = {
+                let manager = sensor_manager.lock().unwrap();
+                manager.get_sensors().get(&sensor_mac).and_then(|s| s.dongle_mac.clone())
+            };
+            let engine_clones: Vec<crate::engine::Engine> = {
+                let map = engines.lock().await;
+                match owning_dongle.and_then(|d| map.get(&d).cloned()) {
+                    Some(e) => vec![e],
+                    None => map.values().cloned().collect(),
+                }
+            };
+            for mut engine in engine_clones {
+                let _ = engine.play_chime(&sensor_mac).await;
+            }
+        }
+        GatewayCommand::Reload => {
+            info!("Reload command received via gateway.");
+            match sensor_manager.lock().unwrap().reload_config() {
+                Ok(n) => info!("Reloaded sensor config ({} sensor(s) updated)", n),
+                Err(e) => warn!("Failed to reload sensor config: {}", e),
+            }
+            let _ = broadcast_tx.send(());
+        }
+    }
 }
 
 /// A dongle came or went at runtime (e.g. a `/ws/bridge` client connected or was
@@ -104,13 +264,7 @@ impl MqttGateway {
         let control_topic_remove = format!("{}/remove", topic_root);
         let control_topic_reload = format!("{}/reload", topic_root);
         let dongle_scan_wildcard = format!("{}/dongle/+/scan/set", topic_root);
-
-        let control_topic_scan_loop = control_topic_scan.clone();
-        let control_topic_remove_loop = control_topic_remove.clone();
-        let control_topic_reload_loop = control_topic_reload.clone();
-
-        let dongle_topic_prefix = format!("{}/dongle/", topic_root);
-        let dongle_topic_suffix = "/scan/set";
+        let chime_wildcard = format!("{}/+/chime", topic_root);
 
         // Home Assistant publishes "online" here, non-retained, when its MQTT
         // integration starts: the birth message. Re-announcing on it heals
@@ -145,6 +299,7 @@ impl MqttGateway {
                                 let control_topic_remove = control_topic_remove.clone();
                                 let control_topic_reload = control_topic_reload.clone();
                                 let dongle_scan_wildcard = dongle_scan_wildcard.clone();
+                                let chime_wildcard = chime_wildcard.clone();
                                 let engines = engines.clone();
                                 let sensor_manager_conn = sensor_manager_conn.clone();
                                 let published_discovery_conn = published_discovery_conn.clone();
@@ -155,6 +310,9 @@ impl MqttGateway {
                                     // later HA restart triggers re-announce below.
                                     if let Err(e) = client.subscribe(&hass_birth_topic, QoS::AtLeastOnce).await {
                                         error!("Failed to subscribe to HA birth topic: {}", e);
+                                    }
+                                    if let Err(e) = client.subscribe(&chime_wildcard, QoS::AtLeastOnce).await {
+                                        error!("Failed to subscribe to chime wildcard topic: {}", e);
                                     }
                                     announce_on_connect(
                                         &client,
@@ -202,23 +360,29 @@ impl MqttGateway {
                                             announce_sensor(&client, &topic_root, &mac, is_online, &sensor_manager_birth, &published_discovery_birth, false).await;
                                         }
                                     });
-                                } else if topic == control_topic_scan_loop {
-                                    warn!("Legacy scan topic used without dongle_mac target. Ignoring. Use dongle/{{mac}}/scan instead.");
-                                    // Legacy broadcast scan is not supported per exclusive scan design.
-                                    let _ = payload;
-                                } else if topic.starts_with(&dongle_topic_prefix) && topic.ends_with(dongle_topic_suffix) {
-                                    // Per-dongle scan command: {topic_root}/dongle/{mac}/scan/set
-                                    let inner = &topic[dongle_topic_prefix.len()..topic.len() - dongle_topic_suffix.len()];
-                                    let dongle_mac = inner.to_string();
-                                    let enable = payload == "1" || payload.eq_ignore_ascii_case("ON") || payload.eq_ignore_ascii_case("true");
-                                    info!("Per-dongle scan command: dongle={}, enable={}", dongle_mac, enable);
-                                    let _ = cmd_tx.send(GatewayCommand::Scan { enable, dongle_mac }).await;
-                                } else if topic == control_topic_remove_loop {
-                                    info!("Received remove command for MAC: {}", payload);
-                                    let _ = cmd_tx.send(GatewayCommand::Delete { sensor_mac: payload, dongle_mac: None }).await;
-                                } else if topic == control_topic_reload_loop {
-                                    info!("Received reload command");
-                                    let _ = cmd_tx.send(GatewayCommand::Reload).await;
+                                } else if let Some(cmd) = parse_control_command(&topic_root, &topic, &payload) {
+                                    let is_reload = cmd == GatewayCommand::Reload;
+                                    let _ = cmd_tx.send(cmd).await;
+                                    if is_reload {
+                                        let client = client.clone();
+                                        let topic_root = topic_root.clone();
+                                        let sensor_manager_reload = sensor_manager_conn.clone();
+                                        let published_discovery_reload = published_discovery_conn.clone();
+                                        tokio::spawn(async move {
+                                            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+                                            let macs: Vec<String> = {
+                                                let manager = sensor_manager_reload.lock().unwrap();
+                                                manager.get_sensors().keys().cloned().collect()
+                                            };
+                                            for mac in macs {
+                                                let is_online = {
+                                                    let manager = sensor_manager_reload.lock().unwrap();
+                                                    manager.get_sensors().get(&mac).map(|s| s.is_online).unwrap_or(false)
+                                                };
+                                                announce_sensor(&client, &topic_root, &mac, is_online, &sensor_manager_reload, &published_discovery_reload, true).await;
+                                            }
+                                        });
+                                    }
                                 }
                             }
                             _ => {}
@@ -236,11 +400,13 @@ impl MqttGateway {
         let mut dongle_status_rx = self.dongle_status_rx;
         let client_status = self.client.clone();
         let topic_root_status = self.topic_root.clone();
+        let engines_status = self.engines.clone();
+        let sensor_manager_status = self.sensor_manager.clone();
         tokio::spawn(async move {
             while let Some(status) = dongle_status_rx.recv().await {
                 if status.online {
                     let version = status.version.as_deref().unwrap_or("unknown");
-                    if let Err(e) = publish_dongle_discovery(&client_status, &topic_root_status, &status.mac, version).await {
+                    if let Err(e) = publish_dongle_discovery(&client_status, &topic_root_status, &status.mac, version, &engines_status, &sensor_manager_status).await {
                         error!("Failed to publish dongle discovery for {}: {}", status.mac, e);
                     }
                 } else {
@@ -249,6 +415,32 @@ impl MqttGateway {
                         error!("Failed to publish dongle {} offline: {}", status.mac, e);
                     } else {
                         info!("Published dongle {} status: offline", status.mac);
+                    }
+                }
+            }
+        });
+
+        // Keep dongle diagnostic state topics ({topic_root}/dongle/{mac}/state) in sync
+        // whenever scan state or sensor associations change.
+        let mut broadcast_rx = self.broadcast_tx.subscribe();
+        let client_bcast = self.client.clone();
+        let topic_root_bcast = self.topic_root.clone();
+        let engines_bcast = self.engines.clone();
+        let sensor_manager_bcast = self.sensor_manager.clone();
+        tokio::spawn(async move {
+            let mut last_published: std::collections::HashMap<String, serde_json::Value> = std::collections::HashMap::new();
+            while broadcast_rx.recv().await.is_ok() {
+                let macs: Vec<(String, String)> = {
+                    let map = engines_bcast.lock().await;
+                    map.iter().map(|(m, e)| (m.clone(), e.dongle_version().unwrap_or("unknown").to_string())).collect()
+                };
+                for (mac, ver) in macs {
+                    let state = build_dongle_state_payload(&mac, &ver, &engines_bcast, &sensor_manager_bcast).await;
+                    if last_published.get(&mac) != Some(&state) {
+                        let state_topic = format!("{}/dongle/{}/state", topic_root_bcast, mac);
+                        if client_bcast.publish(state_topic, QoS::AtLeastOnce, true, serde_json::to_vec(&state).unwrap()).await.is_ok() {
+                            last_published.insert(mac, state);
+                        }
                     }
                 }
             }
@@ -432,7 +624,7 @@ async fn announce_on_connect(
         map.iter().map(|(mac, e)| (mac.clone(), e.dongle_version().unwrap_or("unknown").to_string())).collect()
     };
     for (mac, version) in dongles {
-        if let Err(e) = publish_dongle_discovery(client, topic_root, &mac, &version).await {
+        if let Err(e) = publish_dongle_discovery(client, topic_root, &mac, &version, engines, sensor_manager).await {
             error!("Failed to publish dongle discovery for {}: {}", mac, e);
         } else {
             info!("Published HA dongle discovery for {}", mac);
@@ -461,6 +653,8 @@ async fn publish_dongle_discovery(
     topic_root: &str,
     dongle_mac: &str,
     dongle_version: &str,
+    engines: &EnginesMap,
+    sensor_manager: &Arc<Mutex<SensorManager>>,
 ) -> Result<(), rumqttc::v5::ClientError> {
     let device_id = format!("wyzesense_dongle_{}", dongle_mac.to_lowercase());
     let device = serde_json::json!({
@@ -538,11 +732,7 @@ async fn publish_dongle_discovery(
     client.publish(status_topic, QoS::AtLeastOnce, true, "online".as_bytes().to_vec()).await?;
 
     let state_topic = format!("{}/dongle/{}/state", topic_root, dongle_mac);
-    let state = serde_json::json!({
-        "version": dongle_version,
-        "sensor_count": 0,
-        "scanning": false
-    });
+    let state = build_dongle_state_payload(dongle_mac, dongle_version, engines, sensor_manager).await;
     client.publish(state_topic, QoS::AtLeastOnce, true,
         serde_json::to_vec(&state).unwrap()).await?;
 
@@ -782,5 +972,173 @@ mod tests {
         assert!(!is_ha_birth("homeassistant/status", "busy"));
         assert!(!is_ha_birth("wyzesense2mqtt/status", "online"));
         assert!(!is_ha_birth("homeassistant/status/other", "online"));
+    }
+
+    #[tokio::test]
+    async fn mqtt_chime_button_topic_triggers_play_chime() {
+        use crate::engine::Engine;
+        use crate::protocol::packet::{commands, Packet, PacketPayload};
+        use crate::transport::virtual_dongle::VirtualDongle;
+
+        let cmd = parse_control_command("wyzesense2mqtt", "wyzesense2mqtt/CHIME001/chime", "PRESS")
+            .expect("expected {topic_root}/{mac}/chime to parse as GatewayCommand::Chime");
+        assert_eq!(cmd, GatewayCommand::Chime { sensor_mac: "CHIME001".to_string() });
+
+        let d1 = VirtualDongle::new("DONGLE01", "V1.0");
+        let (tx1, _) = mpsc::channel(16);
+        let mut e1 = Engine::new(d1.transport(), tx1);
+        let _exit1 = e1.start();
+        e1.initialize_handshake().await.unwrap();
+        d1.replay_transport().clear_written();
+
+        let engines: EnginesMap = Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
+        engines.lock().await.insert("DONGLE01".into(), e1);
+        let sensor_manager = Arc::new(Mutex::new(SensorManager::new(
+            "/nonexistent/sensors.yaml".into(),
+            "/nonexistent/state.yaml".into(),
+        )));
+        let (broadcast_tx, _) = tokio::sync::broadcast::channel(16);
+
+        handle_gateway_command(cmd, &engines, &sensor_manager, &None, &broadcast_tx).await;
+
+        let written = d1.replay_transport().get_written();
+        let mut chime_sent = false;
+        let mut slice = written.as_slice();
+        while let Ok((pkt, n)) = Packet::parse(slice) {
+            if !matches!(pkt.payload, PacketPayload::Ack(_)) && pkt.cmd() == commands::CMD_PLAY_CHIME {
+                chime_sent = true;
+            }
+            slice = &slice[n..];
+        }
+        assert!(chime_sent, "expected CMD_PLAY_CHIME to be sent on DONGLE01");
+    }
+
+    #[tokio::test]
+    async fn dongle_state_payload_reflects_live_sensor_count_and_scan_mode() {
+        use crate::engine::Engine;
+        use crate::transport::virtual_dongle::VirtualDongle;
+
+        let d1 = VirtualDongle::new("DONGLE01", "V2.3.9");
+        let (tx1, _) = mpsc::channel(16);
+        let mut e1 = Engine::new(d1.transport(), tx1);
+        let _exit1 = e1.start();
+        e1.initialize_handshake().await.unwrap();
+        e1.set_scan(true).await.unwrap();
+
+        let engines: EnginesMap = Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
+        engines.lock().await.insert("DONGLE01".into(), e1);
+
+        let sensor_manager = Arc::new(Mutex::new(SensorManager::new(
+            "/nonexistent/sensors.yaml".into(),
+            "/nonexistent/state.yaml".into(),
+        )));
+        {
+            let mut mgr = sensor_manager.lock().unwrap();
+            mgr.assign_dongle("DONGLE01", &["SENSOR01".into(), "SENSOR02".into()]);
+        }
+
+        let payload = build_dongle_state_payload("DONGLE01", "V2.3.9", &engines, &sensor_manager).await;
+        assert_eq!(payload["version"], "V2.3.9");
+        assert_eq!(payload["sensor_count"], 2, "expected sensor_count to reflect 2 assigned sensors");
+        assert_eq!(payload["scanning"], true, "expected scanning to reflect active scan mode");
+    }
+
+    #[tokio::test]
+    async fn gateway_commands_enforce_exclusive_scan_broadcast_updates_and_reload_config() {
+        use crate::engine::Engine;
+        use crate::transport::virtual_dongle::VirtualDongle;
+
+        let d1 = VirtualDongle::new("DONGLE01", "V1.0");
+        let d2 = VirtualDongle::new("DONGLE02", "V1.0");
+
+        let (tx1, _) = mpsc::channel(16);
+        let mut e1 = Engine::new(d1.transport(), tx1);
+        let _exit1 = e1.start();
+        e1.initialize_handshake().await.unwrap();
+
+        let (tx2, _) = mpsc::channel(16);
+        let mut e2 = Engine::new(d2.transport(), tx2);
+        let _exit2 = e2.start();
+        e2.initialize_handshake().await.unwrap();
+
+        let engines: EnginesMap = Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
+        engines.lock().await.insert("DONGLE01".into(), e1.clone());
+        engines.lock().await.insert("DONGLE02".into(), e2.clone());
+
+        let tmp = std::env::temp_dir().join(format!("wyze_mqtt_test_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&tmp);
+        let sensors_path = tmp.join("sensors.yaml");
+        let state_path = tmp.join("state.yaml");
+        std::fs::write(
+            &sensors_path,
+            "sensors:\n  SENSOR01:\n    name: Old Name\n    timeout_sec: 120\n",
+        )
+        .unwrap();
+
+        let sensor_manager = Arc::new(Mutex::new(SensorManager::new(
+            sensors_path.to_str().unwrap().to_string(),
+            state_path.to_str().unwrap().to_string(),
+        )));
+        sensor_manager.lock().unwrap().load_sensors(&["SENSOR01".into()]).unwrap();
+
+        let (broadcast_tx, mut broadcast_rx) = tokio::sync::broadcast::channel(16);
+
+        // 1. Scan on DONGLE01 succeeds and notifies broadcast_tx
+        handle_gateway_command(
+            GatewayCommand::Scan { enable: true, dongle_mac: "DONGLE01".into() },
+            &engines,
+            &sensor_manager,
+            &None,
+            &broadcast_tx,
+        )
+        .await;
+        assert!(e1.is_scanning());
+        assert!(broadcast_rx.try_recv().is_ok(), "Scan should notify broadcast_tx");
+
+        // 2. Exclusive scan: attempting to scan on DONGLE02 while DONGLE01 is scanning must be rejected
+        handle_gateway_command(
+            GatewayCommand::Scan { enable: true, dongle_mac: "DONGLE02".into() },
+            &engines,
+            &sensor_manager,
+            &None,
+            &broadcast_tx,
+        )
+        .await;
+        assert!(!e2.is_scanning(), "DONGLE02 must not enter scan mode while DONGLE01 is scanning");
+
+        // 3. Reload re-reads sensors.yaml and updates friendly_name + timeout_sec
+        std::fs::write(
+            &sensors_path,
+            "sensors:\n  SENSOR01:\n    name: Updated Front Door\n    timeout_sec: 300\n",
+        )
+        .unwrap();
+        while broadcast_rx.try_recv().is_ok() {}
+        handle_gateway_command(
+            GatewayCommand::Reload,
+            &engines,
+            &sensor_manager,
+            &None,
+            &broadcast_tx,
+        )
+        .await;
+        {
+            let mgr = sensor_manager.lock().unwrap();
+            let s = mgr.get_sensors().get("SENSOR01").unwrap();
+            assert_eq!(s.friendly_name, "Updated Front Door");
+            assert_eq!(s.timeout_sec, 300);
+        }
+        assert!(broadcast_rx.try_recv().is_ok(), "Reload should notify broadcast_tx");
+
+        // 4. Delete notifies broadcast_tx
+        while broadcast_rx.try_recv().is_ok() {}
+        handle_gateway_command(
+            GatewayCommand::Delete { sensor_mac: "SENSOR01".into(), dongle_mac: Some("DONGLE01".into()) },
+            &engines,
+            &sensor_manager,
+            &None,
+            &broadcast_tx,
+        )
+        .await;
+        assert!(broadcast_rx.try_recv().is_ok(), "Delete should notify broadcast_tx");
     }
 }
