@@ -98,12 +98,19 @@ impl VirtualDongle {
         let scan_on = Packet::new_async(0x1D, vec![0x01]);
         transport.register_response(commands::CMD_SET_SCAN, scan_on.to_bytes());
 
-        // Scan disable (second call)
+        // Scan disable (second and third calls, e.g. auto/manual verify + explicit disable)
         let scan_off = Packet::new_async(0x1D, vec![0x00]);
         transport.register_response(commands::CMD_SET_SCAN, scan_off.to_bytes());
+        transport.register_response(commands::CMD_SET_SCAN, scan_off.to_bytes());
+
+        // Get sensor R1 response (success)
+        let r1_resp = Packet::new_async(0x22, vec![0x42; 16]);
+        transport.register_response(commands::CMD_GET_R1, r1_resp.to_bytes());
+        transport.register_response(commands::CMD_GET_R1, r1_resp.to_bytes());
 
         // Verify sensor response (success)
         let verify_resp = Packet::new_async(0x24, vec![0x01]);
+        transport.register_response(commands::CMD_VERIFY_SENSOR, verify_resp.to_bytes());
         transport.register_response(commands::CMD_VERIFY_SENSOR, verify_resp.to_bytes());
 
         // Delete sensor response (success)

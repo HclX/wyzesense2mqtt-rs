@@ -117,6 +117,12 @@ pub struct VerifyRequest {
     pub dongle_mac: String,
 }
 
+#[derive(Serialize, Deserialize, Default)]
+pub struct FixRequest {
+    #[serde(default)]
+    pub dongle_mac: Option<String>,
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct RawPacketRequest {
     pub bytes: Vec<u8>,
@@ -884,15 +890,38 @@ async fn verify_scanned_sensor(
     };
     let sensor_type = payload.sensor_type.parse::<SensorType>().unwrap_or(SensorType::Unknown(0x00));
 
+    // Match the pairing sequence in Engine's auto-verify worker:
+    // 1. Exchange R1 token with the sensor
+    if let Err(e) = engine.get_sensor_r1(&payload.mac).await {
+        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+    }
+    // 2. Disable scan mode before committing verification
+    let _ = engine.set_scan(false).await;
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+
+    // 3. Commit sensor verification to NVRAM and emit Paired event
     match engine.verify_sensor(&payload.mac, sensor_type).await {
-        Ok(_) => (
-            StatusCode::OK,
-            Json(SuccessResponse {
-                success: true,
-                message: format!("Sensor {} verified successfully", payload.mac),
-            }),
-        )
-            .into_response(),
+        Ok(_) => {
+            let paired_evt = crate::protocol::telemetry::DongleEvent {
+                mac: payload.mac.clone(),
+                timestamp: std::time::SystemTime::now(),
+                sensor_type,
+                event_type: 0xFE,
+                data: crate::protocol::telemetry::TelemetryData::Paired { version: 0 },
+                dongle_mac: Some(payload.dongle_mac.clone()),
+                overheard_short: None,
+            };
+            let _ = state.event_tx.send(paired_evt).await;
+            let _ = state.broadcast_tx.send(());
+            (
+                StatusCode::OK,
+                Json(SuccessResponse {
+                    success: true,
+                    message: format!("Sensor {} verified successfully", payload.mac),
+                }),
+            )
+                .into_response()
+        }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
@@ -923,11 +952,38 @@ async fn trigger_chime(
 // --- POST /api/fix ---
 async fn fix_sensors(
     State(state): State<Arc<WebState>>,
+    body: axum::body::Bytes,
 ) -> impl IntoResponse {
-    // Clone engines to avoid holding lock across await
+    let req: FixRequest = if body.iter().all(|b| b.is_ascii_whitespace()) {
+        FixRequest::default()
+    } else {
+        match serde_json::from_slice(&body) {
+            Ok(r) => r,
+            Err(e) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({ "error": e.to_string() })),
+                )
+                    .into_response();
+            }
+        }
+    };
+    // Clone targeted engine (or all engines when dongle_mac is omitted) to avoid holding lock across await
     let mut engine_clones: Vec<Engine> = {
         let engines = state.engines.lock().await;
-        engines.values().cloned().collect()
+        match req.dongle_mac.as_deref() {
+            Some(mac) if !mac.is_empty() => match engines.get(mac) {
+                Some(e) => vec![e.clone()],
+                None => {
+                    return (
+                        StatusCode::NOT_FOUND,
+                        Json(json!({ "error": format!("Dongle {} not found", mac) })),
+                    )
+                        .into_response();
+                }
+            },
+            _ => engines.values().cloned().collect(),
+        }
     };
     let mut purged = Vec::new();
     let invalid_ghosts = ["00000000", "\0\0\0\0\0\0\0\0"];
@@ -1244,12 +1300,13 @@ const HTML_CONTENT: &str = concat!(r##"
             const n = rows.length;
             const best = rows[0].rssi;
             const open = heardExpanded.has(s.mac);
+            const emac = esc(s.mac);
             const visible = open ? rows : rows.slice(0, 3);
             const items = rows.map((h, i) => {
                 const hidden = !open && i >= 3;
                 const owner = s.dongle_mac === h.mac;
                 const cls = sigText(h.rssi).cls;
-                return `<div data-heard-extra="${s.mac}" class="${hidden ? 'hidden ' : ''}flex items-center justify-between gap-2 rounded-lg border ${owner ? 'border-teal-800/60 bg-teal-950/20' : 'border-slate-800 bg-slate-900/40'} px-3 py-1.5 text-xs">
+                return `<div data-heard-extra="${emac}" class="${hidden ? 'hidden ' : ''}flex items-center justify-between gap-2 rounded-lg border ${owner ? 'border-teal-800/60 bg-teal-950/20' : 'border-slate-800 bg-slate-900/40'} px-3 py-1.5 text-xs">
                     <div class="flex items-center gap-2 min-w-0">
                         <span class="w-1.5 h-1.5 rounded-full ${owner ? 'bg-teal-400' : 'bg-slate-600'} shrink-0"></span>
                         <span class="font-mono text-slate-300 truncate">${esc(h.mac)}</span>
@@ -1267,15 +1324,15 @@ const HTML_CONTENT: &str = concat!(r##"
                     <span class="tag border border-teal-900 bg-teal-950/20 text-teal-400">roaming${n > 1 ? ` · best ${best} dBm` : ''}</span>
                 </div>
                 <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1.5">${items}</div>
-                ${n > 3 ? `<button type="button" data-heard-btn="${s.mac}" data-total="${n}" onclick="toggleHeardList('${s.mac}', this)" class="mt-2 text-[11px] font-semibold text-teal-400 hover:text-teal-300 px-1">${open ? 'Show less' : `Show all ${n}`}</button>` : ''}
+                ${n > 3 ? `<button type="button" data-heard-btn="${emac}" data-total="${n}" onclick="toggleHeardList('${emac}', this)" class="mt-2 text-[11px] font-semibold text-teal-400 hover:text-teal-300 px-1">${open ? 'Show less' : `Show all ${n}`}</button>` : ''}
             </div>`;
         }
         function toggleHeardList(mac, btn) {
-            const extras = document.querySelectorAll(`[data-heard-extra="${mac}"]`);
+            const extras = document.querySelectorAll(`[data-heard-extra="${CSS.escape(mac)}"]`);
             const hidden = [...extras].some(el => el.classList.contains('hidden'));
             extras.forEach(el => el.classList.toggle('hidden', !hidden));
             const total = btn ? btn.dataset.total : "";
-            document.querySelectorAll(`[data-heard-btn="${mac}"]`).forEach(b => {
+            document.querySelectorAll(`[data-heard-btn="${CSS.escape(mac)}"]`).forEach(b => {
                 b.textContent = hidden ? "Show less" : `Show all ${b.dataset.total || total}`;
             });
             if (hidden) heardExpanded.add(mac); else heardExpanded.delete(mac);
@@ -1289,18 +1346,19 @@ const HTML_CONTENT: &str = concat!(r##"
             const job = sensorJobRow(s.mac);
             const updating = !!job;
             const conflict = s.address_conflict;
+            const emac = esc(s.mac);
             return `<div class="rounded-xl border border-slate-800 bg-slate-950/70 p-3 sm:p-4">
                 <div class="flex items-center justify-between gap-2 mb-3">
                     <div class="min-w-0">
                         <div class="font-semibold text-sm text-slate-200 truncate">${esc(s.name || s.mac)}</div>
-                        <div class="font-mono text-[11px] text-teal-500/80">${esc(s.mac)}</div>
+                        <div class="font-mono text-[11px] text-teal-500/80">${emac}</div>
                     </div>
-                    <button onclick="openRename('${s.mac}')" class="shrink-0 inline-flex items-center gap-1.5 py-1.5 px-3 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-lg border border-slate-700 transition">✏️ Rename</button>
+                    <button onclick="openRename('${emac}')" class="shrink-0 inline-flex items-center gap-1.5 py-1.5 px-3 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-lg border border-slate-700 transition">✏️ Rename</button>
                 </div>
                 <div class="grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-3">
                     ${detailCell("Sensor type", esc(typeLabel(s.sensor_type)))}
                     ${detailCell("Firmware", esc(s.sw_version || "Unknown"))}
-                    ${detailCell("MAC", `<span class="font-mono">${esc(s.mac)}</span>`)}
+                    ${detailCell("MAC", `<span class="font-mono">${emac}</span>`)}
                     ${detailCell("Gateway", `<span class="font-mono">${esc(gatewayMac || "—")}</span>`)}
                     ${detailCell("Last seen", esc(absSeen(s.last_seen)), esc(relSeen(s.last_seen)))}
                     ${detailCell("Signal", signalInline(s.signal), sigText(s.signal).label)}
@@ -1314,7 +1372,7 @@ const HTML_CONTENT: &str = concat!(r##"
                         <div class="font-semibold text-emerald-400">OpenWyzeSense ${esc(ota.target)} is available</div>
                         <div class="text-slate-500 mt-0.5">Current ${esc(s.sw_version || "unknown")} · ${esc(ota.board)} · press the sensor's button briefly when asked</div>
                     </div>
-                    <button ${updating ? 'disabled' : ''} onclick="fwUpdateSensor('${d.mac}', '${s.mac}', '${ota.board}')" class="ota-btn-${s.mac} shrink-0 py-2 px-4 ${updating ? 'bg-slate-700 cursor-not-allowed opacity-60' : 'bg-emerald-700 hover:bg-emerald-600'} text-white text-xs font-semibold rounded-lg transition">${updating ? 'Updating…' : '⬆️ Update sensor'}</button>
+                    <button ${updating ? 'disabled' : ''} onclick="fwUpdateSensor('${esc(d.mac)}', '${emac}', '${esc(ota.board)}')" class="ota-btn-${emac} shrink-0 py-2 px-4 ${updating ? 'bg-slate-700 cursor-not-allowed opacity-60' : 'bg-emerald-700 hover:bg-emerald-600'} text-white text-xs font-semibold rounded-lg transition">${updating ? 'Updating…' : '⬆️ Update sensor'}</button>
                 </div>` : ''}
                 ${heardBlock(s)}
                 ${conflict ? `<div class="mt-3 text-xs text-amber-400 bg-amber-950/20 border border-amber-900/40 rounded-lg px-3 py-2">
@@ -1337,12 +1395,12 @@ const HTML_CONTENT: &str = concat!(r##"
         // ===== Sensor rows / cards =====
         function desktopRow(s, d) {
             const open = openSensors.has(s.mac);
-            const mac = s.mac;
-            return `<tr data-sensor-row="${mac}" class="sensor-row cursor-pointer text-xs border-t border-slate-800/40${open ? ' open' : ''}" onclick="toggleSensor('${mac}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleSensor('${mac}')}" tabindex="0">
-                    <td class="py-2.5 pl-3 pr-1 w-6"><span data-sensor-chev="${mac}" class="chevron text-slate-500 text-[10px]${open ? ' open' : ''}">▶</span></td>
+            const emac = esc(s.mac);
+            return `<tr data-sensor-row="${emac}" class="sensor-row cursor-pointer text-xs border-t border-slate-800/40${open ? ' open' : ''}" onclick="toggleSensor('${emac}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleSensor('${emac}')}" tabindex="0">
+                    <td class="py-2.5 pl-3 pr-1 w-6"><span data-sensor-chev="${emac}" class="chevron text-slate-500 text-[10px]${open ? ' open' : ''}">▶</span></td>
                     <td class="py-2.5 px-2">
                         <div class="font-semibold text-slate-200 truncate max-w-[11rem]">${esc(s.name || s.mac)}</div>
-                        <div class="font-mono text-[11px] text-teal-500/80">${esc(mac)}</div>
+                        <div class="font-mono text-[11px] text-teal-500/80">${emac}</div>
                     </td>
                     <td class="py-2.5 px-2">${typeTag(s)}${updateBadge(s, d)}${conflictBadge(s)}</td>
                     <td class="py-2.5 px-2">${stateTag(s)}</td>
@@ -1350,24 +1408,24 @@ const HTML_CONTENT: &str = concat!(r##"
                     <td class="py-2.5 px-2">${signalInline(s.signal)}</td>
                     <td class="py-2.5 px-2 text-slate-400">${relSeen(s.last_seen)}</td>
                 </tr>
-                <tr data-sensor-detail-tr="${mac}" class="${open ? '' : 'hidden'}">
+                <tr data-sensor-detail-tr="${emac}" class="${open ? '' : 'hidden'}">
                     <td colspan="7" class="p-0">
-                        <div data-sensor-wrap="${mac}" class="detail-wrap${open ? ' open' : ''}"><div class="detail-inner"><div class="px-3 pb-3 pt-0">${detailCard(s, d)}</div></div></div>
+                        <div data-sensor-wrap="${emac}" class="detail-wrap${open ? ' open' : ''}"><div class="detail-inner"><div class="px-3 pb-3 pt-0">${detailCard(s, d)}</div></div></div>
                     </td>
                 </tr>`;
         }
 
         function mobileCard(s, d) {
             const open = openSensors.has(s.mac);
-            const mac = s.mac;
-            return `<div data-sensor-row="${mac}" class="sensor-card border-b border-slate-800/50 last:border-b-0${open ? ' open' : ''}">
-                <button class="w-full text-left px-4 py-3 flex items-start gap-3" onclick="toggleSensor('${mac}')">
-                    <span data-sensor-chev="${mac}" class="chevron ${open ? 'open ' : ''}mt-1 text-slate-500 text-[10px]">▶</span>
+            const emac = esc(s.mac);
+            return `<div data-sensor-row="${emac}" class="sensor-card border-b border-slate-800/50 last:border-b-0${open ? ' open' : ''}">
+                <button class="w-full text-left px-4 py-3 flex items-start gap-3" onclick="toggleSensor('${emac}')">
+                    <span data-sensor-chev="${emac}" class="chevron ${open ? 'open ' : ''}mt-1 text-slate-500 text-[10px]">▶</span>
                     <div class="min-w-0 flex-1">
                         <div class="flex items-start justify-between gap-2">
                             <div class="min-w-0">
                                 <div class="font-semibold text-sm text-slate-100 truncate">${esc(s.name || s.mac)}</div>
-                                <div class="font-mono text-[11px] text-teal-500/80 truncate">${esc(mac)}</div>
+                                <div class="font-mono text-[11px] text-teal-500/80 truncate">${emac}</div>
                             </div>
                             <div class="shrink-0">${stateTag(s)}</div>
                         </div>
@@ -1378,7 +1436,7 @@ const HTML_CONTENT: &str = concat!(r##"
                         </div>
                     </div>
                 </button>
-                <div data-sensor-wrap="${mac}" class="detail-wrap${open ? ' open' : ''}"><div class="detail-inner"><div class="px-4 pb-3">${detailCard(s, d)}</div></div></div>
+                <div data-sensor-wrap="${emac}" class="detail-wrap${open ? ' open' : ''}"><div class="detail-inner"><div class="px-4 pb-3">${detailCard(s, d)}</div></div></div>
             </div>`;
         }
 
@@ -1400,24 +1458,26 @@ const HTML_CONTENT: &str = concat!(r##"
         function toggleSensor(mac) {
             const open = !openSensors.has(mac);
             if (open) openSensors.add(mac); else openSensors.delete(mac);
-            document.querySelectorAll(`[data-sensor-wrap="${mac}"]`).forEach(el => el.classList.toggle('open', open));
-            document.querySelectorAll(`[data-sensor-chev="${mac}"]`).forEach(el => el.classList.toggle('open', open));
-            document.querySelectorAll(`[data-sensor-row="${mac}"]`).forEach(el => el.classList.toggle('open', open));
-            document.querySelectorAll(`[data-sensor-detail-tr="${mac}"]`).forEach(el => el.classList.toggle('hidden', !open));
+            const sel = CSS.escape(mac);
+            document.querySelectorAll(`[data-sensor-wrap="${sel}"]`).forEach(el => el.classList.toggle('open', open));
+            document.querySelectorAll(`[data-sensor-chev="${sel}"]`).forEach(el => el.classList.toggle('open', open));
+            document.querySelectorAll(`[data-sensor-row="${sel}"]`).forEach(el => el.classList.toggle('open', open));
+            document.querySelectorAll(`[data-sensor-detail-tr="${sel}"]`).forEach(el => el.classList.toggle('hidden', !open));
         }
 
         // ===== Dongle =====
         function dongleDetails(d) {
             const o = d.openwyzesense;
             const conn = d.transport === "bridge" ? (d.remote_addr || "—") : (d.device_path || "—");
+            const emac = esc(d.mac);
             return `<div class="border-t border-slate-800/50 bg-slate-950/40 px-4 sm:px-5 py-4">
                 <div class="flex items-start justify-between gap-2 mb-3">
                     <div class="min-w-0">
                         <div class="text-[10px] uppercase tracking-wide text-slate-600 mb-1">Dongle</div>
                         <div class="font-semibold text-sm text-slate-200 break-all">${esc(d.name || ("Dongle " + d.mac))}</div>
-                        <div class="font-mono text-[11px] text-teal-500/80">${esc(d.mac)}</div>
+                        <div class="font-mono text-[11px] text-teal-500/80">${emac}</div>
                     </div>
-                    <button onclick="openDongleRename('${d.mac}')" class="shrink-0 inline-flex items-center gap-1.5 py-1.5 px-3 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-lg border border-slate-700 transition">✏️ Rename</button>
+                    <button onclick="openDongleRename('${emac}')" class="shrink-0 inline-flex items-center gap-1.5 py-1.5 px-3 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-lg border border-slate-700 transition">✏️ Rename</button>
                 </div>
                 <div class="grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-3">
                     ${detailCell("Transport", d.transport === "bridge" ? "🌐 Bridge" : "🔌 Local")}
@@ -1436,14 +1496,15 @@ const HTML_CONTENT: &str = concat!(r##"
 
         function relayFirmware(d, r, busy) {
             if (!r) return '';
+            const emac = esc(d.mac);
             const current = r.build && fwData.release && r.build.startsWith(fwData.release);
-            const pw = r.auth ? `<input data-relay-pass="${d.mac}" type="password" placeholder="Relay admin password (not stored)" class="w-full mb-2 bg-slate-950 border border-slate-800 text-sm rounded-xl px-3 py-2 focus:outline-none focus:border-teal-500">` : '';
+            const pw = r.auth ? `<input data-relay-pass="${emac}" type="password" placeholder="Relay admin password (not stored)" class="w-full mb-2 bg-slate-950 border border-slate-800 text-sm rounded-xl px-3 py-2 focus:outline-none focus:border-teal-500">` : '';
             return `<div class="mt-4 border-t border-slate-800/60 pt-3">
                 <div class="text-[10px] uppercase tracking-wide text-slate-600 mb-1.5">🔧 Relay firmware</div>
                 <p class="text-xs text-slate-500 mb-2 break-words">${esc(r.name || "")}: <span class="text-slate-300">${esc(r.chip || "")} · ${esc(r.build || "")}</span>.
                     The relay restarts into the new firmware and updates its contact board's radio, then reconnects (about a minute).
                     A build that can't rejoin Wi-Fi rolls back by itself.</p>
-                ${r.product ? `${pw}<button ${busy ? 'disabled' : ''} onclick="fwRelay('${d.mac}')" class="w-full py-2.5 bg-emerald-700 hover:bg-emerald-600 disabled:opacity-40 text-white text-xs font-semibold rounded-lg transition">${current ? 'Reinstall' : 'Update relay to'} OpenWyzeSense ${esc(fwData.release || "")}</button>`
+                ${r.product ? `${pw}<button ${busy ? 'disabled' : ''} onclick="fwRelay('${emac}')" class="w-full py-2.5 bg-emerald-700 hover:bg-emerald-600 disabled:opacity-40 text-white text-xs font-semibold rounded-lg transition">${current ? 'Reinstall' : 'Update relay to'} OpenWyzeSense ${esc(fwData.release || "")}</button>`
                     : `<p class="text-xs text-amber-400">No relay firmware for a ${esc(r.chip || "unknown")}.</p>`}
             </div>`;
         }
@@ -1453,11 +1514,12 @@ const HTML_CONTENT: &str = concat!(r##"
             if (!f) return '';
             const busy = fwBusy();
             if (d.transport === "bridge") return relayFirmware(d, f.relay, busy);
+            const emac = esc(d.mac);
             const ows = !!d.openwyzesense;
             const release = esc(fwData.release || "");
             const install = ows ? `Reinstall / update to OpenWyzeSense ${release}` : `Install OpenWyzeSense ${release}`;
             const restore = ows && f.can_restore_stock
-                ? `<button ${busy ? 'disabled' : ''} onclick="fwRestore('${d.mac}')" class="w-full mt-2 py-2.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-slate-300 text-xs font-semibold rounded-lg border border-slate-700 transition">Restore stock firmware</button>`
+                ? `<button ${busy ? 'disabled' : ''} onclick="fwRestore('${emac}')" class="w-full mt-2 py-2.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-slate-300 text-xs font-semibold rounded-lg border border-slate-700 transition">Restore stock firmware</button>`
                 : '';
             const backups = (f.backups || []).length;
             return `<div class="mt-4 border-t border-slate-800/60 pt-3">
@@ -1468,7 +1530,7 @@ const HTML_CONTENT: &str = concat!(r##"
                 <p class="text-xs text-slate-500 mb-2 break-words">Running: <span class="text-slate-300">${esc(f.firmware || "unknown")}</span>.
                     The dongle is backed up first (the only way back to stock), then you see which sensors carry over before anything is written.
                     It is offline for about a minute.${backups ? ` ${backups} backup${backups > 1 ? 's' : ''} saved.` : ''}</p>
-                <button ${busy ? 'disabled' : ''} onclick="fwInstall('${d.mac}')" class="w-full py-2.5 bg-emerald-700 hover:bg-emerald-600 disabled:opacity-40 text-white text-xs font-semibold rounded-lg transition">${install}</button>
+                <button ${busy ? 'disabled' : ''} onclick="fwInstall('${emac}')" class="w-full py-2.5 bg-emerald-700 hover:bg-emerald-600 disabled:opacity-40 text-white text-xs font-semibold rounded-lg transition">${install}</button>
                 ${restore}
             </div>`;
         }
@@ -1476,7 +1538,8 @@ const HTML_CONTENT: &str = concat!(r##"
         function dongleActions(d) {
             const ss = scanState[d.mac] || {active: false};
             const scanning = !!ss.active;
-            const pairBtn = `<button data-pair-btn="${d.mac}" onclick="toggleScan('${d.mac}')" class="w-full py-2.5 ${scanning ? 'bg-rose-700 hover:bg-rose-600' : 'bg-teal-600 hover:bg-teal-500'} text-white text-xs font-semibold rounded-lg transition">${scanning ? `⏹ Stop scan${ss.secondsLeft != null ? ` (${ss.secondsLeft}s)` : ""}` : "📡 Pair new sensor"}</button>`;
+            const emac = esc(d.mac);
+            const pairBtn = `<button data-pair-btn="${emac}" onclick="toggleScan('${emac}')" class="w-full py-2.5 ${scanning ? 'bg-rose-700 hover:bg-rose-600' : 'bg-teal-600 hover:bg-teal-500'} text-white text-xs font-semibold rounded-lg transition">${scanning ? `⏹ Stop scan${ss.secondsLeft != null ? ` (${ss.secondsLeft}s)` : ""}` : "📡 Pair new sensor"}</button>`;
             return `<div class="mt-4 border-t border-slate-800/60 pt-3">
                 <div class="text-[10px] uppercase tracking-wide text-slate-600 mb-2">⚙️ Actions</div>
                 <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
@@ -1488,16 +1551,16 @@ const HTML_CONTENT: &str = concat!(r##"
                     <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-3">
                         <div class="text-xs font-semibold text-slate-300 mb-1">🧹 Maintenance</div>
                         <p class="text-[11px] text-slate-500 mb-2">Remove invalid or ghost sensor entries from the dongle's NVRAM.</p>
-                        <button onclick="runFix('${d.mac}', this)" class="w-full py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-lg border border-slate-700 transition">Purge ghost sensors</button>
+                        <button onclick="runFix('${emac}', this)" class="w-full py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-lg border border-slate-700 transition">Purge ghost sensors</button>
                     </div>
                     <div class="rounded-xl border border-slate-800 bg-slate-900/40 p-3 lg:col-span-2">
                         <div class="text-xs font-semibold text-slate-300 mb-1">💻 Hex console</div>
                         <p class="text-[11px] text-slate-500 mb-2">Send a raw packet and see the dongle's reply.</p>
                         <div class="flex gap-2">
-                            <input data-hex-input="${d.mac}" placeholder="AA,55,43..." class="flex-1 min-w-0 bg-slate-950 border border-slate-800 text-xs rounded-lg px-3 py-2 font-mono focus:outline-none focus:border-teal-500">
-                            <button onclick="sendRaw('${d.mac}')" class="shrink-0 py-2 px-4 bg-slate-800 hover:bg-slate-700 font-semibold text-xs rounded-lg border border-slate-700 transition">Send</button>
+                            <input data-hex-input="${emac}" placeholder="AA,55,43..." class="flex-1 min-w-0 bg-slate-950 border border-slate-800 text-xs rounded-lg px-3 py-2 font-mono focus:outline-none focus:border-teal-500">
+                            <button onclick="sendRaw('${emac}')" class="shrink-0 py-2 px-4 bg-slate-800 hover:bg-slate-700 font-semibold text-xs rounded-lg border border-slate-700 transition">Send</button>
                         </div>
-                        <div data-hex-log="${d.mac}" class="rounded-lg border border-slate-800 bg-slate-950 p-2 mt-2 font-mono text-[11px] text-emerald-400 min-h-[44px] max-h-[120px] overflow-y-auto overflow-x-hidden break-all space-y-0.5">${hexLogHtml(d.mac)}</div>
+                        <div data-hex-log="${emac}" class="rounded-lg border border-slate-800 bg-slate-950 p-2 mt-2 font-mono text-[11px] text-emerald-400 min-h-[44px] max-h-[120px] overflow-y-auto overflow-x-hidden break-all space-y-0.5">${hexLogHtml(d.mac)}</div>
                     </div>
                 </div>
             </div>`;
@@ -1512,13 +1575,14 @@ const HTML_CONTENT: &str = concat!(r##"
             if (!hexLogs[mac]) hexLogs[mac] = [];
             hexLogs[mac].push({text, cls: cls || ''});
             if (hexLogs[mac].length > 200) hexLogs[mac].shift();
-            const el = document.querySelector(`[data-hex-log="${mac}"]`);
+            const el = document.querySelector(`[data-hex-log="${CSS.escape(mac)}"]`);
             if (el) { el.innerHTML = hexLogHtml(mac); el.scrollTop = el.scrollHeight; }
         }
 
         function dongleCard(d) {
             const n = (d.sensors || []).length;
             const open = openDongles.has(d.mac);
+            const emac = esc(d.mac);
             const dot = `<span class="w-2.5 h-2.5 rounded-full shrink-0 ${d.scanning ? 'bg-amber-400 animate-pulse' : 'bg-teal-400'}"></span>`;
             const tr = d.transport === "bridge"
                 ? `<span class="tag border border-violet-900 bg-violet-950/20 text-violet-400">🌐 Bridge</span><span class="text-xs text-slate-500 font-mono ml-1">${esc(d.remote_addr || "?")}</span>`
@@ -1535,16 +1599,16 @@ const HTML_CONTENT: &str = concat!(r##"
                                 ${d.openwyzesense ? `<span class="tag border border-emerald-900 bg-emerald-950/20 text-emerald-400">OpenWyzeSense ${esc(d.openwyzesense.version || "")}${d.openwyzesense.roaming ? ' · roaming' : ''}</span>` : (d.transport !== 'bridge' ? '<span class="tag border border-slate-800 text-slate-500">Stock firmware</span>' : '')}
                             </div>
                             <div class="flex items-center gap-2 mt-0.5 flex-wrap">
-                                <span class="text-xs text-slate-500 font-mono">${esc(d.mac)}</span>
+                                <span class="text-xs text-slate-500 font-mono">${emac}</span>
                                 <span class="text-slate-700">·</span>
                                 <span class="text-xs text-slate-500 font-mono">${esc(d.version || 'Unknown firmware')}</span>
                                 <span class="text-slate-700">·</span> ${tr}
                             </div>
                         </div>
                     </div>
-                    <button data-dongle-btn="${d.mac}" onclick="toggleDongleDetails('${d.mac}')" class="w-full sm:w-auto sm:ml-3 shrink-0 py-1.5 px-4 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-lg border border-slate-700 transition flex items-center justify-center gap-1.5 whitespace-nowrap">${open ? 'ⓘ Hide details' : 'ⓘ Details'}</button>
+                    <button data-dongle-btn="${emac}" onclick="toggleDongleDetails('${emac}')" class="w-full sm:w-auto sm:ml-3 shrink-0 py-1.5 px-4 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-lg border border-slate-700 transition flex items-center justify-center gap-1.5 whitespace-nowrap">${open ? 'ⓘ Hide details' : 'ⓘ Details'}</button>
                 </div>
-                <div data-dongle-detail="${d.mac}" class="dongle-detail${open ? ' open' : ''}"><div class="dongle-detail-inner">${dongleDetails(d)}</div></div>
+                <div data-dongle-detail="${emac}" class="dongle-detail${open ? ' open' : ''}"><div class="dongle-detail-inner">${dongleDetails(d)}</div></div>
                 <div class="border-t border-slate-800/50">
                     <div class="px-2 py-1">${sensorList(d.sensors, d)}</div>
                 </div>
@@ -1567,8 +1631,9 @@ const HTML_CONTENT: &str = concat!(r##"
         function toggleDongleDetails(mac) {
             const open = !openDongles.has(mac);
             if (open) openDongles.add(mac); else openDongles.delete(mac);
-            document.querySelectorAll(`[data-dongle-detail="${mac}"]`).forEach(el => el.classList.toggle('open', open));
-            document.querySelectorAll(`[data-dongle-btn="${mac}"]`).forEach(btn => { btn.innerHTML = open ? 'ⓘ Hide details' : 'ⓘ Details'; });
+            const sel = CSS.escape(mac);
+            document.querySelectorAll(`[data-dongle-detail="${sel}"]`).forEach(el => el.classList.toggle('open', open));
+            document.querySelectorAll(`[data-dongle-btn="${sel}"]`).forEach(btn => { btn.innerHTML = open ? 'ⓘ Hide details' : 'ⓘ Details'; });
         }
 
         // ===== Rename =====
@@ -1635,7 +1700,7 @@ const HTML_CONTENT: &str = concat!(r##"
         }
         function updatePairButton(mac) {
             const s = scanState[mac] || {active: false};
-            document.querySelectorAll(`[data-pair-btn="${mac}"]`).forEach(btn => {
+            document.querySelectorAll(`[data-pair-btn="${CSS.escape(mac)}"]`).forEach(btn => {
                 btn.textContent = s.active ? `⏹ Stop scan${s.secondsLeft != null ? ` (${s.secondsLeft}s)` : ""}` : "📡 Pair new sensor";
                 btn.classList.toggle("bg-rose-700", !!s.active);
                 btn.classList.toggle("hover:bg-rose-600", !!s.active);
@@ -1649,8 +1714,9 @@ const HTML_CONTENT: &str = concat!(r##"
                 const {ok, data} = await postJson("/api/scan", {enable: !ss.active, dongle_mac: mac});
                 if (!ok) { toast(data.error || "Scan toggle failed", "error"); return; }
                 if (data.scan_active) {
-                    scanState[mac] = {active: true, secondsLeft: 60};
                     clearScanTimers(mac);
+                    const beforeMacs = new Set(((dongleByMac(mac)?.sensors) || []).map(s => s.mac));
+                    scanState[mac] = {active: true, secondsLeft: 60, beforeMacs};
                     scanState[mac].timer = setInterval(() => {
                         const s = scanState[mac];
                         if (!s) return;
@@ -1662,10 +1728,7 @@ const HTML_CONTENT: &str = concat!(r##"
                             const r = await fetch(`${API}/api/scan`);
                             const d = await r.json();
                             if (!d.scan_active) {
-                                clearScanTimers(mac);
-                                scanState[mac].active = false;
-                                updatePairButton(mac);
-                                toast("Sensor paired", "ok");
+                                await new Promise(res => setTimeout(res, 300));
                                 await loadDongles();
                             }
                         } catch (e) {}
@@ -1691,15 +1754,14 @@ const HTML_CONTENT: &str = concat!(r##"
         async function runFix(mac, btn) {
             toast(`Purging ghost sensors on ${dongleName(mac)}…`, "ok");
             try {
-                const r = await fetch(`${API}/api/fix`, {method: "POST"});
-                const d = await r.json().catch(() => ({}));
-                if (!r.ok) { toast(d.error || "Purge failed", "error"); return; }
+                const {ok, data: d} = await postJson("/api/fix", {dongle_mac: mac});
+                if (!ok) { toast(d.error || "Purge failed", "error"); return; }
                 toast(`Purged ${d.purged_count || 0} ghost sensor${d.purged_count === 1 ? "" : "s"}`, "ok");
                 await loadDongles();
             } catch (e) { toast("Purge failed", "error"); }
         }
         async function sendRaw(mac) {
-            const input = document.querySelector(`[data-hex-input="${mac}"]`);
+            const input = document.querySelector(`[data-hex-input="${CSS.escape(mac)}"]`);
             if (!input) return;
             const raw = input.value.trim();
             if (!raw) return;
@@ -1730,7 +1792,7 @@ const HTML_CONTENT: &str = concat!(r##"
         async function fwRestore(mac) { fwDismissed = null; if (await fwPost("restore", {dongle: mac})) toast(`Restoring stock firmware on ${dongleName(mac)}`, "ok"); }
         async function fwRelay(mac) {
             fwDismissed = null;
-            const password = document.querySelector(`[data-relay-pass="${mac}"]`)?.value || null;
+            const password = document.querySelector(`[data-relay-pass="${CSS.escape(mac)}"]`)?.value || null;
             if (await fwPost("relay", {dongle: mac, password})) toast(`Relay update started on ${dongleName(mac)}`, "ok");
         }
         async function fwUpdateSensor(gateway, mac, board) {
@@ -1851,11 +1913,25 @@ const HTML_CONTENT: &str = concat!(r##"
                 donglesData = await r.json();
                 fwData = await fr.json().catch(() => fwData);
                 roamingData = await rr.json().catch(() => roamingData);
-                // Reflect a scan started elsewhere; local timers own their countdown.
+                // Reflect a scan started or stopped; clean up timers and toast only when a new sensor paired.
                 (donglesData.dongles || []).forEach(d => {
                     const ss = scanState[d.mac];
-                    if (d.scanning && !ss?.active) scanState[d.mac] = {active: true, secondsLeft: null};
-                    if (!d.scanning && ss?.active && !ss.timer) scanState[d.mac] = {active: false};
+                    if (d.scanning && !ss?.active) {
+                        const beforeMacs = new Set((d.sensors || []).map(s => s.mac));
+                        scanState[d.mac] = {active: true, secondsLeft: null, beforeMacs};
+                    }
+                    if (!d.scanning && ss?.active) {
+                        const paired = ss.beforeMacs && (d.sensors || []).some(s => !ss.beforeMacs.has(s.mac));
+                        clearScanTimers(d.mac);
+                        scanState[d.mac] = {active: false};
+                        if (paired) toast("Sensor paired", "ok");
+                    }
+                });
+                Object.keys(scanState).forEach(mac => {
+                    if (scanState[mac]?.active && !dongleByMac(mac)) {
+                        clearScanTimers(mac);
+                        scanState[mac] = {active: false};
+                    }
                 });
                 updateHeader();
                 if (editingInline()) { pendingRender = true; return; }
@@ -1898,7 +1974,7 @@ const HTML_CONTENT: &str = concat!(r##"
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::packet::commands;
+    use crate::protocol::packet::{commands, PacketPayload};
     use crate::transport::AsyncTransport;
     use crate::transport::replay::ReplayTransport;
     use crate::transport::virtual_dongle::VirtualDongle;
@@ -2127,5 +2203,148 @@ mod tests {
         .expect("ACK-only command via /api/raw must not time out")
         .into_response();
         assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    fn parse_written_commands(bytes: &[u8]) -> Vec<u16> {
+        let mut cmds = Vec::new();
+        let mut slice = bytes;
+        while !slice.is_empty() {
+            match Packet::parse(slice) {
+                Ok((pkt, consumed)) => {
+                    if !matches!(pkt.payload, PacketPayload::Ack(_)) {
+                        cmds.push(pkt.cmd());
+                    }
+                    slice = &slice[consumed..];
+                }
+                Err(_) => break,
+            }
+        }
+        cmds
+    }
+
+    #[tokio::test]
+    async fn api_fix_targets_requested_dongle_only() {
+        let (_client, state, _status_rx) = start_server(fast_settings()).await;
+
+        let d1 = VirtualDongle::new("DONGLE01", "V1.0").with_sensors(vec!["00000000".into()]);
+        let d2 = VirtualDongle::new("DONGLE02", "V1.0").with_sensors(vec!["00000000".into()]);
+
+        let (tx1, _) = mpsc::channel(16);
+        let mut e1 = Engine::new(d1.transport(), tx1);
+        let _exit1 = e1.start();
+        e1.initialize_handshake().await.unwrap();
+
+        let (tx2, _) = mpsc::channel(16);
+        let mut e2 = Engine::new(d2.transport(), tx2);
+        let _exit2 = e2.start();
+        e2.initialize_handshake().await.unwrap();
+
+        d1.replay_transport().clear_written();
+        d2.replay_transport().clear_written();
+
+        {
+            let mut engines = state.engines.lock().await;
+            engines.insert("DONGLE01".into(), e1);
+            engines.insert("DONGLE02".into(), e2);
+        }
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = router(Arc::clone(&state)).into_make_service_with_connect_info::<SocketAddr>();
+        tokio::spawn(async move { axum::serve(listener, app).await });
+
+        let http = reqwest::Client::new();
+        let resp = http
+            .post(format!("http://{}/api/fix", addr))
+            .json(&serde_json::json!({ "dongle_mac": "DONGLE01" }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let cmds1 = parse_written_commands(&d1.replay_transport().get_written());
+        let cmds2 = parse_written_commands(&d2.replay_transport().get_written());
+        assert!(
+            cmds1.contains(&commands::CMD_DELETE_SENSOR),
+            "expected DONGLE01 to purge 00000000, got commands: {:04X?}",
+            cmds1
+        );
+        assert!(
+            cmds2.is_empty(),
+            "expected DONGLE02 not to be touched when dongle_mac=DONGLE01, got commands: {:04X?}",
+            cmds2
+        );
+    }
+
+    #[tokio::test]
+    async fn api_verify_exchanges_r1_stops_scan_and_emits_paired_event() {
+        let (event_tx, mut event_rx) = mpsc::channel(128);
+        let (dongle_status_tx, _) = mpsc::channel(8);
+        let state = Arc::new(WebState {
+            engines: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
+            sensor_manager: Arc::new(std::sync::Mutex::new(SensorManager::new(
+                "/nonexistent/sensors.yaml".to_string(),
+                "/nonexistent/state.yaml".to_string(),
+            ))),
+            dongle_names: Arc::new(std::sync::Mutex::new(DonglesConfig::default())),
+            dongle_config_path: "/nonexistent/dongles.yaml".to_string(),
+            broadcast_tx: tokio::sync::broadcast::channel(16).0,
+            event_tx: event_tx.clone(),
+            dongle_status_tx,
+            bridge_auth_token: None,
+            bridge: fast_settings(),
+            roaming: None,
+            firmware: None,
+        });
+
+        let d1 = VirtualDongle::new("DONGLE01", "V1.0");
+        d1.replay_transport().register_response(
+            commands::CMD_GET_R1,
+            Packet::new_async(0x22, vec![0x42; 16]).to_bytes(),
+        );
+
+        let mut e1 = Engine::new(d1.transport(), event_tx);
+        let _exit1 = e1.start();
+        e1.initialize_handshake().await.unwrap();
+        e1.set_scan(true).await.unwrap();
+        assert!(e1.is_scanning());
+        d1.replay_transport().clear_written();
+
+        state.engines.lock().await.insert("DONGLE01".into(), e1.clone());
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = router(Arc::clone(&state)).into_make_service_with_connect_info::<SocketAddr>();
+        tokio::spawn(async move { axum::serve(listener, app).await });
+
+        let http = reqwest::Client::new();
+        let resp = http
+            .post(format!("http://{}/api/verify", addr))
+            .json(&serde_json::json!({
+                "mac": "SENSOR01",
+                "dongle_mac": "DONGLE01",
+                "sensor_type": "contact_v2"
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let cmds = parse_written_commands(&d1.replay_transport().get_written());
+        assert_eq!(
+            cmds,
+            vec![
+                commands::CMD_GET_R1,
+                commands::CMD_SET_SCAN,
+                commands::CMD_VERIFY_SENSOR,
+            ],
+            "verify endpoint should exchange R1, stop scan, and verify sensor in order"
+        );
+        assert!(!e1.is_scanning(), "scan mode should be disabled after manual verify");
+
+        let evt = event_rx.try_recv().expect("expected Paired event to be emitted");
+        assert_eq!(evt.mac, "SENSOR01");
+        assert_eq!(evt.dongle_mac.as_deref(), Some("DONGLE01"));
+        assert!(matches!(evt.data, crate::protocol::telemetry::TelemetryData::Paired { .. }));
     }
 }
