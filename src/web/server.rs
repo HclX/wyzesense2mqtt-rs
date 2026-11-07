@@ -491,16 +491,10 @@ async fn list_dongles(
 
     // Group sensors by dongle_mac from the single source of truth (SensorManager)
     let mut dongles: Vec<serde_json::Value> = engines.iter().map(|(mac, engine)| {
-        let mut sensors: Vec<serde_json::Value> = manager.get_sensors().values()
+        let sensors: Vec<serde_json::Value> = manager.get_sensors().values()
             .filter(|s| s.dongle_mac.as_deref() == Some(mac.as_str()))
             .map(|s| with_conflict(sensor_info_to_json(s)))
             .collect();
-        sensors.sort_by_key(|s| {
-            (
-                s["name"].as_str().unwrap_or_else(|| s["mac"].as_str().unwrap_or("")).to_ascii_lowercase(),
-                s["mac"].as_str().unwrap_or("").to_string(),
-            )
-        });
         let sensor_count = sensors.len();
 
         serde_json::json!({
@@ -518,23 +512,16 @@ async fn list_dongles(
         })
     }).collect();
     dongles.sort_by_key(|d| {
-        (
-            d["name"].as_str().unwrap_or_else(|| d["mac"].as_str().unwrap_or("")).to_ascii_lowercase(),
-            d["mac"].as_str().unwrap_or("").to_string(),
-        )
+        let mac = d["mac"].as_str().unwrap_or("");
+        let label = d["name"].as_str().filter(|s| !s.is_empty()).unwrap_or(mac);
+        (label.to_ascii_lowercase(), mac.to_string())
     });
 
-    // Unassociated sensors: dongle_mac is None
-    let mut unassociated: Vec<serde_json::Value> = manager.get_sensors().values()
-        .filter(|s| s.dongle_mac.is_none())
-        .map(|s| sensor_info_to_json(s))
+    // Unassociated or offline-gateway sensors: dongle_mac is None or points to a gateway not in `engines`
+    let unassociated: Vec<serde_json::Value> = manager.get_sensors().values()
+        .filter(|s| s.dongle_mac.as_deref().is_none_or(|m| !engines.contains_key(m)))
+        .map(|s| with_conflict(sensor_info_to_json(s)))
         .collect();
-    unassociated.sort_by_key(|s| {
-        (
-            s["name"].as_str().unwrap_or_else(|| s["mac"].as_str().unwrap_or("")).to_ascii_lowercase(),
-            s["mac"].as_str().unwrap_or("").to_string(),
-        )
-    });
 
     let dongle_names: std::collections::HashMap<String, String> = names
         .dongles
@@ -1477,12 +1464,17 @@ const HTML_CONTENT: &str = concat!(r##"
                 ? `<span class="tag border border-amber-900 bg-amber-950/30 text-amber-400" title="${esc(conflictText(s.address_conflict))}">⚠ address</span>`
                 : '';
         }
+        function gatewayLabel(s, d) {
+            const mac = d?.mac || s.dongle_mac || null;
+            if (!d && !mac) return "Unassociated";
+            return d?.name || dongleName(mac);
+        }
         function gatewayTag(s, d) {
             const mac = d?.mac || s.dongle_mac || null;
             if (!d && !mac) {
                 return `<span class="tag border border-slate-700 bg-slate-900/60 text-slate-400">📦 Unassociated</span>`;
             }
-            const label = d?.name || dongleName(mac);
+            const label = gatewayLabel(s, d);
             if (!d) {
                 return `<span class="tag border border-slate-700 bg-slate-900/60 text-slate-400" title="${esc(mac)}">📦 ${esc(label)}</span>`;
             }
@@ -1493,10 +1485,6 @@ const HTML_CONTENT: &str = concat!(r##"
         // ===== Sensor sorting =====
         function sensorSortName(s) {
             return String(s.name || s.mac || "").toLowerCase();
-        }
-        function sensorGatewayLabel(s, d) {
-            const mac = d?.mac || s.dongle_mac || null;
-            return String(d?.name || (mac ? dongleName(mac) : "unassociated")).toLowerCase();
         }
         function sensorStateRank(s) {
             const st = s.state;
@@ -1510,46 +1498,48 @@ const HTML_CONTENT: &str = concat!(r##"
             }
             return 3;
         }
+        function decorateSensor(s, d) {
+            const temp = Number(s.state?.temperature);
+            return {
+                s,
+                d,
+                nameKey: sensorSortName(s),
+                gwKey: gatewayLabel(s, d).toLowerCase(),
+                typeKey: typeLabel(s.sensor_type).toLowerCase(),
+                stateRank: sensorStateRank(s),
+                temp: Number.isFinite(temp) ? temp : null,
+                battery: s.battery,
+                signal: s.signal,
+                seen: seenAge(s.last_seen),
+            };
+        }
+        function compareNullableNumber(va, vb, dir, byName) {
+            if (va == null && vb == null) return dir * byName();
+            if (va == null) return 1;
+            if (vb == null) return -1;
+            return dir * ((va - vb) || byName());
+        }
         function compareSensors(a, b) {
             const dir = sensorSort.dir === "desc" ? -1 : 1;
-            const byName = () => sensorSortName(a.s).localeCompare(sensorSortName(b.s));
+            const byName = () => a.nameKey.localeCompare(b.nameKey);
             switch (sensorSort.key) {
                 case "name":
                     return dir * byName();
                 case "gateway":
-                    return dir * (sensorGatewayLabel(a.s, a.d).localeCompare(sensorGatewayLabel(b.s, b.d)) || byName());
+                    return dir * (a.gwKey.localeCompare(b.gwKey) || byName());
                 case "type":
-                    return dir * (typeLabel(a.s.sensor_type).localeCompare(typeLabel(b.s.sensor_type)) || byName());
+                    return dir * (a.typeKey.localeCompare(b.typeKey) || byName());
                 case "state": {
-                    const ra = sensorStateRank(a.s), rb = sensorStateRank(b.s);
-                    if (ra !== rb) return dir * (ra - rb);
-                    if (ra === 2) {
-                        const ta = Number(a.s.state?.temperature) || 0, tb = Number(b.s.state?.temperature) || 0;
-                        if (ta !== tb) return dir * (ta - tb);
-                    }
+                    if (a.stateRank !== b.stateRank) return dir * (a.stateRank - b.stateRank);
+                    if (a.stateRank === 2) return compareNullableNumber(a.temp, b.temp, dir, byName);
                     return dir * byName();
                 }
-                case "battery": {
-                    const ba = a.s.battery, bb = b.s.battery;
-                    if (ba == null && bb == null) return byName();
-                    if (ba == null) return 1;
-                    if (bb == null) return -1;
-                    return dir * ((ba - bb) || byName());
-                }
-                case "signal": {
-                    const sa = a.s.signal, sb = b.s.signal;
-                    if (sa == null && sb == null) return byName();
-                    if (sa == null) return 1;
-                    if (sb == null) return -1;
-                    return dir * ((sa - sb) || byName());
-                }
-                case "seen": {
-                    const aa = seenAge(a.s.last_seen), ab = seenAge(b.s.last_seen);
-                    if (aa == null && ab == null) return byName();
-                    if (aa == null) return 1;
-                    if (ab == null) return -1;
-                    return dir * ((aa - ab) || byName());
-                }
+                case "battery":
+                    return compareNullableNumber(a.battery, b.battery, dir, byName);
+                case "signal":
+                    return compareNullableNumber(a.signal, b.signal, dir, byName);
+                case "seen":
+                    return compareNullableNumber(a.seen, b.seen, dir, byName);
             }
             return 0;
         }
@@ -1622,15 +1612,15 @@ const HTML_CONTENT: &str = concat!(r##"
 
         function sensorsCard(dongles, orphans) {
             const items = [
-                ...(dongles || []).flatMap(d => (d.sensors || []).map(s => ({ s, d }))),
-                ...(orphans || []).map(s => ({ s, d: null })),
+                ...(dongles || []).flatMap(d => (d.sensors || []).map(s => decorateSensor(s, d))),
+                ...(orphans || []).map(s => decorateSensor(s, null)),
             ].sort(compareSensors);
             const ths = SORT_COLS.map(c => {
                 const active = sensorSort.key === c.key;
                 const arrow = active ? (sensorSort.dir === "asc" ? " ▲" : " ▼") : "";
                 return `<th onclick="clickSensorSort('${c.key}')" class="py-1.5 px-2 cursor-pointer select-none hover:text-slate-300 transition ${active ? 'text-teal-400 font-bold' : ''}">${c.label}${arrow}</th>`;
             }).join("");
-            const sortControls = `<div class="flex items-center gap-1.5 text-xs" onclick="event.stopPropagation()">
+            const sortControls = `<div class="flex items-center gap-1.5 text-xs" onclick="event.stopPropagation()" onkeydown="event.stopPropagation()">
                 <span class="text-slate-500">Sort:</span>
                 <select onchange="changeSensorSortKey(this.value)" class="bg-slate-950 border border-slate-800 text-slate-200 text-xs font-semibold rounded-lg px-2.5 py-1 focus:outline-none focus:border-teal-500">
                     ${SORT_COLS.map(c => `<option value="${c.key}" ${sensorSort.key === c.key ? 'selected' : ''}>${c.label}</option>`).join("")}
@@ -1650,7 +1640,7 @@ const HTML_CONTENT: &str = concat!(r##"
                 </table>
                 <div class="sm:hidden">${items.map(({s, d}) => mobileCard(s, d)).join("")}</div>`;
             return `<div class="bg-slate-900 rounded-2xl border border-slate-800 shadow-xl overflow-hidden">
-                <div class="px-4 sm:px-5 py-3 flex flex-wrap items-center justify-between gap-2 cursor-pointer hover:bg-slate-800/40 transition" onclick="toggleSensorsFolder()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleSensorsFolder()}" tabindex="0">
+                <div class="px-4 sm:px-5 py-3 flex flex-wrap items-center justify-between gap-2 cursor-pointer hover:bg-slate-800/40 transition" onclick="toggleSensorsFolder()" onkeydown="if(event.target===event.currentTarget&&(event.key==='Enter'||event.key===' ')){event.preventDefault();toggleSensorsFolder()}" tabindex="0">
                     <div class="flex items-center gap-2.5">
                         <span id="sensors-folder-chev" class="chevron text-slate-500 text-[10px] shrink-0${sensorsFolderOpen ? ' open' : ''}">▶</span>
                         <span class="font-bold text-sm text-slate-200">📡 Sensors</span>
@@ -1833,14 +1823,14 @@ const HTML_CONTENT: &str = concat!(r##"
             const anyScanning = list.some(d => d.scanning);
             const names = list.map(d => esc(d.name || d.mac)).join(", ");
             return `<div class="bg-slate-900 rounded-2xl border border-slate-800 shadow-xl overflow-hidden">
-                <div class="px-4 sm:px-5 py-3 flex items-center justify-between gap-2 cursor-pointer hover:bg-slate-800/40 transition" onclick="toggleGatewaysFolder()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleGatewaysFolder()}" tabindex="0">
-                    <div class="flex items-center gap-2.5 min-w-0">
+                <div class="px-4 sm:px-5 py-3 flex items-center justify-between gap-2 cursor-pointer hover:bg-slate-800/40 transition" onclick="toggleGatewaysFolder()" onkeydown="if(event.target===event.currentTarget&&(event.key==='Enter'||event.key===' ')){event.preventDefault();toggleGatewaysFolder()}" tabindex="0">
+                    <div class="flex items-center gap-2.5 shrink-0">
                         <span id="gateways-folder-chev" class="chevron text-slate-500 text-[10px] shrink-0${gatewaysFolderOpen ? ' open' : ''}">▶</span>
                         <span class="font-bold text-sm text-slate-200">🕹️ Gateways</span>
                         <span class="tag border border-slate-800 text-slate-400">${list.length}</span>
                         ${anyScanning ? '<span class="tag border border-amber-900 bg-amber-950/20 text-amber-400">SCANNING</span>' : ''}
                     </div>
-                    <div class="text-xs text-slate-500 font-mono truncate">${names}</div>
+                    <div class="text-xs text-slate-500 font-mono truncate min-w-0">${names}</div>
                 </div>
                 <div id="gateways-folder-body" class="dongle-detail${gatewaysFolderOpen ? ' open' : ''}">
                     <div class="dongle-detail-inner">
@@ -2123,6 +2113,8 @@ const HTML_CONTENT: &str = concat!(r##"
                     if (d.scanning && !ss?.active) {
                         const beforeMacs = new Set((d.sensors || []).map(s => s.mac));
                         scanState[d.mac] = {active: true, secondsLeft: null, beforeMacs};
+                        gatewaysFolderOpen = true;
+                        openDongles.add(d.mac);
                     }
                     if (!d.scanning && ss?.active) {
                         const paired = ss.beforeMacs && (d.sensors || []).some(s => !ss.beforeMacs.has(s.mac));
@@ -2550,5 +2542,54 @@ mod tests {
         assert_eq!(evt.mac, "SENSOR01");
         assert_eq!(evt.dongle_mac.as_deref(), Some("DONGLE01"));
         assert!(matches!(evt.data, crate::protocol::telemetry::TelemetryData::Paired { .. }));
+    }
+
+    #[tokio::test]
+    async fn list_dongles_includes_offline_gateway_sensors_and_dongle_names() {
+        let (event_tx, _) = mpsc::channel(128);
+        let (dongle_status_tx, _) = mpsc::channel(8);
+        let mut dongle_names = DonglesConfig::default();
+        dongle_names.set_name("OFFLINE01", "Garage Relay");
+
+        let mut manager = SensorManager::new(
+            "/nonexistent/sensors.yaml".to_string(),
+            "/nonexistent/state.yaml".to_string(),
+        );
+        manager.assign_dongle("OFFLINE01", &["77000001".to_string()]);
+
+        let state = Arc::new(WebState {
+            engines: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
+            sensor_manager: Arc::new(std::sync::Mutex::new(manager)),
+            dongle_names: Arc::new(std::sync::Mutex::new(dongle_names)),
+            dongle_config_path: "/nonexistent/dongles.yaml".to_string(),
+            broadcast_tx: tokio::sync::broadcast::channel(16).0,
+            event_tx,
+            dongle_status_tx,
+            bridge_auth_token: None,
+            bridge: fast_settings(),
+            roaming: None,
+            firmware: None,
+        });
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = router(Arc::clone(&state)).into_make_service_with_connect_info::<SocketAddr>();
+        tokio::spawn(async move { axum::serve(listener, app).await });
+
+        let http = reqwest::Client::new();
+        let body: serde_json::Value = http
+            .get(format!("http://{}/api/dongles", addr))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+
+        let orphans = body["unassociated_sensors"].as_array().unwrap();
+        assert_eq!(orphans.len(), 1);
+        assert_eq!(orphans[0]["mac"], "77000001");
+        assert_eq!(orphans[0]["dongle_mac"], "OFFLINE01");
+        assert_eq!(body["dongle_names"]["OFFLINE01"], "Garage Relay");
     }
 }
