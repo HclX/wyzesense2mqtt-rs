@@ -5,6 +5,11 @@ WebSocket), publishes sensors to MQTT for Home Assistant, and serves a web dashb
 [OpenWyzeSense](https://github.com/HclX/openwyzesense) (the firmware, and the `ows-host` crate this one uses).
 Several agents may work here at once, with the user (HclX) reviewing. Read this file first.
 
+## Branches
+
+- `ows`: OpenWyzeSense support (roaming, firmware install, relay and sensor updates, hang recovery). Work that needs OpenWyzeSense goes here.
+- `main`: the same daemon without OpenWyzeSense; `release` follows it for version tags. A fix that doesn't need OpenWyzeSense goes to `main` (branch from it, PR to it), and `main` is then merged into `ows`.
+
 ## Read before you start
 
 1. The issue you work on: its **Context**, **Steps**, **Acceptance** and **Do not** sections.
@@ -42,7 +47,7 @@ Several agents may work here at once, with the user (HclX) reviewing. Read this 
 ## Workflow
 
 1. Take an open issue labelled `agent-ok` (or one assigned to you). Comment on it that you are taking it.
-2. Branch from an up-to-date `main`, named `issue-<number>-<short-slug>`. Never commit to `main` directly.
+2. Branch from an up-to-date `ows` (or `main`, for a fix that doesn't need OpenWyzeSense; see Branches), named `issue-<number>-<short-slug>`. Never commit to `ows` or `main` directly.
 3. Work in small commits, each building and passing the tests. Match the surrounding code: its naming, comment
    density and idioms.
 4. Checks before you push:
@@ -55,7 +60,7 @@ Several agents may work here at once, with the user (HclX) reviewing. Read this 
 5. Dashboard changes: check the page at phone width (about 390 px) as well as desktop, in both light and dark mode.
    Say in the PR how you checked.
 6. Update `README.md` (and `release/config.yaml.template` for a new setting) in the same branch.
-7. Open a PR to `main`:
+7. Open a PR to the branch you started from:
    - a title that says what changed;
    - a body with `Closes #<number>`, what you changed, how you tested it (paste the test summary lines), and anything
      left open.

@@ -2,12 +2,11 @@ name: CI and Docker Image
 
 on:
   push:
-    # Dev builds: every push to main
-    branches: [ "main" ]
-    # Release builds: version tags (pushed only on the 'release' branch)
-    tags: [ "v*.*.*" ]
+    # OpenWyzeSense builds: every push to ows (the 'ows' image). main and
+    # release, without OpenWyzeSense, build 'dev' and the version tags.
+    branches: [ "ows" ]
   pull_request:
-    branches: [ "main" ]
+    branches: [ "ows" ]
 
 permissions:
   contents: read
@@ -71,8 +70,8 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
-            # Tag pushes to main as 'dev'
-            type=raw,value=dev,enable=${{ github.ref == 'refs/heads/main' }}
+            # Tag pushes to ows as 'ows'
+            type=raw,value=ows,enable=${{ github.ref == 'refs/heads/ows' }}
             # Tag PRs with pr-number
             type=ref,event=pr
             # Official Version tags (v1.2.3 -> 1.2.3, 1.2)

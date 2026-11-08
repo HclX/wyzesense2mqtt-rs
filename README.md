@@ -6,6 +6,9 @@ A high-performance, lightweight, asynchronous USB-to-MQTT gateway for **Wyze Sen
 
 ---
 
+> [!NOTE]
+> **Branches and images.** This is the `ows` branch: the daemon with [OpenWyzeSense](https://github.com/HclX/openwyzesense) support (roaming between gateways, firmware install, relay and sensor updates). Its image is `ghcr.io/hclx/wyzesense2mqtt-rs:ows`. The `main` branch is the same daemon without OpenWyzeSense (images `dev`, and `latest` / version tags from `release`).
+
 ## ✨ Features
 
 *   **🚀 Unified Daemon Architecture**: Runs a background MQTT bridge event loop, an Axum-powered REST web server, and an availability monitor concurrently in a single process with a negligible RAM footprint.
