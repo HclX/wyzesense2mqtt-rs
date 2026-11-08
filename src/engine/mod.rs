@@ -1,4 +1,5 @@
 use crate::protocol::packet::{Packet, CommandType, PacketPayload, commands};
+use crate::protocol::keypad::KeypadReply;
 use crate::protocol::telemetry::{DongleEvent, SensorType, TelemetryData};
 use crate::transport::GatewayTransport;
 use crate::transport::AsyncTransport;
@@ -39,7 +40,6 @@ pub struct Engine {
     dongle_mac: Option<String>,
     dongle_version: Option<String>,
     exit_tx: Option<oneshot::Sender<()>>,
-    auto_verify_tx: mpsc::Sender<(String, SensorType, u8)>,
     auto_verify: Arc<AtomicBool>,
     sensor_list_tx: Arc<Mutex<Option<mpsc::Sender<String>>>>,
     is_scanning: Arc<AtomicBool>,
@@ -59,14 +59,13 @@ impl Engine {
     pub fn new(transport: GatewayTransport, event_tx: mpsc::Sender<DongleEvent>) -> Self {
         let pending_requests = Arc::new(Mutex::new(HashMap::new()));
         let cmd_lock = Arc::new(tokio::sync::Mutex::new(()));
-        let (auto_verify_tx, mut auto_verify_rx) = mpsc::channel::<(String, SensorType, u8)>(32);
         let auto_verify = Arc::new(AtomicBool::new(false));
         let sensor_list_tx = Arc::new(Mutex::new(None));
         let is_scanning = Arc::new(AtomicBool::new(false));
         let disconnect_notify = Arc::new(tokio::sync::Notify::new());
         let shared_dongle_mac = Arc::new(Mutex::new(None));
 
-        let engine = Self {
+        Self {
             transport: transport.clone(),
             pending_requests: Arc::clone(&pending_requests),
             cmd_lock: Arc::clone(&cmd_lock),
@@ -74,7 +73,6 @@ impl Engine {
             dongle_mac: None,
             dongle_version: None,
             exit_tx: None,
-            auto_verify_tx,
             auto_verify: Arc::clone(&auto_verify),
             sensor_list_tx: Arc::clone(&sensor_list_tx),
             is_scanning: Arc::clone(&is_scanning),
@@ -84,28 +82,33 @@ impl Engine {
             inquiry_timeout: std::time::Duration::from_secs(2),
             disconnect_notify: Arc::clone(&disconnect_notify),
             shared_dongle_mac: Arc::clone(&shared_dongle_mac),
-        };
+        }
+    }
 
-        let mut engine_clone = Self {
-            transport: transport.clone(),
-            pending_requests: Arc::clone(&pending_requests),
-            cmd_lock: Arc::clone(&cmd_lock),
-            event_tx: event_tx.clone(),
-            dongle_mac: None,
-            dongle_version: None,
-            exit_tx: None,
-            auto_verify_tx: engine.auto_verify_tx.clone(),
-            auto_verify: Arc::clone(&auto_verify),
-            sensor_list_tx: Arc::clone(&sensor_list_tx),
-            is_scanning: Arc::clone(&is_scanning),
-            transport_label: "worker".to_string(),
-            device_path: None,
-            remote_addr: None,
-            inquiry_timeout: std::time::Duration::from_secs(2),
-            disconnect_notify: Arc::clone(&disconnect_notify),
-            shared_dongle_mac: Arc::clone(&shared_dongle_mac),
-        };
+    pub fn dongle_mac(&self) -> Option<&str> {
+        self.dongle_mac.as_deref()
+    }
 
+    pub fn dongle_version(&self) -> Option<&str> {
+        self.dongle_version.as_deref()
+    }
+
+    /// Enables or disables automatic verification for scanned sensors in the background.
+    pub fn set_auto_verify(&self, enable: bool) {
+        self.auto_verify.store(enable, Ordering::SeqCst);
+    }
+
+    /// Starts the background packet listener loop and returns an exit controller.
+    pub fn start(&mut self) -> oneshot::Sender<()> {
+        let (exit_tx, mut exit_rx) = oneshot::channel();
+        self.exit_tx = Some(exit_tx);
+
+        // The auto-verify worker lives as long as the reader loop below, which
+        // holds the only sender: when the engine stops, it ends too (and drops
+        // its transport clone).
+        let (auto_verify_tx, mut auto_verify_rx) = mpsc::channel::<(String, SensorType, u8)>(32);
+        let mut engine_clone = self.clone();
+        engine_clone.transport_label = "worker".to_string();
         tokio::spawn(async move {
             while let Some((mac, s_type, version)) = auto_verify_rx.recv().await {
                 if !engine_clone.auto_verify.load(Ordering::SeqCst) {
@@ -150,31 +153,9 @@ impl Engine {
             }
         });
 
-        engine
-    }
-
-    pub fn dongle_mac(&self) -> Option<&str> {
-        self.dongle_mac.as_deref()
-    }
-
-    pub fn dongle_version(&self) -> Option<&str> {
-        self.dongle_version.as_deref()
-    }
-
-    /// Enables or disables automatic verification for scanned sensors in the background.
-    pub fn set_auto_verify(&self, enable: bool) {
-        self.auto_verify.store(enable, Ordering::SeqCst);
-    }
-
-    /// Starts the background packet listener loop and returns an exit controller.
-    pub fn start(&mut self) -> oneshot::Sender<()> {
-        let (exit_tx, mut exit_rx) = oneshot::channel();
-        self.exit_tx = Some(exit_tx);
-
         let mut transport = self.transport.clone();
         let pending_requests = Arc::clone(&self.pending_requests);
         let event_tx = self.event_tx.clone();
-        let auto_verify_tx = self.auto_verify_tx.clone();
         let sensor_list_tx = Arc::clone(&self.sensor_list_tx);
         let shared_dongle_mac = Arc::clone(&self.shared_dongle_mac);
  
@@ -674,6 +655,16 @@ impl Engine {
         let _resp = self.do_command(pkt, commands::CMD_PLAY_CHIME_RESPONSE).await?;
         Ok(())
     }
+
+    /// Sends a reply to a keypad request (`0x5353`) and waits for the dongle's ACK.
+    pub async fn send_keypad_reply(&mut self, keypad_mac: &str, reply: KeypadReply) -> Result<()> {
+        let pkt = reply.to_packet(keypad_mac)
+            .map_err(|e| Error::new(ErrorKind::InvalidInput, e))?;
+        debug!("Keypad {}: sending reply {:?}", keypad_mac, reply);
+        // The dongle answers 0x5353 with an ACK only, keyed by the acked command.
+        self.do_command(pkt, commands::CMD_SEND_KEYPAD).await?;
+        Ok(())
+    }
 }
 
 impl Clone for Engine {
@@ -686,7 +677,6 @@ impl Clone for Engine {
             dongle_mac: self.dongle_mac.clone(),
             dongle_version: self.dongle_version.clone(),
             exit_tx: None,
-            auto_verify_tx: self.auto_verify_tx.clone(),
             auto_verify: Arc::clone(&self.auto_verify),
             sensor_list_tx: Arc::clone(&self.sensor_list_tx),
             is_scanning: Arc::clone(&self.is_scanning),
@@ -697,5 +687,45 @@ impl Clone for Engine {
             disconnect_notify: Arc::clone(&self.disconnect_notify),
             shared_dongle_mac: Arc::clone(&self.shared_dongle_mac),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::transport::replay::ReplayTransport;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn engine_releases_transport_and_tasks_when_stopped_or_disconnected() {
+        let (event_tx, _event_rx) = mpsc::channel(16);
+
+        // Case 1: stopping via exit_tx drop
+        let replay = ReplayTransport::new();
+        let mut engine = Engine::new(GatewayTransport::Replay(replay.clone()), event_tx.clone());
+        let exit_tx = engine.start();
+        drop(exit_tx);
+        drop(engine);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(
+            replay.clone_count(),
+            1,
+            "stopping the engine must release all internal transport handles (no leaked auto_verify task)"
+        );
+
+        // Case 2: transport disconnect
+        let replay2 = ReplayTransport::new();
+        let mut engine2 = Engine::new(GatewayTransport::Replay(replay2.clone()), event_tx);
+        let _exit_tx2 = engine2.start();
+        let notified = engine2.disconnect_notify.notified();
+        replay2.disconnect();
+        notified.await;
+        drop(engine2);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(
+            replay2.clone_count(),
+            1,
+            "transport disconnect must release all internal transport handles (no leaked auto_verify task)"
+        );
     }
 }

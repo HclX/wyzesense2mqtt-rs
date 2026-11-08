@@ -572,6 +572,7 @@ async fn run_session(
     let scan_notify_cli = Arc::clone(&scan_notify);
 
     let cli_task = tokio::spawn(async move {
+        let mut keypad_seq: u8 = 0;
         // Wait for handshake to complete
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
@@ -777,6 +778,37 @@ async fn run_session(
                             let state_name = if state_val == 1 { "WET" } else { "DRY" };
                             println!("  💧 Injected leak: {} → {}", sensor_mac, state_name);
                         }
+                        "keypad" | "kp" => {
+                            let usage = "  Usage: keypad <MAC> <disarm|home|away|panic|profile|motion|clear|pin <digits>>";
+                            if parts.len() < 3 {
+                                println!("{}", usage);
+                                continue;
+                            }
+                            let sensor_mac = parts[1].to_uppercase();
+                            let (subtype, data): (u8, Vec<u8>) = match parts[2].to_lowercase().as_str() {
+                                "disarm" => (0x02, vec![0x01, 0x00]),
+                                "home" => (0x02, vec![0x02, 0x00]),
+                                "away" => (0x02, vec![0x03, 0x00]),
+                                "panic" | "side" => (0x02, vec![0x04, 0x00]),
+                                "profile" => (0x06, vec![0xFF]),
+                                "motion" => (0x0A, vec![0x01, 0x00]),
+                                "clear" => (0x0A, vec![0x00, 0x00]),
+                                "pin" if parts.len() > 3 && parts[3].chars().all(|c| c.is_ascii_digit()) => {
+                                    (0x08, parts[3].bytes().map(|c| c - b'0').collect())
+                                }
+                                _ => {
+                                    println!("{}", usage);
+                                    continue;
+                                }
+                            };
+                            let st = state_cli.lock().await;
+                            let rssi = st.get_sensor(&sensor_mac).map(|s| s.rssi).unwrap_or(default_rssi());
+                            drop(st);
+                            keypad_seq = keypad_seq.wrapping_add(1);
+                            let pkt = build_keypad_packet(&sensor_mac, subtype, &data, keypad_seq, rssi);
+                            let _ = inject_tx_cli.send(pkt).await;
+                            println!("  ⌨️  Injected keypad {}: {}", sensor_mac, parts[2..].join(" "));
+                        }
                         "sensors" | "list" => {
                             let st = state_cli.lock().await;
                             if st.config.sensors.is_empty() {
@@ -807,6 +839,8 @@ async fn run_session(
                             println!("    heartbeat <MAC>              Inject heartbeat");
                             println!("    climate <MAC> <temp> <hum>   Inject climate event");
                             println!("    leak <MAC> <dry|wet>         Inject leak event");
+                            println!("    keypad <MAC> <disarm|home|away|panic|profile|motion|clear|pin <digits>>");
+                            println!("                                 Inject keypad event (replies are printed)");
                             println!("    sensors                      List paired sensors");
                             println!("    help                         Show this help");
                             println!("    quit                         Exit");
@@ -952,6 +986,26 @@ async fn handle_command(
                 }
             }
             Some(Packet::new_async(0x26, vec![0x01]).to_bytes())
+        }
+
+        // --- Keypad reply: print it and ACK like the real dongle ---
+        commands::CMD_SEND_KEYPAD => {
+            if let Some(payload) = pkt.payload_bytes().filter(|p| p.len() >= 10) {
+                let keypad_mac = String::from_utf8_lossy(&payload[..8]);
+                let data = &payload[10..];
+                let meaning = match data {
+                    [0x03, 0xFF, 0xFF, 0x00] => "no action".to_string(),
+                    [0x03, mode, phase, flag] => format!("status mode={:02x} phase={:02x}{}", mode, phase,
+                        if *flag == 0xFF { " (enter PIN)" } else { " (done)" }),
+                    [0x07, mode] => format!("profile mode={:02x}", mode),
+                    [0x09, _] => "PIN rejected".to_string(),
+                    [0x0B, mode, phase] => format!("motion ack mode={:02x} phase={:02x}", mode, phase),
+                    _ => "unknown".to_string(),
+                };
+                let hex: Vec<String> = data.iter().map(|b| format!("{:02X}", b)).collect();
+                println!("  ⌨️  Keypad reply → {}: [{}] {}", keypad_mac, hex.join(" "), meaning);
+            }
+            Some(Packet::new_ack(commands::CMD_SEND_KEYPAD).to_bytes())
         }
 
         // --- Chime ---
@@ -1102,6 +1156,24 @@ fn build_leak_packet(_dongle_mac: &str, sensor_mac: &str, state: u8, battery: u8
 }
 
 /// Build an auto-event packet based on the sensor's config type and state.
+/// Build a keypad event packet (CMD_ALARM2 = 0x5355, sensor type 0x05).
+/// Layout matches Hub UART captures; see `protocol::keypad`.
+fn build_keypad_packet(sensor_mac: &str, subtype: u8, data: &[u8], seq: u8, rssi: u8) -> Vec<u8> {
+    let mut payload = vec![0xEA];
+    let mac_bytes = sensor_mac.as_bytes();
+    payload.extend_from_slice(&mac_bytes[..std::cmp::min(mac_bytes.len(), 8)]);
+    while payload.len() < 9 { payload.push(b'0'); }
+    payload.push(SensorType::Keypad.to_u8());
+    payload.push((data.len() + 6) as u8); // header(3) + subtype + data + constant + sequence
+    payload.extend_from_slice(&[0x17, 0x87, 0x00]);
+    payload.push(subtype);
+    payload.extend_from_slice(data);
+    payload.push(0x8B); // per-keypad constant
+    payload.push(seq);
+    payload.push(rssi);
+    Packet::new_async((commands::CMD_ALARM2 & 0xFF) as u8, payload).to_bytes()
+}
+
 fn build_auto_event_packet(dongle_mac: &str, sensor: &SensorConfig, _seq: u8) -> Vec<u8> {
     match sensor.sensor_type.as_str() {
         "motion" | "motionv2" => {

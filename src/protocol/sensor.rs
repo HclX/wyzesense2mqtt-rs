@@ -3,7 +3,18 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::time::SystemTime;
 use crate::protocol::battery::{BatteryChemistry, raw_to_capacity};
+use crate::protocol::keypad::KeypadEvent;
 use crate::protocol::telemetry::{DongleEvent, SensorType, TelemetryData};
+
+/// Non-retained topic for keypad button presses (HA `event` entity).
+pub fn keypad_event_topic(topic_root: &str, mac: &str) -> String {
+    format!("{}/{}/keypad/event", topic_root, mac)
+}
+
+/// Non-retained topic carrying alarm requests from a keypad, including the PIN.
+pub fn keypad_action_topic(topic_root: &str, mac: &str) -> String {
+    format!("{}/{}/keypad/action", topic_root, mac)
+}
 
 // ---------------------------------------------------------
 // SensorState: Type-specific state enum
@@ -27,6 +38,9 @@ pub enum SensorState {
         humidity: u8,
     },
     Chime,   // Actuator: no inbound telemetry state, receives play_chime commands
+    /// Keypad: only the built-in motion sensor is state. Button presses and
+    /// PINs are events, handled by the gateway and never persisted.
+    Keypad { motion_active: bool },
     Unknown,
 }
 
@@ -86,7 +100,9 @@ fn build_device_metadata(mac: &str, friendly_name: &str, sensor_type: SensorType
     })
 }
 
-// Helper to build common sensor discovery configs (battery, signal)
+// Helper to build common sensor discovery configs (battery, signal).
+// Keypads never report a die temperature, so pass `include_die_temperature:
+// false` to avoid advertising an entity that can never get a value.
 fn push_common_discovery_payloads(
     mac: &str,
     friendly_name: &str,
@@ -94,6 +110,7 @@ fn push_common_discovery_payloads(
     battery_pct: Option<u8>,
     topic_root: &str,
     payloads: &mut Vec<(String, Value)>,
+    include_die_temperature: bool,
 ) {
     let device_id = format!("wyzesense_{}", mac);
     let device = build_device_metadata(mac, friendly_name, sensor_type);
@@ -140,23 +157,25 @@ fn push_common_discovery_payloads(
             })
         ));
 
-        // Die temperature diagnostic entity
-        payloads.push((
-            format!("homeassistant/sensor/{}/die_temperature/config", device_id),
-            json!({
-                "name": "Die Temperature",
-                "state_topic": state_topic,
-                "value_template": "{{ value_json.die_temperature }}",
-                "device_class": "temperature",
-                "unit_of_measurement": "°C",
-                "state_class": "measurement",
-                "unique_id": format!("{}_die_temperature", device_id),
-                "device": device.clone(),
-                "availability": availability.clone(),
-                "availability_mode": "all",
-                "entity_category": "diagnostic",
-            })
-        ));
+        // Die temperature diagnostic entity (keypads have no such byte)
+        if include_die_temperature {
+            payloads.push((
+                format!("homeassistant/sensor/{}/die_temperature/config", device_id),
+                json!({
+                    "name": "Die Temperature",
+                    "state_topic": state_topic,
+                    "value_template": "{{ value_json.die_temperature }}",
+                    "device_class": "temperature",
+                    "unit_of_measurement": "°C",
+                    "state_class": "measurement",
+                    "unique_id": format!("{}_die_temperature", device_id),
+                    "device": device.clone(),
+                    "availability": availability.clone(),
+                    "availability_mode": "all",
+                    "entity_category": "diagnostic",
+                })
+            ));
+        }
     }
 
     payloads.push((
@@ -183,6 +202,8 @@ impl WyzeSensor {
             SensorType::ContactV2 | SensorType::MotionV2 |
             SensorType::LeakV2 | SensorType::ClimateV2 => (3600 * 4, Some(100u8)),
             SensorType::Chime => (3600 * 24, None), // Mains-powered, no battery
+            // 0–155 battery scale, reported per event; heartbeat interval unknown
+            SensorType::Keypad => (3600 * 24, Some(100u8)),
             SensorType::Unknown(_) => (1800, Some(100u8)),
         };
         let state = Self::default_state_for_type(sensor_type).unwrap_or(SensorState::Unknown);
@@ -213,6 +234,9 @@ impl WyzeSensor {
         sensor_type_str: &str,
         friendly_name: String,
     ) -> Result<Self, String> {
+        if !is_valid_mac(&mac) {
+            return Err(format!("{:?} is not a sensor MAC", mac));
+        }
         let sensor_type = sensor_type_str.parse::<SensorType>()?;
         Ok(Self::new(mac, sensor_type, friendly_name))
     }
@@ -220,6 +244,27 @@ impl WyzeSensor {
     /// Returns true if this device is a pure actuator (no inbound telemetry state).
     pub fn is_actuator(&self) -> bool {
         matches!(self.state, SensorState::Chime)
+    }
+
+    /// Restores persisted telemetry state and computes whether the sensor is
+    /// currently online from `last_seen` and `timeout_sec`.
+    fn restore_from_cached(&mut self, cached: &PersistedSensorState, now: u64) {
+        if let Some(b) = cached.battery {
+            self.battery_pct = Some(b);
+        }
+        if let Some(b_raw) = cached.battery_raw {
+            self.battery_raw = Some(b_raw);
+        }
+        if let Some(dt) = cached.die_temperature_c {
+            self.die_temperature_c = Some(dt);
+        }
+        if let Some(seq) = cached.event_sequence {
+            self.event_sequence = Some(seq);
+        }
+        self.rssi_dbm = cached.signal;
+        self.last_seen = cached.last_seen;
+        self.state = cached.state.clone();
+        self.is_online = now.saturating_sub(self.last_seen) <= self.timeout_sec;
     }
 
     /// Update common metadata (battery, rssi, online status, last_seen) from a telemetry event.
@@ -230,7 +275,6 @@ impl WyzeSensor {
                 return;
             }
             TelemetryData::UnknownEvent(_) => {
-                self.is_online = true;
                 return;
             }
             _ => {}
@@ -253,6 +297,8 @@ impl WyzeSensor {
                 (Some(*battery), Some(*rssi), Some(*die_temperature_c), Some(*event_sequence)),
             TelemetryData::Leak { battery, rssi, .. } =>
                 (Some(*battery), Some(*rssi), None, None),
+            TelemetryData::Keypad { battery, rssi, sequence, .. } =>
+                (Some(*battery), Some(*rssi), None, Some(*sequence as u16)),
             TelemetryData::Scanned { .. } => (Some(100), Some(0), None, None),
             _ => (None, None, None, None),
         };
@@ -317,6 +363,12 @@ impl WyzeSensor {
                 *humidity = *h;
                 Ok(())
             }
+            (SensorState::Keypad { motion_active }, TelemetryData::Keypad { event, .. }) => {
+                if let KeypadEvent::Motion(detected) = event {
+                    *motion_active = *detected;
+                }
+                Ok(())
+            }
             // Chime: accept all events gracefully, nothing to update
             (SensorState::Chime, _) => Ok(()),
             // Common events handled by all sensor types (including Unknown that couldn't be upgraded)
@@ -344,6 +396,8 @@ impl WyzeSensor {
                 Some(SensorState::Climate { temperature: 0.0, humidity: 0 }),
             SensorType::Chime =>
                 Some(SensorState::Chime),
+            SensorType::Keypad =>
+                Some(SensorState::Keypad { motion_active: false }),
             SensorType::Unknown(_) => None,
         }
     }
@@ -401,6 +455,9 @@ impl WyzeSensor {
             }
             SensorState::Chime => {
                 payload["state"] = json!("idle");
+            }
+            SensorState::Keypad { motion_active } => {
+                payload["state"] = json!(if *motion_active { "active" } else { "inactive" });
             }
             SensorState::Unknown => {
                 payload["state"] = json!("unknown");
@@ -474,6 +531,7 @@ impl WyzeSensor {
         push_common_discovery_payloads(
             &self.mac, &self.friendly_name, self.sensor_type, self.battery_pct,
             topic_root, &mut payloads,
+            !matches!(self.sensor_type, SensorType::Keypad),
         );
 
         match &self.state {
@@ -566,6 +624,38 @@ impl WyzeSensor {
                     })
                 ));
             }
+            SensorState::Keypad { .. } => {
+                payloads.push((
+                    format!("homeassistant/binary_sensor/{}/state/config", device_id),
+                    json!({
+                        "name": "Motion",
+                        "state_topic": state_topic.clone(),
+                        "value_template": "{{ value_json.state }}",
+                        "device_class": "motion",
+                        "payload_on": "active",
+                        "payload_off": "inactive",
+                        "unique_id": format!("{}_state", device_id),
+                        "device": device.clone(),
+                        "availability": availability.clone(),
+                        "availability_mode": "all",
+                        "json_attributes_topic": state_topic,
+                    })
+                ));
+                // Button presses (never PINs) as an HA event entity
+                payloads.push((
+                    format!("homeassistant/event/{}/button/config", device_id),
+                    json!({
+                        "name": "Button",
+                        "state_topic": keypad_event_topic(topic_root, &self.mac),
+                        "event_types": ["disarm", "arm_home", "arm_away", "panic"],
+                        "unique_id": format!("{}_button", device_id),
+                        "device": device,
+                        "availability": availability,
+                        "availability_mode": "all",
+                        "icon": "mdi:dialpad",
+                    })
+                ));
+            }
             SensorState::Climate { .. } => {
                 payloads.push((
                     format!("homeassistant/sensor/{}/temperature/config", device_id),
@@ -618,6 +708,17 @@ pub struct SensorManager {
     sensors: HashMap<String, WyzeSensor>,
     config_path: String,
     state_path: String,
+    /// Invalid MACs already warned about, so a sensor reporting one every few
+    /// minutes doesn't fill the log.
+    warned_macs: std::collections::HashSet<String>,
+}
+
+/// Whether `mac` can name a sensor: 8 printable ASCII characters, as Wyze
+/// MACs are ("77BD514D"). It ends up in MQTT topics, file keys and URLs, so
+/// control characters (a v1 contact's all-zero MAC is 8 NUL bytes), spaces
+/// and MQTT's `/`, `+` and `#` are refused, and so is "00000000".
+pub fn is_valid_mac(mac: &str) -> bool {
+    mac.len() == 8 && mac.bytes().all(|b| b.is_ascii_graphic() && !b"/+#".contains(&b)) && mac != "00000000"
 }
 
 impl SensorManager {
@@ -626,6 +727,7 @@ impl SensorManager {
             sensors: HashMap::new(),
             config_path,
             state_path,
+            warned_macs: Default::default(),
         }
     }
 
@@ -644,6 +746,10 @@ impl SensorManager {
         let sensors_config = SensorsConfig::load_from_yaml(&self.config_path).unwrap_or_else(|_| SensorsConfig {
             sensors: HashMap::new(),
         });
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
         let mut count = 0;
 
         for (mac, cached) in &system_state.sensors {
@@ -654,13 +760,6 @@ impl SensorManager {
 
             match WyzeSensor::from_type_str(mac.clone(), &cached.sensor_type, friendly_name) {
                 Ok(mut sensor) => {
-                    if let Some(b) = cached.battery {
-                        sensor.battery_pct = Some(b);
-                    }
-                    sensor.rssi_dbm = cached.signal;
-                    sensor.last_seen = cached.last_seen;
-                    sensor.state = cached.state.clone();
-                    sensor.dongle_mac = cached.dongle_mac.clone();
                     // Load custom timeout if it exists
                     if let Some(m) = metadata {
                         if let Some(t) = m.timeout_sec {
@@ -670,11 +769,13 @@ impl SensorManager {
                             sensor.sw_version = v.clone();
                         }
                     }
+                    sensor.restore_from_cached(cached, now);
+                    sensor.dongle_mac = cached.dongle_mac.clone();
                     self.sensors.insert(mac.clone(), sensor);
                     count += 1;
                 }
                 Err(e) => {
-                    warn!("Failed to load sensor {} from state: {}", mac, e);
+                    warn!("Failed to load sensor {:?} from state: {}", mac, e);
                 }
             }
         }
@@ -718,6 +819,10 @@ impl SensorManager {
 
         // 2. Load system state cache (config/state.yaml)
         let system_state = SystemState::load_from_yaml(&self.state_path).unwrap_or_default();
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
 
         let mut config_changed = false;
 
@@ -770,21 +875,7 @@ impl SensorManager {
 
                     // Restore full state from system state cache if available
                     if let Some(cached) = system_state.sensors.get(mac) {
-                        if let Some(b) = cached.battery {
-                            sensor.battery_pct = Some(b);
-                        }
-                        if let Some(b_raw) = cached.battery_raw {
-                            sensor.battery_raw = Some(b_raw);
-                        }
-                        if let Some(dt) = cached.die_temperature_c {
-                            sensor.die_temperature_c = Some(dt);
-                        }
-                        if let Some(seq) = cached.event_sequence {
-                            sensor.event_sequence = Some(seq);
-                        }
-                        sensor.rssi_dbm = cached.signal;
-                        sensor.last_seen = cached.last_seen;
-                        sensor.state = cached.state.clone(); // Full type-specific state restored!
+                        sensor.restore_from_cached(cached, now);
                     }
                     self.sensors.insert(mac.clone(), sensor);
                 }
@@ -805,6 +896,26 @@ impl SensorManager {
         Ok(())
     }
 
+    /// Re-reads `sensors.yaml` and updates `friendly_name`, `timeout_sec`, and `sw_version`
+    /// for all known sensors in memory.
+    pub fn reload_config(&mut self) -> Result<usize, Box<dyn std::error::Error>> {
+        let sensors_config = SensorsConfig::load_from_yaml(&self.config_path)?;
+        let mut updated = 0;
+        for (mac, metadata) in &sensors_config.sensors {
+            if let Some(sensor) = self.sensors.get_mut(mac) {
+                sensor.friendly_name = metadata.name.clone();
+                if let Some(t) = metadata.timeout_sec {
+                    sensor.timeout_sec = t;
+                }
+                if let Some(ref v) = metadata.sw_version {
+                    sensor.sw_version = v.clone();
+                }
+                updated += 1;
+            }
+        }
+        Ok(updated)
+    }
+
     /// Loads sensors from state.yaml that are NOT already in the manager.
     /// These represent sensors persisted from previous sessions whose dongle
     /// is currently offline — they show as "unassociated" in the dashboard.
@@ -812,6 +923,10 @@ impl SensorManager {
     #[allow(dead_code)]
     pub fn load_state_orphans(&mut self) -> Result<usize, Box<dyn std::error::Error>> {
         let system_state = SystemState::load_from_yaml(&self.state_path).unwrap_or_default();
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
         let mut count = 0;
         for (mac, cached) in &system_state.sensors {
             if self.sensors.contains_key(mac) {
@@ -820,12 +935,7 @@ impl SensorManager {
             let friendly_name = format!("Wyze Sense {}", mac);
             match WyzeSensor::from_type_str(mac.clone(), &cached.sensor_type, friendly_name) {
                 Ok(mut sensor) => {
-                    if let Some(b) = cached.battery {
-                        sensor.battery_pct = Some(b);
-                    }
-                    sensor.rssi_dbm = cached.signal;
-                    sensor.last_seen = cached.last_seen;
-                    sensor.state = cached.state.clone();
+                    sensor.restore_from_cached(cached, now);
                     self.sensors.insert(mac.clone(), sensor);
                     count += 1;
                 }
@@ -865,6 +975,9 @@ impl SensorManager {
         sensor_type: SensorType,
         version: Option<u8>,
     ) -> Result<(), Box<dyn std::error::Error>> {
+        if !is_valid_mac(&mac) {
+            return Err(format!("{:?} is not a sensor MAC", mac).into());
+        }
         let type_str = sensor_type.as_str();
         
         // 1. Load existing user configuration
@@ -928,6 +1041,37 @@ impl SensorManager {
         Ok(())
     }
 
+    /// Renames a sensor in memory and persists the new name to sensors.yaml.
+    pub fn rename_sensor(&mut self, mac: &str, name: &str) -> Result<(), String> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err("name must not be empty".to_string());
+        }
+
+        let timeout_sec = {
+            let sensor = self
+                .sensors
+                .get_mut(mac)
+                .ok_or_else(|| format!("sensor {} not found", mac))?;
+            sensor.friendly_name = name.to_string();
+            sensor.timeout_sec
+        };
+
+        let mut config =
+            SensorsConfig::load_from_yaml(&self.config_path).map_err(|e| e.to_string())?;
+        let metadata = config.sensors.entry(mac.to_string()).or_insert_with(|| SensorMetadata {
+            name: name.to_string(),
+            r#type: None,
+            timeout_sec: Some(timeout_sec),
+            sw_version: None,
+        });
+        metadata.name = name.to_string();
+        config
+            .save_to_yaml_atomic(&self.config_path)
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
     /// Deletes a sensor from both configuration files and in-memory registry
     pub fn delete_and_persist_sensor(&mut self, mac: &str) -> Result<(), Box<dyn std::error::Error>> {
         // 1. Remove from memory
@@ -948,6 +1092,21 @@ impl SensorManager {
     /// Dispatches a telemetry event to the correct sensor in memory and saves updated states.
     /// If the sensor is not yet in our registry, dynamically registers and persists it.
     pub fn dispatch_event(&mut self, event: &DongleEvent) -> bool {
+        if !is_valid_mac(&event.mac) {
+            if self.warned_macs.insert(event.mac.clone()) {
+                if event.mac.bytes().all(|b| b == 0) || event.mac == "00000000" {
+                    warn!(
+                        "Ignoring reports from a sensor with an all-zero MAC{}: a v1 contact that lost its MAC (a stock \
+                         firmware bug, when its battery ran down). It can't be told apart from other such sensors; \
+                         take its battery out, or replace it.",
+                        event.dongle_mac.as_deref().map(|d| format!(" via {}", d)).unwrap_or_default()
+                    );
+                } else {
+                    warn!("Ignoring reports from a sensor with an invalid MAC {:?}", event.mac);
+                }
+            }
+            return false;
+        }
         if !self.sensors.contains_key(&event.mac) {
             if matches!(event.data, TelemetryData::Scanned { .. }) || matches!(event.data, TelemetryData::Offline) {
                 return false;
@@ -1054,6 +1213,42 @@ mod tests {
             data: TelemetryData::Alarm { battery: 90, rssi: -40, state, die_temperature_c: 22, event_sequence: 0 },
             dongle_mac: None,
         }
+    }
+
+    #[test]
+    fn sensor_macs_must_be_eight_letters_or_digits() {
+        assert!(is_valid_mac("77BD514D"));
+        assert!(!is_valid_mac("\0\0\0\0\0\0\0\0"), "a v1 contact's all-zero MAC");
+        assert!(!is_valid_mac("00000000"));
+        assert!(!is_valid_mac("77BD514"));
+        assert!(!is_valid_mac("77BD/14D"));
+        assert!(WyzeSensor::from_type_str("\0\0\0\0\0\0\0\0".into(), "switch", "x".into()).is_err());
+    }
+
+    #[test]
+    fn a_report_with_an_all_zero_mac_creates_no_sensor() {
+        let dir = std::env::temp_dir().join(format!("w2m_zero_mac_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // A state file from before the fix, holding a zero-MAC sensor.
+        std::fs::write(
+            dir.join("state.yaml"),
+            "sensors:\n  \"\\0\\0\\0\\0\\0\\0\\0\\0\":\n    mac: \"\\0\\0\\0\\0\\0\\0\\0\\0\"\n    sensor_type: switch\n    last_seen: 1\n    signal: -60\n  77BD514D:\n    mac: 77BD514D\n    sensor_type: switch\n    last_seen: 1\n    signal: -60\n",
+        )
+        .unwrap();
+        let mut m = SensorManager::new(
+            dir.join("sensors.yaml").to_string_lossy().to_string(),
+            dir.join("state.yaml").to_string_lossy().to_string(),
+        );
+        assert_eq!(m.load_all_from_state().unwrap(), 1, "the persisted zero-MAC sensor is skipped, the other loaded");
+
+        let mut evt = alarm_event(1);
+        evt.mac = "\0\0\0\0\0\0\0\0".into();
+        evt.sensor_type = SensorType::ContactV1;
+        assert!(!m.dispatch_event(&evt));
+        assert!(!m.dispatch_event(&evt), "and again, without registering it");
+        assert_eq!(m.get_sensors().keys().collect::<Vec<_>>(), vec!["77BD514D"]);
+        assert!(m.register_and_persist_sensor(evt.mac.clone(), SensorType::ContactV1, None).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     fn climate_event(temp: f32, hum: u8) -> DongleEvent {
@@ -1202,5 +1397,108 @@ mod tests {
     #[test]
     fn test_default_state_for_unknown_type_returns_none() {
         assert!(WyzeSensor::default_state_for_type(SensorType::Unknown(0)).is_none());
+    }
+
+    #[test]
+    fn timed_out_sensor_loads_offline_and_stays_offline_on_discovery_event() {
+        let dir = std::env::temp_dir().join(format!("wyze-offline-{}", std::process::id()));
+        let config_path = dir.join("sensors.yaml");
+        let state_path = dir.join("state.yaml");
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        let mut state = SystemState::default();
+        state.sensors.insert(
+            "77C6853E".to_string(),
+            PersistedSensorState {
+                mac: "77C6853E".to_string(),
+                sensor_type: "leak".to_string(),
+                last_seen: now.saturating_sub(104 * 86400),
+                battery: Some(80),
+                battery_raw: Some(92),
+                signal: -73,
+                die_temperature_c: Some(21),
+                event_sequence: Some(42),
+                state: SensorState::Leak { is_wet: false, probe_is_wet: None },
+                dongle_mac: Some("778B5F63".to_string()),
+            },
+        );
+        state.sensors.insert(
+            "77C685E4".to_string(),
+            PersistedSensorState {
+                mac: "77C685E4".to_string(),
+                sensor_type: "leak".to_string(),
+                last_seen: now.saturating_sub(60),
+                battery: Some(90),
+                battery_raw: None,
+                signal: -74,
+                die_temperature_c: None,
+                event_sequence: None,
+                state: SensorState::Leak { is_wet: false, probe_is_wet: None },
+                dongle_mac: Some("778B5F63".to_string()),
+            },
+        );
+        state.save_to_yaml_atomic(&state_path).unwrap();
+
+        let mut manager = SensorManager::new(
+            config_path.to_string_lossy().to_string(),
+            state_path.to_string_lossy().to_string(),
+        );
+        manager.load_all_from_state().unwrap();
+
+        let dead = &manager.get_sensors()["77C6853E"];
+        assert!(!dead.is_online, "104-day-old sensor should load as offline");
+        assert_eq!(dead.battery_raw, Some(92));
+        assert_eq!(dead.die_temperature_c, Some(21));
+        assert_eq!(dead.event_sequence, Some(42));
+        assert_eq!(dead.get_state_payload()["online"], json!(false));
+
+        let live = &manager.get_sensors()["77C685E4"];
+        assert!(live.is_online, "recently seen sensor should load as online");
+
+        // Startup NVRAM load + synthetic UnknownEvent discovery trigger must keep dead sensor offline.
+        manager
+            .load_sensors(&["77C6853E".to_string(), "77C685E4".to_string()])
+            .unwrap();
+        let discovery_evt = DongleEvent {
+            mac: "77C6853E".to_string(),
+            timestamp: SystemTime::now(),
+            sensor_type: SensorType::LeakV2,
+            event_type: 0xFF,
+            data: TelemetryData::UnknownEvent(Vec::new()),
+            dongle_mac: None,
+        };
+        assert!(manager.dispatch_event(&discovery_evt));
+        assert!(
+            !manager.get_sensors()["77C6853E"].is_online,
+            "synthetic UnknownEvent must not mark a timed-out sensor online"
+        );
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn rename_updates_memory_and_sensors_yaml() {
+        let dir = std::env::temp_dir().join(format!("wyze-rename-{}", std::process::id()));
+        let config_path = dir.join("sensors.yaml");
+        let state_path = dir.join("state.yaml");
+        let mut manager = SensorManager::new(
+            config_path.to_string_lossy().to_string(),
+            state_path.to_string_lossy().to_string(),
+        );
+        manager
+            .get_sensors_mut()
+            .insert("AABBCCDD".to_string(), make_sensor(SensorType::ContactV1));
+
+        manager.rename_sensor("AABBCCDD", "Front Door").unwrap();
+        assert_eq!(manager.get_sensors()["AABBCCDD"].friendly_name, "Front Door");
+
+        let config = SensorsConfig::load_from_yaml(&config_path).unwrap();
+        assert_eq!(config.sensors["AABBCCDD"].name, "Front Door");
+
+        assert!(manager.rename_sensor("NOPE0000", "x").is_err());
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

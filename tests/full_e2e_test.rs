@@ -20,12 +20,29 @@ async fn test_single_dongle_sensor_lifecycle() {
     let dongle = VirtualDongle::new("DONGLE_A", "V2.3.9");
     let mut harness = TestHarness::boot(vec![dongle.clone()]).await;
 
-    // Verify initial state: 1 dongle, 0 sensors
+    // Verify initial state: 1 dongle, 0 sensors (both /api/dongle healthcheck and /api/dongles)
+    let health: serde_json::Value = harness.client
+        .get(&format!("{}/api/dongle", harness.base_url))
+        .send().await.unwrap()
+        .json().await.unwrap();
+    assert_eq!(health["connected"], true);
+    assert_eq!(health["mac"], "DONGLE_A");
+    assert_eq!(health["version"], "V2.3.9");
+
     let body = harness.get_dongles().await;
     let dongles = body["dongles"].as_array().unwrap();
     assert_eq!(dongles.len(), 1);
     assert_eq!(dongles[0]["mac"], "DONGLE_A");
     assert_eq!(dongles[0]["sensor_count"], 0);
+
+    // Rename dongle via API
+    let resp = harness.client
+        .post(&format!("{}/api/dongles/DONGLE_A/rename", harness.base_url))
+        .json(&serde_json::json!({ "name": "Hallway" }))
+        .send().await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let body = harness.get_dongles().await;
+    assert_eq!(body["dongles"][0]["name"], "Hallway");
 
     // Enable scan
     let resp = harness.set_scan("DONGLE_A", true).await;
