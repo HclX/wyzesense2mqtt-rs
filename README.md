@@ -324,6 +324,8 @@ With `usb.dongle: "auto"`, the gateway auto-discovers **all** matching Wyze Sens
 
 Local dongles can be plugged in and out while the daemon runs. It checks for them every 2 seconds: a dongle plugged in (or back in) is attached, and an unplugged one is detached and its sensors are marked as having no dongle until it returns. The daemon also starts with no dongle plugged in and waits for one. A dongle that doesn't answer the handshake is retried when it is replugged, or after 60 seconds.
 
+An OpenWyzeSense dongle can also hang while still plugged in: its radio chip stops answering, while its USB chip keeps the device attached (seen with v0.2.4, which has no watchdog yet). When such a dongle has sent nothing for 30 seconds, the daemon asks it for its version. If it stays silent for a minute, the daemon marks it offline (dashboard and MQTT) and resets it through its bootloader, which restarts its firmware without writing anything, then attaches it again. A dongle that keeps hanging is reset at most every 2 minutes at first, then less often, up to every 30 minutes. A dongle in a firmware job or a sensor update is never probed or reset, and stock dongles aren't watched: stock firmware hasn't shown this hang, and it blinks its LED on every version request.
+
 ### 3. Capturing raw data for debugging
 To capture raw USB packet logs, increase log verbosity in `config.yaml`:
 ```yaml

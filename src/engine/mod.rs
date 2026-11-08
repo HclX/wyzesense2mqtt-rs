@@ -65,6 +65,11 @@ pub struct Engine {
     /// Where the reader loop passes OpenWyzeSense sensor-update packets
     /// (0x53F1 subs 0x10, 0x11, 0x13), while a sensor update runs.
     ota_listener: OtaListener,
+    /// When the dongle's radio chip last sent anything (an async `0x53xx`
+    /// packet: report, ACK, reply, even a resend). The USB chip of a Wyze
+    /// dongle answers the sync `0x43xx` commands on its own, so those prove
+    /// nothing about the radio chip.
+    last_radio_rx: Arc<Mutex<std::time::Instant>>,
 }
 
 type OtaListener = Arc<Mutex<Option<mpsc::UnboundedSender<Packet>>>>;
@@ -79,6 +84,7 @@ impl Engine {
         let disconnect_notify = Arc::new(tokio::sync::Notify::new());
         let ota_listener: OtaListener = Arc::new(Mutex::new(None));
         let shared_dongle_mac = Arc::new(Mutex::new(None));
+        let last_radio_rx = Arc::new(Mutex::new(std::time::Instant::now()));
 
         Self {
             transport,
@@ -98,7 +104,28 @@ impl Engine {
             disconnect_notify,
             shared_dongle_mac,
             ota_listener,
+            last_radio_rx,
         }
+    }
+
+    /// How long since the dongle's radio chip last sent anything.
+    pub fn radio_quiet_for(&self) -> std::time::Duration {
+        self.last_radio_rx.lock().unwrap().elapsed()
+    }
+
+    /// Whether a sensor update is using this gateway right now.
+    pub fn ota_active(&self) -> bool {
+        self.ota_listener.lock().unwrap().is_some()
+    }
+
+    /// Asks the radio chip for its version (0x5316), which stock and
+    /// OpenWyzeSense firmware both answer. True if it answered, or sent
+    /// anything else (an ACK, a report) while we waited.
+    pub async fn probe_radio(&mut self, timeout: std::time::Duration) -> bool {
+        let start = std::time::Instant::now();
+        let pkt = Packet::new_async((commands::CMD_GET_VERSION & 0xFF) as u8, vec![]);
+        let answered = self.do_command_with_timeout(pkt, commands::CMD_GET_VERSION + 1, timeout).await.is_ok();
+        answered || self.radio_quiet_for() < start.elapsed()
     }
 
     pub fn dongle_mac(&self) -> Option<&str> {
@@ -179,6 +206,7 @@ impl Engine {
         let sensor_list_tx = Arc::clone(&self.sensor_list_tx);
         let shared_dongle_mac = Arc::clone(&self.shared_dongle_mac);
         let ota_listener = Arc::clone(&self.ota_listener);
+        let last_radio_rx = Arc::clone(&self.last_radio_rx);
  
         // Duplicate self references for local callbacks
         let mut tx_transport = self.transport.clone();
@@ -215,6 +243,9 @@ impl Engine {
                                     match Packet::parse(&buffer) {
                                         Ok((pkt, consumed)) => {
                                             buffer.drain(..consumed);
+                                            if pkt.cmd() >> 8 == 0x53 {
+                                                *last_radio_rx.lock().unwrap() = std::time::Instant::now();
+                                            }
                                             if Self::is_resend(&mut recent, &pkt, &pending_requests) {
                                                 debug!("Dropping a resend of {} (already handled and ACKed)", pkt);
                                                 continue;
@@ -903,6 +934,7 @@ impl Clone for Engine {
             disconnect_notify: Arc::clone(&self.disconnect_notify),
             shared_dongle_mac: Arc::clone(&self.shared_dongle_mac),
             ota_listener: Arc::clone(&self.ota_listener),
+            last_radio_rx: Arc::clone(&self.last_radio_rx),
         }
     }
 }

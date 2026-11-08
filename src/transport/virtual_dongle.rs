@@ -86,7 +86,8 @@ impl VirtualDongle {
         // 4. GetVersion → VersionResponse (0x5317): payload = version string bytes
         let ver_bytes = version.as_bytes().to_vec();
         let ver_resp = Packet::new_async(0x17, ver_bytes);
-        transport.register_response(commands::CMD_GET_VERSION, ver_resp.to_bytes());
+        // Every time: it is also how a session checks the radio chip is alive.
+        transport.register_persistent_response(commands::CMD_GET_VERSION, ver_resp.to_bytes());
 
         // 5. FinishAuth → FinishAuthResponse (0x5315): payload = [0x01] (success)
         let auth_resp = Packet::new_async(0x15, vec![]);
@@ -164,6 +165,18 @@ impl VirtualDongle {
     /// A snapshot of the emulated gateway's state.
     pub fn ows(&self) -> OwsSim {
         self.ows.as_ref().expect("not an OWS dongle").lock().unwrap().clone()
+    }
+
+    /// The radio chip hangs: async (0x53xx) commands go unanswered, while the
+    /// USB chip keeps answering the sync ones and the device stays plugged in
+    /// (OpenWyzeSense #85).
+    pub fn radio_hang(&self) {
+        self.transport.set_async_silent(true);
+    }
+
+    /// The radio chip runs again (after a reset).
+    pub fn radio_recover(&self) {
+        self.transport.set_async_silent(false);
     }
 
     /// The emulated gateway loses power but its connection stays up (as a
