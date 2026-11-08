@@ -451,13 +451,11 @@ async fn list_dongles(
 
     // Group sensors by dongle_mac from the single source of truth (SensorManager)
     let mut dongles: Vec<serde_json::Value> = engines.iter().map(|(mac, engine)| {
-        let mut sensors: Vec<serde_json::Value> = manager.get_sensors().values()
+        // Unsorted: the dashboard sorts the sensors of every gateway together.
+        let sensors: Vec<serde_json::Value> = manager.get_sensors().values()
             .filter(|s| s.dongle_mac.as_deref() == Some(mac.as_str()))
             .map(|s| sensor_info_to_json(s))
             .collect();
-        sensors.sort_by_key(|s| {
-            (s["name"].as_str().unwrap_or("").to_string(), s["mac"].as_str().unwrap_or("").to_string())
-        });
         let sensor_count = sensors.len();
 
         serde_json::json!({
@@ -473,21 +471,27 @@ async fn list_dongles(
         })
     }).collect();
     dongles.sort_by_key(|d| {
-        (d["name"].as_str().unwrap_or("").to_string(), d["mac"].as_str().unwrap_or("").to_string())
+        let mac = d["mac"].as_str().unwrap_or("");
+        let label = d["name"].as_str().filter(|s| !s.is_empty()).unwrap_or(mac);
+        (label.to_ascii_lowercase(), mac.to_string())
     });
 
-    // Unassociated sensors: dongle_mac is None
-    let mut unassociated: Vec<serde_json::Value> = manager.get_sensors().values()
-        .filter(|s| s.dongle_mac.is_none())
+    // Unassociated or offline-gateway sensors: dongle_mac is None or points to a gateway not in `engines`
+    let unassociated: Vec<serde_json::Value> = manager.get_sensors().values()
+        .filter(|s| s.dongle_mac.as_deref().is_none_or(|m| !engines.contains_key(m)))
         .map(|s| sensor_info_to_json(s))
         .collect();
-    unassociated.sort_by_key(|s| {
-        (s["name"].as_str().unwrap_or("").to_string(), s["mac"].as_str().unwrap_or("").to_string())
-    });
+
+    let dongle_names: std::collections::HashMap<String, String> = names
+        .dongles
+        .iter()
+        .map(|(k, v)| (k.clone(), v.name.clone()))
+        .collect();
 
     Json(json!({
         "dongles": dongles,
         "unassociated_sensors": unassociated,
+        "dongle_names": dongle_names,
     }))
 }
 
@@ -1610,5 +1614,52 @@ mod tests {
         assert_eq!(evt.mac, "SENSOR01");
         assert_eq!(evt.dongle_mac.as_deref(), Some("DONGLE01"));
         assert!(matches!(evt.data, crate::protocol::telemetry::TelemetryData::Paired { .. }));
+    }
+
+    #[tokio::test]
+    async fn list_dongles_includes_offline_gateway_sensors_and_dongle_names() {
+        let (event_tx, _) = mpsc::channel(128);
+        let (dongle_status_tx, _) = mpsc::channel(8);
+        let mut dongle_names = DonglesConfig::default();
+        dongle_names.set_name("OFFLINE01", "Garage Relay");
+
+        let mut manager = SensorManager::new(
+            "/nonexistent/sensors.yaml".to_string(),
+            "/nonexistent/state.yaml".to_string(),
+        );
+        manager.assign_dongle("OFFLINE01", &["77000001".to_string()]);
+
+        let state = Arc::new(WebState {
+            engines: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
+            sensor_manager: Arc::new(std::sync::Mutex::new(manager)),
+            dongle_names: Arc::new(std::sync::Mutex::new(dongle_names)),
+            dongle_config_path: "/nonexistent/dongles.yaml".to_string(),
+            broadcast_tx: tokio::sync::broadcast::channel(16).0,
+            event_tx,
+            dongle_status_tx,
+            bridge_auth_token: None,
+            bridge: fast_settings(),
+        });
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = router(Arc::clone(&state)).into_make_service_with_connect_info::<SocketAddr>();
+        tokio::spawn(async move { axum::serve(listener, app).await });
+
+        let http = reqwest::Client::new();
+        let body: serde_json::Value = http
+            .get(format!("http://{}/api/dongles", addr))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+
+        let orphans = body["unassociated_sensors"].as_array().unwrap();
+        assert_eq!(orphans.len(), 1);
+        assert_eq!(orphans[0]["mac"], "77000001");
+        assert_eq!(orphans[0]["dongle_mac"], "OFFLINE01");
+        assert_eq!(body["dongle_names"]["OFFLINE01"], "Garage Relay");
     }
 }
