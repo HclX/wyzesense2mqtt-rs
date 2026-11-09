@@ -20,6 +20,11 @@ pub struct ReplayTransport {
     poisoned: Arc<Mutex<bool>>,
     // Optional stateful responder, asked before the registered responses
     handler: Arc<Mutex<Option<Handler>>>,
+    // Responses that are never used up (after the queued ones)
+    persistent: Arc<Mutex<HashMap<u16, Vec<u8>>>>,
+    // When true, async (0x53xx) commands get no response at all: a radio chip
+    // that hung behind a USB chip still answering the sync ones
+    async_silent: Arc<Mutex<bool>>,
 }
 
 /// Answers a packet the host wrote with bytes to read back, or `None` to fall
@@ -35,6 +40,8 @@ impl ReplayTransport {
             notify: Arc::new(Notify::new()),
             poisoned: Arc::new(Mutex::new(false)),
             handler: Arc::new(Mutex::new(None)),
+            persistent: Arc::new(Mutex::new(HashMap::new())),
+            async_silent: Arc::new(Mutex::new(false)),
         }
     }
 
@@ -50,6 +57,16 @@ impl ReplayTransport {
     }
 
     /// Register an automatic response for a specific command ID.
+    /// Answer `cmd` with `resp` every time, once its queued responses are used up.
+    pub fn register_persistent_response(&self, cmd: u16, resp: Vec<u8>) {
+        self.persistent.lock().unwrap().insert(cmd, resp);
+    }
+
+    /// Stop (or resume) answering async (0x53xx) commands.
+    pub fn set_async_silent(&self, silent: bool) {
+        *self.async_silent.lock().unwrap() = silent;
+    }
+
     pub fn register_response(&self, cmd: u16, resp: Vec<u8>) {
         if let Ok(mut resps) = self.responses.lock() {
             resps.entry(cmd).or_insert_with(VecDeque::new).push_back(resp);
@@ -131,6 +148,9 @@ impl AsyncTransport for ReplayTransport {
         // Try to parse packet and trigger automatic response
         if let Ok((pkt, _)) = Packet::parse(buf) {
             let cmd = pkt.cmd();
+            if cmd >> 8 == 0x53 && *self.async_silent.lock().unwrap() {
+                return Ok(());
+            }
             let mut resp_to_enqueue = self.handler.lock().unwrap().as_mut().and_then(|h| h(&pkt));
             if resp_to_enqueue.is_none() {
                 if let Ok(mut resps) = self.responses.lock() {
@@ -138,6 +158,9 @@ impl AsyncTransport for ReplayTransport {
                         resp_to_enqueue = queue.pop_front();
                     }
                 }
+            }
+            if resp_to_enqueue.is_none() {
+                resp_to_enqueue = self.persistent.lock().unwrap().get(&cmd).cloned();
             }
             if let Some(resp) = resp_to_enqueue {
                 self.enqueue_read(&resp);

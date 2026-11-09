@@ -27,6 +27,42 @@ pub const POLL_INTERVAL: Duration = Duration::from_secs(2);
 /// How long a node whose handshake failed is left alone (unless replugged).
 pub const RETRY_AFTER: Duration = Duration::from_secs(60);
 
+/// How a USB session tells that the dongle's radio chip hung. Its USB chip
+/// keeps answering the sync commands and the device stays plugged in, so
+/// only the radio chip's own silence shows it (OpenWyzeSense #85).
+#[derive(Debug, Clone, Copy)]
+pub struct RadioWatch {
+    /// How often the session checks.
+    pub check_every: Duration,
+    /// Silence before a check sends a probe (Get Version).
+    pub probe_after: Duration,
+    /// How long one probe waits for its answer.
+    pub probe_timeout: Duration,
+    /// Silence, with every probe in it unanswered, after which the radio
+    /// chip counts as hung.
+    pub hung_after: Duration,
+    /// The first wait between resets of a dongle that keeps hanging; it
+    /// doubles up to `max_backoff`, and starts over after a quiet hour.
+    pub backoff: Duration,
+    pub max_backoff: Duration,
+}
+
+impl Default for RadioWatch {
+    fn default() -> Self {
+        Self {
+            check_every: Duration::from_secs(10),
+            probe_after: Duration::from_secs(30),
+            probe_timeout: Duration::from_secs(5),
+            hung_after: Duration::from_secs(60),
+            backoff: Duration::from_secs(2 * 60),
+            max_backoff: Duration::from_secs(30 * 60),
+        }
+    }
+}
+
+/// Resets a dongle on a device path; true if it worked.
+pub type ResetFn = Arc<dyn Fn(&str) -> bool + Send + Sync>;
+
 /// Where local dongles come from.
 #[derive(Debug, Clone, PartialEq)]
 pub enum DongleSource {
@@ -63,6 +99,11 @@ pub struct LocalDongles {
     sessions: Arc<Mutex<HashMap<String, Arc<Notify>>>>,
     /// Device nodes taken for maintenance (e.g. flashing): no session starts on them.
     reserved: Arc<Mutex<HashSet<String>>>,
+    radio_watch: RadioWatch,
+    reset: ResetFn,
+    /// Dongles that answered as OpenWyzeSense in some session: still watched
+    /// if they hang before answering again.
+    ows_dongles: Arc<Mutex<HashSet<String>>>,
 }
 
 /// A device node taken away from its session; given back when dropped.
@@ -91,6 +132,8 @@ pub enum SessionEnd {
     Disconnected { mac: String },
     /// It never got through the handshake.
     HandshakeFailed(String),
+    /// Still plugged in, but its radio chip stopped answering.
+    Hung { mac: String },
 }
 
 impl LocalDongles {
@@ -111,7 +154,21 @@ impl LocalDongles {
             seen: Arc::new(Mutex::new(HashSet::new())),
             sessions: Arc::new(Mutex::new(HashMap::new())),
             reserved: Arc::new(Mutex::new(HashSet::new())),
+            radio_watch: RadioWatch::default(),
+            reset: Arc::new(leave_update_mode),
+            ows_dongles: Arc::new(Mutex::new(HashSet::new())),
         }
+    }
+
+    pub fn with_radio_watch(mut self, watch: RadioWatch) -> Self {
+        self.radio_watch = watch;
+        self
+    }
+
+    /// How a hung dongle is reset (tests stand in for the bootloader).
+    pub fn with_reset(mut self, reset: ResetFn) -> Self {
+        self.reset = reset;
+        self
     }
 
     /// Stops the session on `path` (if any) and keeps new ones off it until
@@ -180,6 +237,7 @@ impl LocalDongles {
         }
 
         let disconnect_notify = Arc::clone(&engine.disconnect_notify);
+        let watched = engine.clone();
         self.engines.lock().await.insert(mac.clone(), engine);
         if let Some(r) = &self.roaming {
             r.gateway_connected(&mac).await;
@@ -187,12 +245,21 @@ impl LocalDongles {
         let _ = self.dongle_status_tx.try_send(DongleStatus { mac: mac.clone(), online: true, version });
         let _ = self.broadcast_tx.send(());
 
+        let mut hung = false;
         tokio::select! {
             _ = disconnect_notify.notified() => {
                 warn!("Local USB dongle {} ({}) disconnected", mac, device_path);
             }
             _ = stop.notified() => {
                 info!("Local USB dongle {} ({}) detached for maintenance", mac, device_path);
+            }
+            quiet = watch_radio(watched, self.radio_watch, Arc::clone(&self.ows_dongles)) => {
+                hung = true;
+                warn!(
+                    "Local USB dongle {} ({}) is plugged in, but its radio chip hasn't answered for {} s: \
+                     its firmware hung. Detaching it to reset it",
+                    mac, device_path, quiet.as_secs()
+                );
             }
         }
         drop(exit_tx);
@@ -217,7 +284,11 @@ impl LocalDongles {
         } else {
             info!("Dongle {} already re-registered by a newer session", mac);
         }
-        SessionEnd::Disconnected { mac }
+        if hung {
+            SessionEnd::Hung { mac }
+        } else {
+            SessionEnd::Disconnected { mac }
+        }
     }
 
     /// Merges the dongle's sensor list into the sensor manager and triggers
@@ -263,6 +334,8 @@ impl LocalDongles {
         let failed: Arc<Mutex<HashMap<String, Instant>>> = Arc::new(Mutex::new(HashMap::new()));
         // Nodes already reset out of update mode once since they appeared.
         let reset_tried: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
+        // Hung dongles reset: when last, and how many times in a row.
+        let hang_resets: Arc<Mutex<HashMap<String, (Instant, u32)>>> = Arc::new(Mutex::new(HashMap::new()));
         let mut warned_none = false;
 
         loop {
@@ -287,6 +360,7 @@ impl LocalDongles {
                 let attached = Arc::clone(&attached);
                 let failed = Arc::clone(&failed);
                 let reset_tried = Arc::clone(&reset_tried);
+                let hang_resets = Arc::clone(&hang_resets);
                 tokio::spawn(async move {
                     let end = match HidrawTransport::open(&path).await {
                         Ok(t) => me.run_session(&path, GatewayTransport::Hidraw(t)).await,
@@ -301,7 +375,8 @@ impl LocalDongles {
                             && reset_tried.lock().unwrap().insert(path.clone())
                         {
                             let node = path.clone();
-                            let reset = tokio::task::spawn_blocking(move || leave_update_mode(&node)).await.unwrap_or(false);
+                            let reset_fn = Arc::clone(&me.reset);
+                            let reset = tokio::task::spawn_blocking(move || reset_fn(&node)).await.unwrap_or(false);
                             if reset {
                                 warn!("USB dongle on {} was left in its update mode; reset it, trying again", path);
                                 attached.lock().unwrap().remove(&path);
@@ -314,7 +389,10 @@ impl LocalDongles {
                         );
                         failed.lock().unwrap().insert(path.clone(), Instant::now());
                     }
-                    if matches!(end, SessionEnd::Disconnected { .. }) {
+                    if let SessionEnd::Hung { mac } = &end {
+                        me.reset_hung(&path, mac, &hang_resets, &failed, retry_after).await;
+                    }
+                    if matches!(end, SessionEnd::Disconnected { .. } | SessionEnd::Hung { .. }) {
                         reset_tried.lock().unwrap().remove(&path);
                     }
                     debug!("Session on {} ended: {:?}", path, end);
@@ -322,6 +400,94 @@ impl LocalDongles {
                 });
             }
             tokio::time::sleep(poll).await;
+        }
+    }
+}
+
+impl LocalDongles {
+    /// Resets a dongle whose radio chip hung, through its bootloader, unless
+    /// it was reset too recently (the wait doubles while it keeps hanging).
+    async fn reset_hung(
+        &self,
+        path: &str,
+        mac: &str,
+        resets: &Mutex<HashMap<String, (Instant, u32)>>,
+        failed: &Mutex<HashMap<String, Instant>>,
+        retry_after: Duration,
+    ) {
+        if self.is_reserved(path) {
+            return; // a firmware job has it
+        }
+        let w = self.radio_watch;
+        let count = {
+            let mut map = resets.lock().unwrap();
+            let entry = map.entry(path.to_string()).or_insert((Instant::now(), 0));
+            // A dongle that ran for a quiet hour starts over.
+            if entry.1 > 0 && entry.0.elapsed() > Duration::from_secs(3600) + w.max_backoff {
+                entry.1 = 0;
+            }
+            let wait = w.backoff.saturating_mul(1 << entry.1.saturating_sub(1).min(16)).min(w.max_backoff);
+            if entry.1 > 0 && entry.0.elapsed() < wait {
+                let left = wait - entry.0.elapsed();
+                warn!(
+                    "USB dongle {} on {} hung again {} s after its last reset; the next reset in {} s",
+                    mac, path, entry.0.elapsed().as_secs(), left.as_secs()
+                );
+                // Kept detached until then; the supervisor attaches it after that.
+                let until = (Instant::now() + left).checked_sub(retry_after).unwrap_or_else(Instant::now);
+                failed.lock().unwrap().insert(path.to_string(), until);
+                return;
+            }
+            *entry = (Instant::now(), entry.1 + 1);
+            entry.1
+        };
+        let node = path.to_string();
+        let reset_fn = Arc::clone(&self.reset);
+        let ok = tokio::task::spawn_blocking(move || reset_fn(&node)).await.unwrap_or(false);
+        if ok {
+            warn!("Reset USB dongle {} on {} through its bootloader (reset {} in a row); attaching it again", mac, path, count);
+        } else {
+            error!("Could not reset USB dongle {} on {} through its bootloader: unplug it and plug it back in", mac, path);
+        }
+    }
+}
+
+/// Returns once the dongle's radio chip has been silent for `w.hung_after`,
+/// with every probe in that time unanswered: how long it was silent. Never
+/// probes while a sensor update uses the gateway.
+///
+/// Only OpenWyzeSense gateways are watched: they are the ones seen to hang
+/// (#85), and stock firmware blinks its LED on every Get Version. Stock
+/// firmware doesn't answer the 0x53F0 flags query, which tells them apart.
+async fn watch_radio(mut engine: Engine, w: RadioWatch, known_ows: Arc<Mutex<HashSet<String>>>) -> Duration {
+    let mac = engine.dongle_mac().unwrap_or_default().to_string();
+    let mut ows = known_ows.lock().unwrap().contains(&mac);
+    for _ in 0..3 {
+        if ows {
+            break;
+        }
+        tokio::time::sleep(w.check_every).await;
+        if let Ok(Some(_)) = engine.ows_probe(w.probe_timeout.max(Duration::from_secs(1))).await {
+            ows = true;
+            known_ows.lock().unwrap().insert(mac.clone());
+        }
+    }
+    if !ows {
+        debug!("Not watching {:?} for hangs: stock firmware", engine.dongle_mac());
+        return std::future::pending().await;
+    }
+    loop {
+        tokio::time::sleep(w.check_every).await;
+        if engine.ota_active() || engine.radio_quiet_for() < w.probe_after {
+            continue;
+        }
+        if engine.probe_radio(w.probe_timeout).await {
+            continue;
+        }
+        let quiet = engine.radio_quiet_for();
+        debug!("Radio chip of {:?} silent for {} s", engine.dongle_mac(), quiet.as_secs());
+        if quiet >= w.hung_after {
+            return quiet;
         }
     }
 }
@@ -334,5 +500,62 @@ fn leave_update_mode(path: &str) -> bool {
     match ows_host::sbl::Sbl::enter(&mut t) {
         Ok(mut s) => s.reset().is_ok(),
         Err(_) => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[tokio::test]
+    async fn a_dongle_that_keeps_hanging_is_reset_less_and_less_often() {
+        let (event_tx, _event_rx) = mpsc::channel(8);
+        let (status_tx, _status_rx) = mpsc::channel(8);
+        let (broadcast_tx, _) = broadcast::channel(8);
+        let resets = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&resets);
+        let local = LocalDongles::new(
+            Arc::new(tokio::sync::Mutex::new(Default::default())),
+            Arc::new(Mutex::new(SensorManager::new("/nonexistent/s.yaml".into(), "/nonexistent/t.yaml".into()))),
+            event_tx,
+            status_tx,
+            broadcast_tx,
+        )
+        .with_radio_watch(RadioWatch {
+            backoff: Duration::from_millis(200),
+            max_backoff: Duration::from_millis(400),
+            ..RadioWatch::default()
+        })
+        .with_reset(Arc::new(move |_| {
+            counter.fetch_add(1, Ordering::SeqCst);
+            true
+        }));
+        let history = Mutex::new(HashMap::new());
+        let failed = Mutex::new(HashMap::new());
+        let retry = Duration::from_millis(50);
+        let hang = || local.reset_hung("/dev/hidraw1", "778B5F63", &history, &failed, retry);
+
+        hang().await;
+        assert_eq!(resets.load(Ordering::SeqCst), 1, "the first hang is reset at once");
+        hang().await;
+        assert_eq!(resets.load(Ordering::SeqCst), 1, "hung again right away: wait first");
+        assert!(failed.lock().unwrap().contains_key("/dev/hidraw1"), "kept detached meanwhile");
+
+        tokio::time::sleep(Duration::from_millis(220)).await;
+        hang().await;
+        assert_eq!(resets.load(Ordering::SeqCst), 2, "reset once the first wait is over");
+        // The wait doubled (400 ms): 220 ms later it is still too soon.
+        tokio::time::sleep(Duration::from_millis(220)).await;
+        hang().await;
+        assert_eq!(resets.load(Ordering::SeqCst), 2);
+        tokio::time::sleep(Duration::from_millis(220)).await;
+        hang().await;
+        assert_eq!(resets.load(Ordering::SeqCst), 3);
+
+        // A reserved dongle (a firmware job) is never reset.
+        let _job = local.reserve("/dev/hidraw2", Duration::from_secs(1)).await.unwrap();
+        local.reset_hung("/dev/hidraw2", "77A85A36", &history, &failed, retry).await;
+        assert_eq!(resets.load(Ordering::SeqCst), 3);
     }
 }
