@@ -190,3 +190,40 @@ sensors:
     let _ = fs::remove_file(config_path);
     let _ = fs::remove_file(state_path);
 }
+
+/// A config written before keypad support (no `keypad:` section), with a
+/// section this build doesn't know (`openwyzesense:`, from the ows branch),
+/// still loads: MQTT stays on and file logging stays set. Before the fix, a
+/// missing `keypad:` failed the whole file and the daemon silently ran with
+/// the defaults (no MQTT).
+#[test]
+fn a_config_without_keypad_and_with_unknown_sections_loads() {
+    let path = get_temp_file("app_config_no_keypad.yaml");
+    fs::write(
+        &path,
+        r#"usb:
+  dongle: "auto"
+web:
+  enabled: true
+  port: 7070
+mqtt:
+  enabled: true
+  host: "mosquitto"
+  port: 1883
+logging:
+  level: "trace"
+  log_file: "/app/logs/wyzesense2mqtt-rs.log"
+  max_log_files: 7
+openwyzesense:
+  fix_zero_mac: true
+"#,
+    )
+    .unwrap();
+    let c = wyzesense2mqtt_rs::config::app_config::AppConfig::load(Some(&path));
+    assert!(c.mqtt.enabled);
+    assert_eq!(c.mqtt.host.as_deref(), Some("mosquitto"));
+    assert_eq!(c.logging.level, "trace");
+    assert_eq!(c.logging.log_file.as_deref(), Some("/app/logs/wyzesense2mqtt-rs.log"));
+    assert!(c.keypad.enabled, "keypad defaults apply");
+    let _ = fs::remove_file(&path);
+}

@@ -153,6 +153,7 @@ pub struct AppConfig {
     pub logging: LoggingConfig,
     #[serde(default)]
     pub bridge: BridgeConfig,
+    #[serde(default)]
     pub keypad: KeypadConfig,
 }
 
@@ -164,16 +165,27 @@ impl AppConfig {
         // 1. Load from YAML if path exists
         if let Some(ref p) = path {
             if p.as_ref().exists() {
-                if let Ok(loaded) = Self::load_from_yaml(p) {
-                    config = loaded;
+                match Self::load_from_yaml(p) {
+                    Ok(loaded) => config = loaded,
+                    // Logging isn't set up yet (it comes from this file).
+                    Err(e) => eprintln!(
+                        "ERROR: {} could not be read ({}); running with the default settings",
+                        p.as_ref().display(),
+                        e
+                    ),
                 }
             }
         } else {
             // Try fallback default file ./config.yaml
             let default_path = Path::new("config.yaml");
             if default_path.exists() {
-                if let Ok(loaded) = Self::load_from_yaml(default_path) {
-                    config = loaded;
+                match Self::load_from_yaml(default_path) {
+                    Ok(loaded) => config = loaded,
+                    Err(e) => eprintln!(
+                        "ERROR: {} could not be read ({}); running with the default settings",
+                        default_path.display(),
+                        e
+                    ),
                 }
             }
         }
