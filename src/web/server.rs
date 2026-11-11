@@ -731,6 +731,16 @@ async fn verify_scanned_sensor(
     // 3. Commit sensor verification to NVRAM and emit Paired event
     match engine.verify_sensor(&payload.mac, sensor_type).await {
         Ok(_) => {
+            // If the sensor was paired with another dongle, remove it there
+            // first, so it is not left paired in two places. Best-effort:
+            // a failure here must not fail this pairing.
+            let _ = crate::engine::detach_sensor_from_previous_dongle(
+                &state.engines,
+                &state.sensor_manager,
+                &payload.mac,
+                &payload.dongle_mac,
+            )
+            .await;
             let paired_evt = crate::protocol::telemetry::DongleEvent {
                 mac: payload.mac.clone(),
                 timestamp: std::time::SystemTime::now(),

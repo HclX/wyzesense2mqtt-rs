@@ -1,5 +1,6 @@
 use crate::protocol::packet::{Packet, CommandType, PacketPayload, commands};
 use crate::protocol::keypad::KeypadReply;
+use crate::protocol::sensor::SensorManager;
 use crate::protocol::telemetry::{DongleEvent, SensorType, TelemetryData};
 use crate::transport::GatewayTransport;
 use crate::transport::AsyncTransport;
@@ -690,6 +691,61 @@ impl Clone for Engine {
     }
 }
 
+/// Removes a sensor from the dongle it was previously paired with, if any.
+///
+/// When a sensor finishes pairing with `new_dongle_mac` while it is still
+/// paired with a different dongle, the old dongle keeps the sensor in its
+/// NVRAM and the sensor ends up paired in two places — the next warm-up can
+/// even re-assign it back to the old dongle. Call this when pairing
+/// finishes, after the new dongle has verified the sensor but before the
+/// SensorManager re-associates it (i.e. before dispatching the Paired
+/// event), so the previous dongle is still readable here.
+///
+/// Best-effort: a previous dongle that is no longer connected, or a failed
+/// delete, is logged and never fails the pairing itself. Returns the
+/// previous dongle MAC when the sensor was paired elsewhere.
+pub async fn detach_sensor_from_previous_dongle(
+    engines: &EnginesMap,
+    sensor_manager: &Arc<Mutex<SensorManager>>,
+    mac: &str,
+    new_dongle_mac: &str,
+) -> Option<String> {
+    let previous = {
+        let manager = sensor_manager.lock().unwrap();
+        manager
+            .get_sensors()
+            .get(mac)
+            .and_then(|s| s.dongle_mac.clone())
+            .filter(|prev| prev != new_dongle_mac)
+    };
+    let Some(previous) = previous else {
+        return None;
+    };
+    let mut previous_engine = {
+        let map = engines.lock().await;
+        map.get(&previous).cloned()
+    };
+    match previous_engine.as_mut() {
+        Some(engine) => match engine.delete_sensor(mac).await {
+            Ok(()) => info!(
+                "Removed sensor {} from previous dongle {} (now paired with {})",
+                mac, previous, new_dongle_mac
+            ),
+            Err(e) => warn!(
+                "Failed to remove sensor {} from previous dongle {}: {}; \
+                 sensor is now also paired with {}",
+                mac, previous, e, new_dongle_mac
+            ),
+        },
+        None => warn!(
+            "Sensor {} was paired with dongle {} which is no longer connected; \
+             nothing to remove it from (now paired with {})",
+            mac, previous, new_dongle_mac
+        ),
+    }
+    Some(previous)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -727,5 +783,87 @@ mod tests {
             1,
             "transport disconnect must release all internal transport handles (no leaked auto_verify task)"
         );
+    }
+
+    #[tokio::test]
+    async fn detach_removes_sensor_from_previous_dongle_only() {
+        use crate::protocol::sensor::{SensorManager, WyzeSensor};
+        use crate::transport::virtual_dongle::VirtualDongle;
+
+        let (event_tx, _event_rx) = mpsc::channel(16);
+        let dongle_a = VirtualDongle::new("DONGLE_A", "V2.3.9");
+        dongle_a.register_extra_delete_responses(1);
+        let mut engine_a = Engine::new(dongle_a.transport(), event_tx.clone());
+        let exit_a = engine_a.start();
+        let dongle_b = VirtualDongle::new("DONGLE_B", "V2.3.9");
+        let mut engine_b = Engine::new(dongle_b.transport(), event_tx.clone());
+        let exit_b = engine_b.start();
+
+        let engines: EnginesMap = Arc::new(tokio::sync::Mutex::new(HashMap::new()));
+        {
+            let mut map = engines.lock().await;
+            map.insert("DONGLE_A".to_string(), engine_a);
+            map.insert("DONGLE_B".to_string(), engine_b);
+        }
+
+        let manager = Arc::new(Mutex::new(SensorManager::new(
+            "/nonexistent/sensors.yaml".to_string(),
+            "/nonexistent/state.yaml".to_string(),
+        )));
+        let mut sensor = WyzeSensor::new(
+            "SHARED01".to_string(),
+            SensorType::ContactV2,
+            "Shared".to_string(),
+        );
+        sensor.dongle_mac = Some("DONGLE_A".to_string());
+        manager
+            .lock()
+            .unwrap()
+            .get_sensors_mut()
+            .insert("SHARED01".to_string(), sensor);
+
+        let previous =
+            detach_sensor_from_previous_dongle(&engines, &manager, "SHARED01", "DONGLE_B")
+                .await;
+        assert_eq!(previous.as_deref(), Some("DONGLE_A"));
+
+        // The old dongle must have received a delete for SHARED01...
+        let written = dongle_a.replay_transport().get_written();
+        let mut slice = written.as_slice();
+        let mut deleted = false;
+        while let Ok((pkt, n)) = Packet::parse(slice) {
+            if !matches!(pkt.payload, PacketPayload::Ack(_))
+                && pkt.cmd() == commands::CMD_DELETE_SENSOR
+            {
+                deleted = matches!(&pkt.payload, PacketPayload::Bytes(b) if b == b"SHARED01");
+            }
+            slice = &slice[n..];
+        }
+        assert!(deleted, "DONGLE_A should have received CMD_DELETE_SENSOR for SHARED01");
+
+        // ...and the new dongle must not have received one.
+        let written_b = dongle_b.replay_transport().get_written();
+        let mut slice = written_b.as_slice();
+        while let Ok((pkt, n)) = Packet::parse(slice) {
+            assert!(
+                pkt.cmd() != commands::CMD_DELETE_SENSOR,
+                "DONGLE_B must not receive a delete for a sensor pairing onto it"
+            );
+            slice = &slice[n..];
+        }
+
+        // Re-pairing onto the same dongle, and pairing a brand-new sensor,
+        // must be no-ops (nothing to detach from).
+        let same =
+            detach_sensor_from_previous_dongle(&engines, &manager, "SHARED01", "DONGLE_A")
+                .await;
+        assert_eq!(same, None);
+        let fresh =
+            detach_sensor_from_previous_dongle(&engines, &manager, "NEWSENS1", "DONGLE_B")
+                .await;
+        assert_eq!(fresh, None);
+
+        drop(exit_a);
+        drop(exit_b);
     }
 }

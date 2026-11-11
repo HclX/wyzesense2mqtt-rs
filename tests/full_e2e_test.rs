@@ -469,6 +469,71 @@ async fn test_sensor_repairing_after_disconnect() {
 }
 
 // ---------------------------------------------------------------------------
+// Test 11b: Re-Pairing Onto a Live Dongle Removes the Sensor From the Old One
+// ---------------------------------------------------------------------------
+// Unlike Test 11 (re-pairing after the old dongle disconnected), here the
+// previous dongle is still connected: finishing the pairing on DONGLE_B
+// must delete SHARED01 from DONGLE_A's NVRAM, or the sensor stays paired
+// in two places.
+#[tokio::test]
+async fn test_repairing_to_live_dongle_removes_sensor_from_previous_dongle() {
+    use wyzesense2mqtt_rs::protocol::packet::{commands, Packet, PacketPayload};
+
+    let dongle_a = VirtualDongle::new("DONGLE_A", "V2.3.9")
+        .with_sensors(vec!["SHARED01".to_string()]);
+    let dongle_b = VirtualDongle::new("DONGLE_B", "V2.3.9");
+    dongle_a.register_extra_delete_responses(1);
+    dongle_b.register_extra_scan_responses(1, 1);
+    dongle_b.register_extra_verify_responses(1);
+
+    let mut harness = TestHarness::boot(vec![dongle_a.clone(), dongle_b.clone()]).await;
+    harness.drain_events().await;
+
+    // SHARED01 starts paired with DONGLE_A, which stays connected.
+    {
+        let manager = harness.sensor_manager.lock().unwrap();
+        let sensor = manager.get_sensors().get("SHARED01").expect("SHARED01 should exist");
+        assert_eq!(sensor.dongle_mac.as_deref(), Some("DONGLE_A"));
+    }
+
+    // Pair SHARED01 onto DONGLE_B via scan + verify.
+    let resp = harness.set_scan("DONGLE_B", true).await;
+    assert_eq!(resp.status(), 200);
+
+    dongle_b.inject_scan_event("SHARED01", SensorType::ContactV2, 25);
+    let event = harness.expect_event(3000).await.expect("scan event for SHARED01");
+    assert_eq!(event.mac, "SHARED01");
+
+    let resp = harness.verify_sensor("DONGLE_B", "SHARED01", "contact_v2").await;
+    assert_eq!(resp.status(), 200);
+
+    // DONGLE_A must have been told to delete SHARED01 from its NVRAM.
+    let written = dongle_a.replay_transport().get_written();
+    let mut slice = written.as_slice();
+    let mut deleted = false;
+    while let Ok((pkt, n)) = Packet::parse(slice) {
+        if !matches!(pkt.payload, PacketPayload::Ack(_))
+            && pkt.cmd() == commands::CMD_DELETE_SENSOR
+        {
+            deleted = matches!(&pkt.payload, PacketPayload::Bytes(b) if b == b"SHARED01");
+        }
+        slice = &slice[n..];
+    }
+    assert!(deleted, "DONGLE_A should have received CMD_DELETE_SENSOR for SHARED01");
+
+    // The sensor ends up assigned to DONGLE_B (as the real system does
+    // after the Paired event).
+    {
+        let mut manager = harness.sensor_manager.lock().unwrap();
+        manager.assign_dongle("DONGLE_B", &["SHARED01".to_string()]);
+    }
+    let manager = harness.sensor_manager.lock().unwrap();
+    let sensor = manager.get_sensors().get("SHARED01").expect("SHARED01 should still exist");
+    assert_eq!(sensor.dongle_mac.as_deref(), Some("DONGLE_B"),
+        "SHARED01 should now be assigned to DONGLE_B");
+}
+
+// ---------------------------------------------------------------------------
 // Test 12: Leak Event State Transitions (Wet/Dry)
 // ---------------------------------------------------------------------------
 #[tokio::test]
