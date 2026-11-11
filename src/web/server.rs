@@ -533,7 +533,10 @@ async fn list_sensors(
             dongle_mac: sensor.dongle_mac.clone(),
         })
         .collect();
-    sensors.sort_by_key(|s| s.mac.clone());
+    sensors.sort_by(|a, b| {
+        // Newest first; MAC breaks ties so the order is deterministic.
+        b.last_seen.cmp(&a.last_seen).then_with(|| a.mac.cmp(&b.mac))
+    });
     (StatusCode::OK, Json(SensorsListResponse { sensors })).into_response()
 }
 
@@ -556,7 +559,10 @@ async fn list_cached_sensors(
             dongle_mac: sensor.dongle_mac.clone(),
         }
     }).collect();
-    sensors.sort_by_key(|s| s.mac.clone());
+    sensors.sort_by(|a, b| {
+        // Newest first; MAC breaks ties so the order is deterministic.
+        b.last_seen.cmp(&a.last_seen).then_with(|| a.mac.cmp(&b.mac))
+    });
     (StatusCode::OK, Json(SensorsListResponse { sensors })).into_response()
 }
 
@@ -988,7 +994,9 @@ const HTML_CONTENT: &str = concat!(r##"
         let hexLogs = {};
         let renameTarget = null;
         let pendingRender = false;
-        let sensorSort = { key: "name", dir: "asc" };
+        // Default sort: last seen, newest first. `seen` is the age in
+        // seconds, so ascending age puts the most recently seen sensor first.
+        let sensorSort = { key: "seen", dir: "asc" };
         const SORT_COLS = [
             { key: "name", label: "Sensor" },
             { key: "gateway", label: "Gateway" },
@@ -1231,6 +1239,8 @@ const HTML_CONTENT: &str = concat!(r##"
         }
         function changeSensorSortKey(key) {
             sensorSort.key = key;
+            // "Seen" only makes sense newest-first (ascending age).
+            if (key === "seen") sensorSort.dir = "asc";
             render();
         }
         function toggleSensorSortDir() {
@@ -2128,5 +2138,87 @@ mod tests {
         assert_eq!(orphans[0]["mac"], "77000001");
         assert_eq!(orphans[0]["dongle_mac"], "OFFLINE01");
         assert_eq!(body["dongle_names"]["OFFLINE01"], "Garage Relay");
+    }
+
+    #[tokio::test]
+    async fn sensor_lists_default_to_last_seen_newest_first() {
+        use crate::protocol::sensor::WyzeSensor;
+
+        let (event_tx, _) = mpsc::channel(128);
+        let (dongle_status_tx, _) = mpsc::channel(8);
+        let mut manager = SensorManager::new(
+            "/nonexistent/sensors.yaml".to_string(),
+            "/nonexistent/state.yaml".to_string(),
+        );
+        // Deliberately inserted out of order (and out of MAC order) so the
+        // test only passes if the endpoints sort by last_seen, newest first.
+        for (mac, last_seen) in [
+            ("77000001", 1_000u64),
+            ("77000003", 3_000u64),
+            ("77000002", 2_000u64),
+        ] {
+            let mut sensor = WyzeSensor::new(
+                mac.to_string(),
+                SensorType::ContactV2,
+                format!("Sensor {}", mac),
+            );
+            sensor.last_seen = last_seen;
+            manager.get_sensors_mut().insert(mac.to_string(), sensor);
+        }
+
+        let state = Arc::new(WebState {
+            engines: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
+            sensor_manager: Arc::new(std::sync::Mutex::new(manager)),
+            dongle_names: Arc::new(std::sync::Mutex::new(DonglesConfig::default())),
+            dongle_config_path: "/nonexistent/dongles.yaml".to_string(),
+            broadcast_tx: tokio::sync::broadcast::channel(16).0,
+            event_tx,
+            dongle_status_tx,
+            bridge_auth_token: None,
+            bridge: fast_settings(),
+        });
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = router(Arc::clone(&state)).into_make_service_with_connect_info::<SocketAddr>();
+        tokio::spawn(async move { axum::serve(listener, app).await });
+
+        let http = reqwest::Client::new();
+        for path in ["/api/sensors", "/api/sensors/cached"] {
+            let body: serde_json::Value = http
+                .get(format!("http://{}{}", addr, path))
+                .send()
+                .await
+                .unwrap()
+                .json()
+                .await
+                .unwrap();
+            let macs: Vec<&str> = body["sensors"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|s| s["mac"].as_str().unwrap())
+                .collect();
+            assert_eq!(
+                macs,
+                vec!["77000003", "77000002", "77000001"],
+                "{} should list sensors newest-first by last_seen",
+                path
+            );
+        }
+
+        // The dashboard's default sort must match: last seen, newest first.
+        let html = http
+            .get(format!("http://{}/", addr))
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+        assert!(
+            html.contains("let sensorSort = { key: \"seen\", dir: \"asc\" }"),
+            "dashboard should default to sorting by last seen, newest first"
+        );
     }
 }
