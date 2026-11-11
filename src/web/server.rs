@@ -509,6 +509,9 @@ fn sensor_info_to_json(s: &crate::protocol::sensor::WyzeSensor) -> serde_json::V
         "event_sequence": s.event_sequence,
         "state": s.state,
         "dongle_mac": s.dongle_mac,
+        // Dead = not seen within its timeout (see WyzeSensor::is_online).
+        // The dashboard highlights these; it is derived live, not persisted.
+        "is_online": s.is_online,
     })
 }
 
@@ -914,7 +917,10 @@ const HTML_CONTENT: &str = concat!(r##"
         .dongle-detail-inner { overflow: hidden; min-height: 0; }
         .sensor-row { transition: background-color .15s ease; }
         .sensor-row:hover, .sensor-row.open { background: rgba(30, 41, 59, .35); }
+        .sensor-row.dead { background: rgba(127, 29, 29, .22); }
+        .sensor-row.dead:hover, .sensor-row.dead.open { background: rgba(127, 29, 29, .32); }
         .sensor-card { transition: border-color .2s ease; }
+        .sensor-card.dead { background: rgba(127, 29, 29, .12); }
         .sensor-card.open { border-color: rgba(45, 212, 191, .35); }
         .tag { display: inline-flex; align-items: center; gap: 4px; font-size: .65rem; padding: 2px 8px; border-radius: 9999px; font-weight: 600; white-space: nowrap; }
         .modal-backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, .6); backdrop-filter: blur(4px); z-index: 100; display: none; align-items: center; justify-content: center; }
@@ -1055,6 +1061,14 @@ const HTML_CONTENT: &str = concat!(r##"
             if (t.includes("keypad")) return `<span class="tag border border-fuchsia-900 bg-fuchsia-950/20 text-fuchsia-400">⌨️ Keypad</span>`;
             return `<span class="tag border border-slate-800 bg-slate-900 text-slate-300">${esc(s.sensor_type || "unknown")}</span>`;
         }
+        // Dead = the gateway has not seen this sensor within its timeout
+        // (is_online === false in /api/dongles). Missing data is not death.
+        function isDead(s) { return s.is_online === false; }
+        function deadTag(s) {
+            return isDead(s)
+                ? `<span class="tag border border-rose-900 bg-rose-950/40 text-rose-400" title="Not seen within its timeout (last seen ${esc(relSeen(s.last_seen))})">💀 Dead</span>`
+                : "";
+        }
         function stateTag(s) {
             const st = s.state;
             if (!st) return `<span class="text-slate-500 italic text-xs">—</span>`;
@@ -1131,6 +1145,7 @@ const HTML_CONTENT: &str = concat!(r##"
                     ${detailCell("Firmware", esc(s.sw_version || "Unknown"))}
                     ${detailCell("MAC", `<span class="font-mono">${emac}</span>`)}
                     ${detailCell("Gateway", gatewayValue, gatewaySub)}
+                    ${detailCell("Status", isDead(s) ? `<span class="text-rose-400 font-bold text-xs">💀 Dead</span>` : `<span class="text-emerald-400 font-bold text-xs">● Online</span>`, esc(relSeen(s.last_seen)))}
                     ${detailCell("Last seen", esc(absSeen(s.last_seen)), esc(relSeen(s.last_seen)))}
                     ${detailCell("Signal", signalInline(s.signal), sigText(s.signal).label)}
                     ${detailCell("Battery", s.battery == null ? `${batteryIcon(null)} External power` : batteryTag(s.battery), volts)}
@@ -1242,11 +1257,12 @@ const HTML_CONTENT: &str = concat!(r##"
         function desktopRow(s, d) {
             const open = openSensors.has(s.mac);
             const emac = esc(s.mac);
-            return `<tr data-sensor-row="${emac}" class="sensor-row cursor-pointer text-xs border-t border-slate-800/40${open ? ' open' : ''}" onclick="toggleSensor('${emac}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleSensor('${emac}')}" tabindex="0">
+            return `<tr data-sensor-row="${emac}" class="sensor-row cursor-pointer text-xs border-t border-slate-800/40${open ? ' open' : ''}${isDead(s) ? ' dead' : ''}" onclick="toggleSensor('${emac}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleSensor('${emac}')}" tabindex="0">
                     <td class="py-2.5 pl-3 pr-1 w-6"><span data-sensor-chev="${emac}" class="chevron text-slate-500 text-[10px]${open ? ' open' : ''}">▶</span></td>
                     <td class="py-2.5 px-2">
                         <div class="font-semibold text-slate-200 truncate max-w-[11rem]">${esc(s.name || s.mac)}</div>
                         <div class="font-mono text-[11px] text-teal-500/80">${emac}</div>
+                        ${isDead(s) ? `<div class="mt-1">${deadTag(s)}</div>` : ""}
                     </td>
                     <td class="py-2.5 px-2">${gatewayTag(s, d)}</td>
                     <td class="py-2.5 px-2">${typeTag(s)}</td>
@@ -1265,7 +1281,7 @@ const HTML_CONTENT: &str = concat!(r##"
         function mobileCard(s, d) {
             const open = openSensors.has(s.mac);
             const emac = esc(s.mac);
-            return `<div data-sensor-row="${emac}" class="sensor-card border-b border-slate-800/50 last:border-b-0${open ? ' open' : ''}">
+            return `<div data-sensor-row="${emac}" class="sensor-card border-b border-slate-800/50 last:border-b-0${open ? ' open' : ''}${isDead(s) ? ' dead' : ''}">
                 <button class="w-full text-left px-4 py-3 flex items-start gap-3" onclick="toggleSensor('${emac}')">
                     <span data-sensor-chev="${emac}" class="chevron ${open ? 'open ' : ''}mt-1 text-slate-500 text-[10px]">▶</span>
                     <div class="min-w-0 flex-1">
@@ -1276,7 +1292,7 @@ const HTML_CONTENT: &str = concat!(r##"
                             </div>
                             <div class="shrink-0">${stateTag(s)}</div>
                         </div>
-                        <div class="mt-2 flex flex-wrap items-center gap-1.5">${typeTag(s)}${gatewayTag(s, d)}${batteryTag(s.battery)}</div>
+                        <div class="mt-2 flex flex-wrap items-center gap-1.5">${typeTag(s)}${gatewayTag(s, d)}${batteryTag(s.battery)}${deadTag(s)}</div>
                         <div class="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-500">
                             ${signalInline(s.signal)}
                             <span>Seen ${relSeen(s.last_seen)}</span>
@@ -1304,6 +1320,7 @@ const HTML_CONTENT: &str = concat!(r##"
                 </select>
                 <button onclick="toggleSensorSortDir()" class="py-1 px-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-lg border border-slate-700 transition" title="Toggle sort direction">${sensorSort.dir === "asc" ? "▲ Asc" : "▼ Desc"}</button>
             </div>`;
+            const deadCount = items.filter(({s}) => isDead(s)).length;
             const body = !items.length
                 ? `<div class="text-center text-xs text-slate-500 py-6 italic">No sensors</div>`
                 : `<table class="hidden sm:table w-full text-left text-slate-300">
@@ -1322,6 +1339,7 @@ const HTML_CONTENT: &str = concat!(r##"
                         <span id="sensors-folder-chev" class="chevron text-slate-500 text-[10px] shrink-0${sensorsFolderOpen ? ' open' : ''}">▶</span>
                         <span class="font-bold text-sm text-slate-200">📡 Sensors</span>
                         <span class="tag border border-slate-800 text-slate-400">${items.length}</span>
+                        ${deadCount ? `<span class="tag border border-rose-900 bg-rose-950/40 text-rose-400">💀 ${deadCount} dead</span>` : ""}
                     </div>
                     ${sortControls}
                 </div>
@@ -2128,5 +2146,87 @@ mod tests {
         assert_eq!(orphans[0]["mac"], "77000001");
         assert_eq!(orphans[0]["dongle_mac"], "OFFLINE01");
         assert_eq!(body["dongle_names"]["OFFLINE01"], "Garage Relay");
+    }
+
+    #[tokio::test]
+    async fn dongles_api_exposes_online_status_and_dashboard_highlights_dead() {
+        use crate::protocol::sensor::WyzeSensor;
+
+        let (event_tx, _) = mpsc::channel(128);
+        let (dongle_status_tx, _) = mpsc::channel(8);
+        let mut manager = SensorManager::new(
+            "/nonexistent/sensors.yaml".to_string(),
+            "/nonexistent/state.yaml".to_string(),
+        );
+        let mut live = WyzeSensor::new(
+            "77000001".to_string(),
+            SensorType::ContactV2,
+            "Live Sensor".to_string(),
+        );
+        live.is_online = true;
+        manager
+            .get_sensors_mut()
+            .insert("77000001".to_string(), live);
+        let mut dead = WyzeSensor::new(
+            "77000002".to_string(),
+            SensorType::MotionV2,
+            "Dead Sensor".to_string(),
+        );
+        dead.is_online = false;
+        dead.last_seen = 1_000;
+        manager
+            .get_sensors_mut()
+            .insert("77000002".to_string(), dead);
+
+        let state = Arc::new(WebState {
+            engines: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
+            sensor_manager: Arc::new(std::sync::Mutex::new(manager)),
+            dongle_names: Arc::new(std::sync::Mutex::new(DonglesConfig::default())),
+            dongle_config_path: "/nonexistent/dongles.yaml".to_string(),
+            broadcast_tx: tokio::sync::broadcast::channel(16).0,
+            event_tx,
+            dongle_status_tx,
+            bridge_auth_token: None,
+            bridge: fast_settings(),
+        });
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = router(Arc::clone(&state)).into_make_service_with_connect_info::<SocketAddr>();
+        tokio::spawn(async move { axum::serve(listener, app).await });
+
+        let http = reqwest::Client::new();
+        let body: serde_json::Value = http
+            .get(format!("http://{}/api/dongles", addr))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let sensors = body["unassociated_sensors"].as_array().unwrap();
+        let by_mac = |mac: &str| {
+            sensors
+                .iter()
+                .find(|s| s["mac"] == mac)
+                .unwrap_or_else(|| panic!("sensor {} missing from /api/dongles", mac))
+        };
+        assert_eq!(by_mac("77000001")["is_online"], true);
+        assert_eq!(by_mac("77000002")["is_online"], false);
+
+        // The dashboard must render the dead highlight from that field.
+        let html = http
+            .get(format!("http://{}/", addr))
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+        assert!(html.contains("💀 Dead"), "dashboard should have a Dead tag");
+        assert!(
+            html.contains("sensor-row.dead"),
+            "dashboard should style dead sensor rows"
+        );
     }
 }
