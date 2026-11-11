@@ -977,6 +977,20 @@ const HTML_CONTENT: &str = concat!(r##"
         </div>
     </div>
 
+    <div id="pair-confirm-modal" class="modal-backdrop" onclick="if(event.target===this)closePairConfirm()">
+        <div class="modal-panel p-5">
+            <div class="flex items-center justify-between mb-1">
+                <h3 class="font-bold text-base text-teal-400">✅ Sensor paired</h3>
+                <button onclick="closePairConfirm()" class="text-slate-500 hover:text-slate-300 text-xl leading-none px-2">✕</button>
+            </div>
+            <p class="text-xs text-slate-500 mb-4">The following sensor was just paired. Check the details before you put it to use.</p>
+            <div id="pair-confirm-list" class="flex flex-col gap-2"></div>
+            <div class="flex justify-end gap-2 mt-5">
+                <button onclick="closePairConfirm()" class="py-2 px-4 bg-teal-600 hover:bg-teal-500 text-white text-sm font-semibold rounded-xl">Done</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         const API = "";
         let donglesData = { dongles: [], unassociated_sensors: [] };
@@ -1678,10 +1692,10 @@ const HTML_CONTENT: &str = concat!(r##"
                         openDongles.add(d.mac);
                     }
                     if (!d.scanning && ss?.active) {
-                        const paired = ss.beforeMacs && (d.sensors || []).some(s => !ss.beforeMacs.has(s.mac));
+                        const pairedSensors = ss.beforeMacs ? (d.sensors || []).filter(s => !ss.beforeMacs.has(s.mac)) : [];
                         clearScanTimers(d.mac);
                         scanState[d.mac] = {active: false};
-                        if (paired) toast("Sensor paired", "ok");
+                        if (pairedSensors.length) showPairConfirm(pairedSensors, d);
                     }
                 });
                 Object.keys(scanState).forEach(mac => {
@@ -1697,6 +1711,40 @@ const HTML_CONTENT: &str = concat!(r##"
             } catch (e) {
                 document.getElementById("dongles-container").innerHTML = `<div class="text-center text-sm text-rose-500 py-12">Failed to load</div>`;
             }
+        }
+
+        // ===== Pairing confirmation =====
+        // Shown when a scan finishes and new sensor(s) appeared: names the
+        // device(s) that were just paired instead of a bare "Sensor paired".
+        function showPairConfirm(pairedSensors, dongle) {
+            const list = document.getElementById("pair-confirm-list");
+            if (!list) return;
+            list.innerHTML = pairedSensors.map(s => {
+                const emac = esc(s.mac);
+                const gw = dongle?.name || dongleName(s.dongle_mac) || "";
+                return `<div class="rounded-xl border border-slate-800 bg-slate-950/70 p-3">
+                    <div class="flex items-start justify-between gap-2">
+                        <div class="min-w-0">
+                            <div class="font-semibold text-sm text-slate-200 truncate">${esc(s.name || s.mac)}</div>
+                            <div class="font-mono text-[11px] text-teal-500/80">${emac}</div>
+                        </div>
+                        <button onclick="viewPairedSensor('${emac}')" class="shrink-0 py-1.5 px-3 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-lg border border-slate-700 transition">View</button>
+                    </div>
+                    <div class="mt-2 flex flex-wrap items-center gap-1.5">${typeTag(s)}${gatewayTag(s, dongle)}</div>
+                    <div class="mt-2 text-[11px] text-slate-500">Gateway: <span class="text-slate-300">${esc(gw)}</span> · Seen ${relSeen(s.last_seen)}</div>
+                </div>`;
+            }).join("");
+            document.getElementById("pair-confirm-modal").classList.add("open");
+        }
+        function closePairConfirm() {
+            document.getElementById("pair-confirm-modal")?.classList.remove("open");
+        }
+        function viewPairedSensor(mac) {
+            closePairConfirm();
+            if (!sensorsFolderOpen) toggleSensorsFolder();
+            render();
+            if (!openSensors.has(mac)) toggleSensor(mac);
+            document.querySelector(`[data-sensor-row="${CSS.escape(mac)}"]`)?.scrollIntoView({block: "nearest"});
         }
 
         // ===== Toast =====
@@ -2128,5 +2176,67 @@ mod tests {
         assert_eq!(orphans[0]["mac"], "77000001");
         assert_eq!(orphans[0]["dongle_mac"], "OFFLINE01");
         assert_eq!(body["dongle_names"]["OFFLINE01"], "Garage Relay");
+    }
+
+    #[tokio::test]
+    async fn dashboard_pairing_confirmation_names_the_paired_device() {
+        let (event_tx, _) = mpsc::channel(128);
+        let (dongle_status_tx, _) = mpsc::channel(8);
+        let state = Arc::new(WebState {
+            engines: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
+            sensor_manager: Arc::new(std::sync::Mutex::new(SensorManager::new(
+                "/nonexistent/sensors.yaml".to_string(),
+                "/nonexistent/state.yaml".to_string(),
+            ))),
+            dongle_names: Arc::new(std::sync::Mutex::new(DonglesConfig::default())),
+            dongle_config_path: "/nonexistent/dongles.yaml".to_string(),
+            broadcast_tx: tokio::sync::broadcast::channel(16).0,
+            event_tx,
+            dongle_status_tx,
+            bridge_auth_token: None,
+            bridge: fast_settings(),
+        });
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = router(Arc::clone(&state)).into_make_service_with_connect_info::<SocketAddr>();
+        tokio::spawn(async move { axum::serve(listener, app).await });
+
+        let html = reqwest::Client::new()
+            .get(format!("http://{}/", addr))
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+
+        // A confirmation dialog exists (it used to be a bare "Sensor paired" toast).
+        assert!(
+            html.contains("id=\"pair-confirm-modal\""),
+            "dashboard should have a pairing confirmation dialog"
+        );
+        // The dialog is populated with the newly paired sensor(s) when a
+        // scan stops, showing name, type, MAC and gateway.
+        assert!(
+            html.contains("showPairConfirm(pairedSensors, d)"),
+            "scan completion should open the confirmation dialog with the paired sensors"
+        );
+        assert!(
+            !html.contains("toast(\"Sensor paired\""),
+            "the generic 'Sensor paired' toast should be replaced by the dialog"
+        );
+        for marker in [
+            "esc(s.name || s.mac)",
+            "typeTag(s)",
+            "gatewayTag(s, dongle)",
+            "relSeen(s.last_seen)",
+        ] {
+            assert!(
+                html.contains(marker),
+                "confirmation dialog should show the paired device's {}",
+                marker
+            );
+        }
     }
 }
