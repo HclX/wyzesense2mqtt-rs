@@ -1577,7 +1577,7 @@ const HTML_CONTENT: &str = concat!(r##"
                 if (!ok) { toast(data.error || "Scan toggle failed", "error"); return; }
                 if (data.scan_active) {
                     clearScanTimers(mac);
-                    const beforeMacs = new Set(((dongleByMac(mac)?.sensors) || []).map(s => s.mac));
+                    const beforeMacs = new Set(allSensors().map(s => s.mac));
                     scanState[mac] = {active: true, secondsLeft: 60, beforeMacs};
                     scanState[mac].timer = setInterval(() => {
                         const s = scanState[mac];
@@ -1682,11 +1682,11 @@ const HTML_CONTENT: &str = concat!(r##"
                 const r = await fetch(`${API}/api/dongles`);
                 if (!r.ok) throw new Error(`HTTP ${r.status}`);
                 donglesData = await r.json();
-                // Reflect a scan started or stopped; clean up timers and toast only when a new sensor paired.
+                // Reflect a scan started or stopped; clean up timers and confirm only when a genuinely new sensor paired.
                 (donglesData.dongles || []).forEach(d => {
                     const ss = scanState[d.mac];
                     if (d.scanning && !ss?.active) {
-                        const beforeMacs = new Set((d.sensors || []).map(s => s.mac));
+                        const beforeMacs = new Set(allSensors().map(s => s.mac));
                         scanState[d.mac] = {active: true, secondsLeft: null, beforeMacs};
                         gatewaysFolderOpen = true;
                         openDongles.add(d.mac);
@@ -1721,23 +1721,29 @@ const HTML_CONTENT: &str = concat!(r##"
             if (!list) return;
             list.innerHTML = pairedSensors.map(s => {
                 const emac = esc(s.mac);
-                const gw = dongle?.name || dongleName(s.dongle_mac) || "";
                 return `<div class="rounded-xl border border-slate-800 bg-slate-950/70 p-3">
-                    <div class="flex items-start justify-between gap-2">
+                    <div class="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2">
                         <div class="min-w-0">
-                            <div class="font-semibold text-sm text-slate-200 truncate">${esc(s.name || s.mac)}</div>
+                            <div class="font-semibold text-sm text-slate-200 break-words">${esc(s.name || s.mac)}</div>
                             <div class="font-mono text-[11px] text-teal-500/80">${emac}</div>
                         </div>
-                        <button onclick="viewPairedSensor('${emac}')" class="shrink-0 py-1.5 px-3 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-lg border border-slate-700 transition">View</button>
+                        <div class="shrink-0 flex items-center gap-1.5">
+                            <button onclick="renamePairedSensor('${emac}')" class="py-1.5 px-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-lg border border-slate-700 transition">✏️ Rename</button>
+                            <button onclick="viewPairedSensor('${emac}')" class="py-1.5 px-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-lg border border-slate-700 transition">View</button>
+                        </div>
                     </div>
                     <div class="mt-2 flex flex-wrap items-center gap-1.5">${typeTag(s)}${gatewayTag(s, dongle)}</div>
-                    <div class="mt-2 text-[11px] text-slate-500">Gateway: <span class="text-slate-300">${esc(gw)}</span> · Seen ${relSeen(s.last_seen)}</div>
+                    <div class="mt-1.5 text-[11px] text-slate-500">Seen ${relSeen(s.last_seen)}</div>
                 </div>`;
             }).join("");
             document.getElementById("pair-confirm-modal").classList.add("open");
         }
         function closePairConfirm() {
             document.getElementById("pair-confirm-modal")?.classList.remove("open");
+        }
+        function renamePairedSensor(mac) {
+            closePairConfirm();
+            openRename(mac);
         }
         function viewPairedSensor(mac) {
             closePairConfirm();
@@ -2180,16 +2186,51 @@ mod tests {
 
     #[tokio::test]
     async fn dashboard_pairing_confirmation_names_the_paired_device() {
+        use crate::protocol::sensor::WyzeSensor;
+
+        let dir = std::env::temp_dir().join(format!("w2m_pair_confirm_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let sensors_path = dir.join("sensors.yaml").to_string_lossy().to_string();
+        let state_path = dir.join("state.yaml").to_string_lossy().to_string();
+        let dongles_path = dir.join("dongles.yaml").to_string_lossy().to_string();
+
         let (event_tx, _) = mpsc::channel(128);
         let (dongle_status_tx, _) = mpsc::channel(8);
+
+        let d_a = VirtualDongle::new("DONGLE0A", "V1.0");
+        let mut e_a = Engine::new(d_a.transport(), event_tx.clone());
+        let _exit_a = e_a.start();
+        e_a.initialize_handshake().await.unwrap();
+
+        let d_b = VirtualDongle::new("DONGLE0B", "V1.0");
+        d_b.register_extra_scan_responses(2, 2);
+        let mut e_b = Engine::new(d_b.transport(), event_tx.clone());
+        let _exit_b = e_b.start();
+        e_b.initialize_handshake().await.unwrap();
+
+        let mut dongle_names = DonglesConfig::default();
+        dongle_names.set_name("DONGLE0B", "Living Room");
+
+        let mut manager = SensorManager::new(sensors_path, state_path);
+        let mut existing = WyzeSensor::new(
+            "77000001".to_string(),
+            SensorType::ContactV2,
+            "Front Door".to_string(),
+        );
+        existing.dongle_mac = Some("DONGLE0A".to_string());
+        manager
+            .get_sensors_mut()
+            .insert("77000001".to_string(), existing);
+
+        let mut engines = std::collections::HashMap::new();
+        engines.insert("DONGLE0A".to_string(), e_a);
+        engines.insert("DONGLE0B".to_string(), e_b.clone());
+
         let state = Arc::new(WebState {
-            engines: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
-            sensor_manager: Arc::new(std::sync::Mutex::new(SensorManager::new(
-                "/nonexistent/sensors.yaml".to_string(),
-                "/nonexistent/state.yaml".to_string(),
-            ))),
-            dongle_names: Arc::new(std::sync::Mutex::new(DonglesConfig::default())),
-            dongle_config_path: "/nonexistent/dongles.yaml".to_string(),
+            engines: Arc::new(tokio::sync::Mutex::new(engines)),
+            sensor_manager: Arc::new(std::sync::Mutex::new(manager)),
+            dongle_names: Arc::new(std::sync::Mutex::new(dongle_names)),
+            dongle_config_path: dongles_path,
             broadcast_tx: tokio::sync::broadcast::channel(16).0,
             event_tx,
             dongle_status_tx,
@@ -2202,41 +2243,210 @@ mod tests {
         let app = router(Arc::clone(&state)).into_make_service_with_connect_info::<SocketAddr>();
         tokio::spawn(async move { axum::serve(listener, app).await });
 
+        let base_url = format!("http://{}", addr);
         let html = reqwest::Client::new()
-            .get(format!("http://{}/", addr))
+            .get(format!("{}/", base_url))
             .send()
             .await
             .unwrap()
             .text()
             .await
             .unwrap();
-
-        // A confirmation dialog exists (it used to be a bare "Sensor paired" toast).
         assert!(
             html.contains("id=\"pair-confirm-modal\""),
-            "dashboard should have a pairing confirmation dialog"
+            "dashboard should render the pairing confirmation modal element"
         );
-        // The dialog is populated with the newly paired sensor(s) when a
-        // scan stops, showing name, type, MAC and gateway.
-        assert!(
-            html.contains("showPairConfirm(pairedSensors, d)"),
-            "scan completion should open the confirmation dialog with the paired sensors"
-        );
-        assert!(
-            !html.contains("toast(\"Sensor paired\""),
-            "the generic 'Sensor paired' toast should be replaced by the dialog"
-        );
-        for marker in [
-            "esc(s.name || s.mac)",
-            "typeTag(s)",
-            "gatewayTag(s, dongle)",
-            "relSeen(s.last_seen)",
-        ] {
+
+        let node_available = std::process::Command::new("node")
+            .arg("--version")
+            .output()
+            .is_ok_and(|o| o.status.success());
+        if !node_available {
+            let _ = std::fs::remove_dir_all(&dir);
             assert!(
-                html.contains(marker),
-                "confirmation dialog should show the paired device's {}",
-                marker
+                std::env::var_os("CI").is_none(),
+                "node must be available in CI to run dashboard behavioural assertions"
             );
+            return;
         }
+
+        let script_start = html
+            .find("<script>\n")
+            .expect("inline dashboard <script> should exist")
+            + "<script>\n".len();
+        let script_end = html[script_start..]
+            .find("</script>")
+            .expect("closing </script> should exist")
+            + script_start;
+        let dashboard_js = html[script_start..script_end].to_string();
+
+        // Spawn a Node runner that drives the real dashboard script against our
+        // live Axum server in two phases:
+        //   Phase 1: scan already running on DONGLE0B, existing sensor 77000001
+        //            moves from DONGLE0A to DONGLE0B -> must NOT open dialog.
+        //   Phase 2: scan started via toggleScan("DONGLE0B"), brand-new sensor
+        //            77AB1234 pairs -> opens dialog with Rename + View actions.
+        e_b.set_scan(true).await.unwrap();
+
+        let state_for_node = Arc::clone(&state);
+        let e_b_for_node = e_b.clone();
+        let ctrl_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let ctrl_addr = ctrl_listener.local_addr().unwrap();
+        let ctrl_app = Router::new()
+            .route(
+                "/relink-existing",
+                post({
+                    let st = Arc::clone(&state_for_node);
+                    let eb = e_b_for_node.clone();
+                    move || {
+                        let st = Arc::clone(&st);
+                        let mut eb = eb.clone();
+                        async move {
+                            st.sensor_manager
+                                .lock()
+                                .unwrap()
+                                .get_sensors_mut()
+                                .get_mut("77000001")
+                                .unwrap()
+                                .dongle_mac = Some("DONGLE0B".to_string());
+                            eb.set_scan(false).await.unwrap();
+                            StatusCode::OK
+                        }
+                    }
+                }),
+            )
+            .route(
+                "/pair-new",
+                post(move || {
+                    let st = Arc::clone(&state_for_node);
+                    let mut eb = e_b_for_node.clone();
+                    async move {
+                        let mut s = WyzeSensor::new(
+                            "77AB1234".to_string(),
+                            SensorType::ContactV2,
+                            "Wyze SWITCHV2 1234".to_string(),
+                        );
+                        s.dongle_mac = Some("DONGLE0B".to_string());
+                        s.last_seen = 1_700_000_000;
+                        st.sensor_manager
+                            .lock()
+                            .unwrap()
+                            .get_sensors_mut()
+                            .insert("77AB1234".to_string(), s);
+                        eb.set_scan(false).await.unwrap();
+                        StatusCode::OK
+                    }
+                }),
+            );
+        tokio::spawn(async move { axum::serve(ctrl_listener, ctrl_app).await });
+
+        let harness = r#"
+const vm = require("vm");
+const assert = require("assert");
+const base = process.env.BASE_URL;
+const ctrl = process.env.CTRL_URL;
+const scriptCode = process.env.DASHBOARD_JS.replace('const API = "";', `const API = ${JSON.stringify(base)};`);
+
+const els = new Map();
+const toasts = [];
+const mk = () => ({
+  innerHTML: "", innerText: "", textContent: "", className: "", value: "",
+  focus() {}, select() {}, remove() {}, scrollIntoView() {},
+  classList: { s: new Set(), add(...c){c.forEach(x=>this.s.add(x));}, remove(...c){c.forEach(x=>this.s.delete(x));}, toggle(c,f){if(f===undefined){this.s.has(c)?this.s.delete(c):this.s.add(c);}else if(f)this.s.add(c);else this.s.delete(c);}, contains(c){return this.s.has(c);} },
+  contains: () => false,
+});
+const ctx = {
+  console, Date, Math, Number, String, Object, Array, Set, Promise,
+  encodeURIComponent, parseInt, isNaN, isFinite, fetch,
+  setTimeout: (fn, ms) => { if (ms === 0) fn(); return 1; },
+  clearTimeout: () => {},
+  setInterval: () => 1,
+  clearInterval: () => {},
+  CSS: { escape: s => s },
+  EventSource: function() {},
+  document: {
+    activeElement: null,
+    body: { appendChild(el) { toasts.push(el.textContent); } },
+    getElementById: id => { if (!els.has(id)) els.set(id, mk()); return els.get(id); },
+    querySelector: () => null,
+    querySelectorAll: () => [],
+    addEventListener: () => {},
+    createElement: () => mk(),
+  },
+};
+vm.createContext(ctx);
+vm.runInContext(scriptCode, ctx);
+
+(async () => {
+  // Initial load while DONGLE0B is already scanning (simulates another open tab).
+  await ctx.loadDongles();
+  assert(!els.get("pair-confirm-modal")?.classList.contains("open"));
+
+  // Existing sensor 77000001 moves from DONGLE0A to DONGLE0B while scanning, then scan stops.
+  await fetch(`${ctrl}/relink-existing`, { method: "POST" });
+  await ctx.loadDongles();
+  assert(
+    !els.get("pair-confirm-modal")?.classList.contains("open"),
+    "re-linking an already-known sensor during a scan must not trigger a false pairing dialog"
+  );
+  assert(!toasts.some(t => t.includes("Sensor paired")), "generic 'Sensor paired' toast must not appear");
+
+  // Start a new scan on DONGLE0B from the dashboard, then pair a brand-new sensor.
+  await ctx.toggleScan("DONGLE0B");
+  await fetch(`${ctrl}/pair-new`, { method: "POST" });
+  await ctx.loadDongles();
+
+  assert(
+    els.get("pair-confirm-modal").classList.contains("open"),
+    "newly paired sensor should open the confirmation modal"
+  );
+  const cardHtml = els.get("pair-confirm-list").innerHTML;
+  assert(cardHtml.includes("Wyze SWITCHV2 1234"), "dialog should show sensor default name");
+  assert(cardHtml.includes("77AB1234"), "dialog should show sensor MAC");
+  assert(cardHtml.includes("Contact"), "dialog should show sensor type tag");
+  assert(cardHtml.includes("Living Room"), "dialog should show gateway name tag");
+  assert(!cardHtml.includes("Gateway:"), "gateway must not be repeated on a second 'Gateway:' line");
+
+  // View button expands the sensor in the list and closes the modal.
+  ctx.viewPairedSensor("77AB1234");
+  assert(!els.get("pair-confirm-modal").classList.contains("open"), "View should close confirmation modal");
+  assert(els.get("dongles-container").innerHTML.includes("77AB1234"), "sensor should render in list");
+
+  // Re-open and exercise the Rename shortcut end-to-end against POST /api/sensors/:mac/rename.
+  els.get("pair-confirm-modal").classList.add("open");
+  ctx.renamePairedSensor("77AB1234");
+  assert(!els.get("pair-confirm-modal").classList.contains("open"), "Rename should close confirmation modal");
+  assert(els.get("rename-modal").classList.contains("open"), "Rename should open rename modal");
+  assert.strictEqual(els.get("rename-input").value, "Wyze SWITCHV2 1234");
+  els.get("rename-input").value = "Back Patio";
+  await ctx.saveRename();
+  assert(!els.get("rename-modal").classList.contains("open"), "saveRename should close rename modal");
+})().catch(e => { console.error(e); process.exit(1); });
+"#;
+
+        let out = tokio::task::spawn_blocking(move || {
+            std::process::Command::new("node")
+                .arg("-e")
+                .arg(harness)
+                .env("BASE_URL", &base_url)
+                .env("CTRL_URL", format!("http://{}", ctrl_addr))
+                .env("DASHBOARD_JS", &dashboard_js)
+                .output()
+                .expect("failed to execute node")
+        })
+        .await
+        .unwrap();
+
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            out.status.success(),
+            "dashboard pairing confirmation JS test failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(
+            state.sensor_manager.lock().unwrap().get_sensors()["77AB1234"].friendly_name,
+            "Back Patio",
+            "Rename shortcut in pairing dialog should persist the new sensor name"
+        );
     }
 }
