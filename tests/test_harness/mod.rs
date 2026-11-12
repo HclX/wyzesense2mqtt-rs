@@ -78,6 +78,7 @@ impl TestHarness {
                 dongle.transport(),
                 event_tx.clone(),
             );
+            engine.attach_peer_context(&engines, &sensor_manager);
             let exit_tx = engine.start();
 
             // Handshake
@@ -88,7 +89,15 @@ impl TestHarness {
 
             // Sensor list warm-up
             match engine.get_sensor_list().await {
-                Ok(sensors_list) => {
+                Ok(mut sensors_list) => {
+                    wyzesense2mqtt_rs::engine::purge_sensors_claimed_by_online_dongles(
+                        &engines,
+                        &sensor_manager,
+                        &mac,
+                        &mut engine,
+                        &mut sensors_list,
+                    )
+                    .await;
                     let mut manager = sensor_manager.lock().unwrap();
                     manager.assign_dongle(&mac, &sensors_list);
                 }

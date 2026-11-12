@@ -384,24 +384,10 @@ async fn run_daemon(
         // Drain the event receiver task and dispatch events to the sensor manager
         let mut drain_rx = event_rx;
         let sensor_manager_drain = Arc::clone(&sensor_manager);
-        let engines_drain = Arc::clone(&engines);
         let broadcast_tx_drain = broadcast_tx.clone();
         tokio::spawn(async move {
             while let Some(evt) = drain_rx.recv().await {
                 info!("STATE EVENT: MAC={}, Data={:?}", evt.mac, evt.data);
-                // A Paired event finishes pairing: remove the sensor from
-                // any previous dongle before dispatch re-associates it.
-                if matches!(evt.data, TelemetryData::Paired { .. }) {
-                    if let Some(new_dongle) = evt.dongle_mac.clone() {
-                        let _ = wyzesense2mqtt_rs::engine::detach_sensor_from_previous_dongle(
-                            &engines_drain,
-                            &sensor_manager_drain,
-                            &evt.mac,
-                            &new_dongle,
-                        )
-                        .await;
-                    }
-                }
                 let changed = {
                     let mut manager = sensor_manager_drain.lock().unwrap();
                     manager.dispatch_event(&evt)

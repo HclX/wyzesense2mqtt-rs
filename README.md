@@ -14,7 +14,7 @@ A high-performance, lightweight, asynchronous USB-to-MQTT gateway for **Wyze Sen
 *   **🚀 Unified Daemon Architecture**: Runs a background MQTT bridge event loop, an Axum-powered REST web server, and an availability monitor concurrently in a single process with a negligible RAM footprint.
 *   **🔌 Multi-Dongle Support**: Connect multiple USB dongles — locally or via remote WebSocket bridges — for whole-home RF coverage from a single gateway process.
 *   **📡 Remote Dongle Bridges**: Deploy lightweight `dongle_bridge` binaries on remote machines to relay USB traffic over WebSocket back to the central gateway.
-*   **🔄 Auto-Pairing & Disconnect Detection**: Sensors are automatically associated with their dongle. Disconnected dongles are detected instantly and sensors become unassociated until the dongle reconnects.
+*   **🔄 Auto-Pairing & Disconnect Detection**: Sensors are automatically associated with their dongle, and re-pairing a sensor onto another dongle removes its stale entry from the old one (immediately if online, or when it next reconnects). Disconnected dongles are detected instantly and sensors become unassociated until the dongle reconnects.
 *   **🏠 Home Assistant Auto-Discovery**: Automatically registers sensors with Home Assistant showing battery states, signal strength (RSSI), and active/inactive telemetry states.
 *   **🎨 Premium Embedded Web UI Dashboard**: An elegant, dark-mode control panel with per-dongle sensor cards, per-dongle scan/pair actions, and real-time disconnect indicators.
 *   **🤝 Trait-Based Sensor Polymorphism**: Safe, type-secure modelling for Contact (V1/V2), Motion (V1/V2), Leak (V2), and Climate (V2) sensors.

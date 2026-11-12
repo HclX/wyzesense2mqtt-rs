@@ -441,7 +441,6 @@ impl MqttGateway {
         let topic_root = self.topic_root.clone();
         let published_discovery = self.published_discovery.clone();
         let sensor_manager_worker = self.sensor_manager.clone();
-        let engines_worker = self.engines.clone();
         let broadcast_tx = self.broadcast_tx.clone();
         let keypad = self.keypad.clone();
 
@@ -452,22 +451,6 @@ impl MqttGateway {
                 // Reply first: the keypad is waiting, and announcing below can sleep.
                 if let (Some(keypad), TelemetryData::Keypad { .. }) = (&keypad, &event.data) {
                     tokio::spawn(Arc::clone(keypad).handle(event.clone()));
-                }
-
-                // A Paired event finishes pairing (including the engine's
-                // auto-verify flow, which never goes through /api/verify):
-                // if the sensor was paired with another dongle, remove it
-                // there before dispatch re-associates it with this one.
-                if matches!(event.data, TelemetryData::Paired { .. }) {
-                    if let Some(new_dongle) = event.dongle_mac.clone() {
-                        let _ = crate::engine::detach_sensor_from_previous_dongle(
-                            &engines_worker,
-                            &sensor_manager_worker,
-                            &event.mac,
-                            &new_dongle,
-                        )
-                        .await;
-                    }
                 }
 
                 let mut is_online = !matches!(event.data, TelemetryData::Offline);

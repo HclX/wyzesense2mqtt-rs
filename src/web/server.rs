@@ -237,6 +237,7 @@ async fn handle_bridge_connection(
     engine.device_path = device_path;
     engine.remote_addr = Some(remote_addr.clone());
     engine.inquiry_timeout = state.bridge.inquiry_timeout;
+    engine.attach_peer_context(&state.engines, &state.sensor_manager);
     // Held for the life of the connection; dropping it stops the engine worker.
     let exit_tx = engine.start();
 
@@ -262,7 +263,15 @@ async fn handle_bridge_connection(
     // Warm up sensor cache from dongle NVRAM
     info!("Warming up sensors cache for bridge dongle {}...", mac);
     match engine.get_sensor_list().await {
-        Ok(sensors_list) => {
+        Ok(mut sensors_list) => {
+            crate::engine::purge_sensors_claimed_by_online_dongles(
+                &state.engines,
+                &state.sensor_manager,
+                &mac,
+                &mut engine,
+                &mut sensors_list,
+            )
+            .await;
             let mut manager = state.sensor_manager.lock().unwrap();
             // Assign NVRAM sensors to this dongle in the single source of truth
             manager.assign_dongle(&mac, &sensors_list);
