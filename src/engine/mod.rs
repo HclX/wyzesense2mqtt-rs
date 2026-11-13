@@ -1,13 +1,14 @@
 use crate::protocol::packet::{Packet, CommandType, PacketPayload, commands};
 use crate::protocol::keypad::KeypadReply;
+use crate::protocol::sensor::SensorManager;
 use crate::protocol::telemetry::{DongleEvent, SensorType, TelemetryData};
 use crate::transport::GatewayTransport;
 use crate::transport::AsyncTransport;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{Result, Error, ErrorKind};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::SystemTime;
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, error, info, warn};
@@ -15,6 +16,11 @@ use tracing::{debug, error, info, warn};
 /// Central registry of all connected dongle engines, keyed by dongle MAC address.
 /// Shared across the web server, gateway command router, and event router.
 pub type EnginesMap = std::sync::Arc<tokio::sync::Mutex<std::collections::HashMap<String, Engine>>>;
+
+type PeerContext = (
+    Weak<tokio::sync::Mutex<HashMap<String, Engine>>>,
+    Weak<Mutex<SensorManager>>,
+);
 
 /// Overall time allowed for `initialize_handshake`, Inquiry retries included.
 pub const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
@@ -53,6 +59,13 @@ pub struct Engine {
     pub disconnect_notify: Arc<tokio::sync::Notify>,
     /// Shared dongle MAC for the reader loop to stamp onto DongleEvents.
     shared_dongle_mac: Arc<Mutex<Option<String>>>,
+    /// Sensor MACs currently stored in this dongle's NVRAM.
+    paired_sensors: Arc<Mutex<HashSet<String>>>,
+    /// Set once `get_sensor_list` has completed for this session.
+    sensor_list_loaded: Arc<AtomicBool>,
+    /// Optional weak handles to peer engines + SensorManager so auto-verify
+    /// can remove a newly paired sensor from any previous dongle once.
+    peer_context: Arc<Mutex<Option<PeerContext>>>,
 }
 
 impl Engine {
@@ -64,6 +77,9 @@ impl Engine {
         let is_scanning = Arc::new(AtomicBool::new(false));
         let disconnect_notify = Arc::new(tokio::sync::Notify::new());
         let shared_dongle_mac = Arc::new(Mutex::new(None));
+        let paired_sensors = Arc::new(Mutex::new(HashSet::new()));
+        let sensor_list_loaded = Arc::new(AtomicBool::new(false));
+        let peer_context = Arc::new(Mutex::new(None));
 
         Self {
             transport: transport.clone(),
@@ -82,6 +98,9 @@ impl Engine {
             inquiry_timeout: std::time::Duration::from_secs(2),
             disconnect_notify: Arc::clone(&disconnect_notify),
             shared_dongle_mac: Arc::clone(&shared_dongle_mac),
+            paired_sensors,
+            sensor_list_loaded,
+            peer_context,
         }
     }
 
@@ -91,6 +110,33 @@ impl Engine {
 
     pub fn dongle_version(&self) -> Option<&str> {
         self.dongle_version.as_deref()
+    }
+
+    /// Whether this dongle's NVRAM currently holds `mac`.
+    pub fn has_paired_sensor(&self, mac: &str) -> bool {
+        self.paired_sensors.lock().unwrap().contains(mac)
+    }
+
+    /// Whether `get_sensor_list` has populated `paired_sensors` in this session.
+    pub fn sensor_list_loaded(&self) -> bool {
+        self.sensor_list_loaded.load(Ordering::SeqCst)
+    }
+
+    /// Attaches weak handles to the shared `EnginesMap` and `SensorManager` so
+    /// auto-pairing can clean up stale records on peer dongles without holding
+    /// strong reference cycles.
+    pub fn attach_peer_context(
+        &self,
+        engines: &EnginesMap,
+        sensor_manager: &Arc<Mutex<SensorManager>>,
+    ) {
+        *self.peer_context.lock().unwrap() =
+            Some((Arc::downgrade(engines), Arc::downgrade(sensor_manager)));
+    }
+
+    fn upgrade_peer_context(&self) -> Option<(EnginesMap, Arc<Mutex<SensorManager>>)> {
+        let (engines_w, sm_w) = self.peer_context.lock().unwrap().clone()?;
+        Some((engines_w.upgrade()?, sm_w.upgrade()?))
     }
 
     /// Enables or disables automatic verification for scanned sensors in the background.
@@ -138,6 +184,18 @@ impl Engine {
                     error!("Auto-Pairing: Failed to verify sensor {}: {}", mac, e);
                 } else {
                     info!("Auto-Pairing: Sensor {} successfully paired & committed to NVRAM!", mac);
+                    let dongle_mac = engine_clone.shared_dongle_mac.lock().unwrap().clone();
+                    if let (Some(new_dongle), Some((engines, sensor_manager))) =
+                        (dongle_mac.as_deref(), engine_clone.upgrade_peer_context())
+                    {
+                        let _ = detach_sensor_from_previous_dongle(
+                            &engines,
+                            &sensor_manager,
+                            &mac,
+                            new_dongle,
+                        )
+                        .await;
+                    }
                     // Emit a synthetic Paired event so SensorManager auto-discovers
                     // and associates this sensor with the correct dongle.
                     let paired_evt = DongleEvent {
@@ -146,7 +204,7 @@ impl Engine {
                         sensor_type: s_type,
                         event_type: 0xFE, // synthetic
                         data: TelemetryData::Paired { version },
-                        dongle_mac: engine_clone.shared_dongle_mac.lock().unwrap().clone(),
+                        dongle_mac,
                     };
                     let _ = engine_clone.event_tx.send(paired_evt).await;
                 }
@@ -537,6 +595,7 @@ impl Engine {
         let pkt = Packet::new_async((commands::CMD_VERIFY_SENSOR & 0xFF) as u8, payload);
         // Expect 0x5324 response
         let _resp = self.do_command(pkt, commands::CMD_VERIFY_SENSOR_RESPONSE).await?;
+        self.paired_sensors.lock().unwrap().insert(mac.to_string());
         Ok(())
     }
 
@@ -550,6 +609,7 @@ impl Engine {
         let pkt = Packet::new_async((commands::CMD_DELETE_SENSOR & 0xFF) as u8, payload);
         // Expect 0x5326 response
         let _resp = self.do_command(pkt, commands::CMD_DELETE_SENSOR_RESPONSE).await?;
+        self.paired_sensors.lock().unwrap().remove(mac);
 
         // Note: SensorManager (the single source of truth for persisted sensor
         // state) is updated and saved by the caller via delete_and_persist_sensor.
@@ -585,6 +645,8 @@ impl Engine {
 
         if count == 0 {
             info!("No sensors paired to dongle.");
+            self.paired_sensors.lock().unwrap().clear();
+            self.sensor_list_loaded.store(true, Ordering::SeqCst);
             return Ok(Vec::new());
         }
         
@@ -634,6 +696,11 @@ impl Engine {
         {
             let mut list_tx = self.sensor_list_tx.lock().unwrap();
             *list_tx = None;
+        }
+        {
+            let mut set = self.paired_sensors.lock().unwrap();
+            *set = sensors.iter().cloned().collect();
+            self.sensor_list_loaded.store(true, Ordering::SeqCst);
         }
 
         info!("Successfully retrieved {} paired sensors", sensors.len());
@@ -686,8 +753,178 @@ impl Clone for Engine {
             inquiry_timeout: self.inquiry_timeout,
             disconnect_notify: Arc::clone(&self.disconnect_notify),
             shared_dongle_mac: Arc::clone(&self.shared_dongle_mac),
+            paired_sensors: Arc::clone(&self.paired_sensors),
+            sensor_list_loaded: Arc::clone(&self.sensor_list_loaded),
+            peer_context: Arc::clone(&self.peer_context),
         }
     }
+}
+
+/// Removes stale records of `mac` from any other dongle after pairing finishes
+/// on `new_dongle_mac`.
+///
+/// Checks each connected peer engine's NVRAM sensor set (falling back to
+/// `SensorManager` if a peer engine has not yet loaded its sensor list).
+/// Best-effort: an offline previous dongle or a failed delete is logged and
+/// never fails the pairing itself; offline dongles are cleaned up when they
+/// reconnect via [`purge_sensors_claimed_by_online_dongles`].
+pub async fn detach_sensor_from_previous_dongle(
+    engines: &EnginesMap,
+    sensor_manager: &Arc<Mutex<SensorManager>>,
+    mac: &str,
+    new_dongle_mac: &str,
+) -> Vec<String> {
+    let recorded_previous = {
+        let manager = sensor_manager.lock().unwrap();
+        manager
+            .get_sensors()
+            .get(mac)
+            .and_then(|s| s.dongle_mac.clone())
+            .filter(|prev| prev != new_dongle_mac)
+    };
+
+    let (mut stale_engines, offline_previous) = {
+        let map = engines.lock().await;
+        let mut stale: Vec<(String, Engine)> = map
+            .iter()
+            .filter(|(dmac, _)| dmac.as_str() != new_dongle_mac)
+            .filter(|(dmac, eng)| {
+                eng.has_paired_sensor(mac)
+                    || (!eng.sensor_list_loaded()
+                        && recorded_previous.as_deref() == Some(dmac.as_str()))
+            })
+            .map(|(dmac, eng)| (dmac.clone(), eng.clone()))
+            .collect();
+        stale.sort_by(|a, b| a.0.cmp(&b.0));
+
+        let offline = recorded_previous
+            .as_ref()
+            .filter(|prev| !map.contains_key(*prev))
+            .cloned();
+        (stale, offline)
+    };
+
+    if stale_engines.is_empty() && offline_previous.is_none() {
+        return Vec::new();
+    }
+
+    if recorded_previous.is_some() {
+        let mut manager = sensor_manager.lock().unwrap();
+        if let Some(sensor) = manager
+            .get_sensors_mut()
+            .get_mut(mac)
+            .filter(|s| s.dongle_mac.as_deref() != Some(new_dongle_mac))
+        {
+            sensor.dongle_mac = None;
+        }
+    }
+
+    let mut previous_dongles = Vec::new();
+    for (prev_mac, engine) in &mut stale_engines {
+        match engine.delete_sensor(mac).await {
+            Ok(()) => info!(
+                "Removed sensor {} from previous dongle {} (now paired with {})",
+                mac, prev_mac, new_dongle_mac
+            ),
+            Err(e) => warn!(
+                "Failed to remove sensor {} from previous dongle {}: {}; \
+                 it will be cleaned up when that dongle reconnects (now paired with {})",
+                mac, prev_mac, e, new_dongle_mac
+            ),
+        }
+        previous_dongles.push(prev_mac.clone());
+    }
+
+    if let Some(offline_mac) = offline_previous {
+        info!(
+            "Sensor {} was paired with offline dongle {}; \
+             it will be removed from {} when that dongle reconnects (now paired with {})",
+            mac, offline_mac, offline_mac, new_dongle_mac
+        );
+        previous_dongles.push(offline_mac);
+    }
+
+    previous_dongles
+}
+
+/// Removes stale sensor entries from a connecting dongle when another online
+/// dongle already owns them.
+///
+/// If a sensor was re-paired onto dongle B while dongle A was unplugged or
+/// offline, A still reports that sensor in its sensor list when it comes back.
+/// Deleting it from A here (and dropping it from `nvram_sensors` before
+/// `assign_dongle`) prevents A from keeping a duplicate pairing or stealing
+/// the sensor's association back from B.
+pub async fn purge_sensors_claimed_by_online_dongles(
+    engines: &EnginesMap,
+    sensor_manager: &Arc<Mutex<SensorManager>>,
+    connecting_mac: &str,
+    engine: &mut Engine,
+    nvram_sensors: &mut Vec<String>,
+) -> Vec<String> {
+    if nvram_sensors.is_empty() {
+        return Vec::new();
+    }
+
+    let recorded_owners: HashMap<String, String> = {
+        let manager = sensor_manager.lock().unwrap();
+        nvram_sensors
+            .iter()
+            .filter_map(|mac| {
+                manager
+                    .get_sensors()
+                    .get(mac)
+                    .and_then(|s| s.dongle_mac.as_ref())
+                    .map(|owner| (mac.clone(), owner.clone()))
+            })
+            .collect()
+    };
+
+    let claimed: Vec<(String, String)> = {
+        let map = engines.lock().await;
+        nvram_sensors
+            .iter()
+            .filter_map(|sensor_mac| {
+                let recorded_owner = recorded_owners.get(sensor_mac).map(String::as_str);
+                let owner = map
+                    .iter()
+                    .filter(|(dmac, _)| dmac.as_str() != connecting_mac)
+                    .find(|(dmac, eng)| {
+                        eng.has_paired_sensor(sensor_mac)
+                            || (!eng.sensor_list_loaded()
+                                && recorded_owner == Some(dmac.as_str()))
+                    })
+                    .map(|(dmac, _)| dmac.clone());
+                owner.map(|owner_mac| (sensor_mac.clone(), owner_mac))
+            })
+            .collect()
+    };
+
+    if claimed.is_empty() {
+        return Vec::new();
+    }
+
+    let claimed_set: HashSet<String> = claimed.iter().map(|(s, _)| s.clone()).collect();
+    nvram_sensors.retain(|s| !claimed_set.contains(s));
+
+    let mut purged = Vec::new();
+    for (sensor_mac, owner_mac) in claimed {
+        match engine.delete_sensor(&sensor_mac).await {
+            Ok(()) => {
+                info!(
+                    "Removed stale sensor {} from reconnecting dongle {} (already paired with online dongle {})",
+                    sensor_mac, connecting_mac, owner_mac
+                );
+                purged.push(sensor_mac);
+            }
+            Err(e) => warn!(
+                "Failed to remove stale sensor {} from reconnecting dongle {}: {} \
+                 (kept associated with online dongle {})",
+                sensor_mac, connecting_mac, e, owner_mac
+            ),
+        }
+    }
+    purged
 }
 
 #[cfg(test)]
@@ -695,6 +932,21 @@ mod tests {
     use super::*;
     use crate::transport::replay::ReplayTransport;
     use std::time::Duration;
+
+    fn count_deletes_for(written: &[u8], expected_mac: &[u8]) -> usize {
+        let mut slice = written;
+        let mut count = 0;
+        while let Ok((pkt, n)) = Packet::parse(slice) {
+            if !matches!(pkt.payload, PacketPayload::Ack(_))
+                && pkt.cmd() == commands::CMD_DELETE_SENSOR
+                && matches!(&pkt.payload, PacketPayload::Bytes(b) if b == expected_mac)
+            {
+                count += 1;
+            }
+            slice = &slice[n..];
+        }
+        count
+    }
 
     #[tokio::test]
     async fn engine_releases_transport_and_tasks_when_stopped_or_disconnected() {
@@ -727,5 +979,183 @@ mod tests {
             1,
             "transport disconnect must release all internal transport handles (no leaked auto_verify task)"
         );
+    }
+
+    #[tokio::test]
+    async fn detach_removes_sensor_from_previous_dongle_only() {
+        use crate::protocol::sensor::SensorManager;
+        use crate::transport::virtual_dongle::VirtualDongle;
+
+        let dir = std::env::temp_dir().join(format!("w2m_detach_unit_{}", std::process::id()));
+        let (event_tx, _event_rx) = mpsc::channel(16);
+        let dongle_a = VirtualDongle::new("DONGLE_A", "V2.3.9")
+            .with_sensors(vec!["SHARED01".to_string()]);
+        let mut engine_a = Engine::new(dongle_a.transport(), event_tx.clone());
+        let exit_a = engine_a.start();
+        engine_a.initialize_handshake().await.unwrap();
+        let list_a = engine_a.get_sensor_list().await.unwrap();
+        assert_eq!(list_a, vec!["SHARED01".to_string()]);
+        assert!(engine_a.has_paired_sensor("SHARED01"));
+
+        let dongle_b = VirtualDongle::new("DONGLE_B", "V2.3.9").with_sensors(vec![]);
+        let mut engine_b = Engine::new(dongle_b.transport(), event_tx.clone());
+        let exit_b = engine_b.start();
+        engine_b.initialize_handshake().await.unwrap();
+        assert!(engine_b.get_sensor_list().await.unwrap().is_empty());
+
+        let engines: EnginesMap = Arc::new(tokio::sync::Mutex::new(HashMap::new()));
+        {
+            let mut map = engines.lock().await;
+            map.insert("DONGLE_A".to_string(), engine_a);
+            map.insert("DONGLE_B".to_string(), engine_b.clone());
+        }
+
+        let manager = Arc::new(Mutex::new(SensorManager::new(
+            dir.join("sensors.yaml").to_string_lossy().to_string(),
+            dir.join("state.yaml").to_string_lossy().to_string(),
+        )));
+        manager
+            .lock()
+            .unwrap()
+            .assign_dongle("DONGLE_A", &["SHARED01".to_string()]);
+
+        // Dispatching a Scanned broadcast from DONGLE_B before verification
+        // must NOT overwrite SHARED01's association with DONGLE_A.
+        let scan_evt = DongleEvent {
+            mac: "SHARED01".to_string(),
+            timestamp: SystemTime::now(),
+            sensor_type: SensorType::ContactV2,
+            event_type: 0xA3,
+            data: TelemetryData::Scanned { version: 25 },
+            dongle_mac: Some("DONGLE_B".to_string()),
+        };
+        manager.lock().unwrap().dispatch_event(&scan_evt);
+        assert_eq!(
+            manager.lock().unwrap().get_sensors()["SHARED01"]
+                .dongle_mac
+                .as_deref(),
+            Some("DONGLE_A")
+        );
+
+        engine_b
+            .verify_sensor("SHARED01", SensorType::ContactV2)
+            .await
+            .unwrap();
+        assert!(engine_b.has_paired_sensor("SHARED01"));
+
+        let previous =
+            detach_sensor_from_previous_dongle(&engines, &manager, "SHARED01", "DONGLE_B")
+                .await;
+        assert_eq!(previous, vec!["DONGLE_A".to_string()]);
+
+        assert_eq!(
+            count_deletes_for(&dongle_a.replay_transport().get_written(), b"SHARED01"),
+            1,
+            "DONGLE_A should receive exactly one CMD_DELETE_SENSOR for SHARED01"
+        );
+        assert_eq!(
+            count_deletes_for(&dongle_b.replay_transport().get_written(), b"SHARED01"),
+            0,
+            "DONGLE_B must not receive a delete for a sensor pairing onto it"
+        );
+
+        // Calling detach a second time (or re-pairing onto the same dongle / fresh sensor)
+        // must be a complete no-op because DONGLE_A already dropped SHARED01.
+        let repeat =
+            detach_sensor_from_previous_dongle(&engines, &manager, "SHARED01", "DONGLE_B")
+                .await;
+        assert!(repeat.is_empty());
+        assert_eq!(
+            count_deletes_for(&dongle_a.replay_transport().get_written(), b"SHARED01"),
+            1,
+            "second detach call must not send a duplicate CMD_DELETE_SENSOR"
+        );
+
+        let same =
+            detach_sensor_from_previous_dongle(&engines, &manager, "SHARED01", "DONGLE_B")
+                .await;
+        assert!(same.is_empty());
+        let fresh =
+            detach_sensor_from_previous_dongle(&engines, &manager, "NEWSENS1", "DONGLE_B")
+                .await;
+        assert!(fresh.is_empty());
+
+        drop(exit_a);
+        drop(exit_b);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn reconnecting_dongle_purges_sensor_repaired_while_offline() {
+        use crate::protocol::sensor::SensorManager;
+        use crate::transport::virtual_dongle::VirtualDongle;
+
+        let dir = std::env::temp_dir().join(format!("w2m_purge_unit_{}", std::process::id()));
+        let (event_tx, _event_rx) = mpsc::channel(16);
+
+        // DONGLE_B is online and owns SHARED01 (re-paired while DONGLE_A was unplugged).
+        let dongle_b = VirtualDongle::new("DONGLE_B", "V2.3.9")
+            .with_sensors(vec!["SHARED01".to_string()]);
+        let mut engine_b = Engine::new(dongle_b.transport(), event_tx.clone());
+        let exit_b = engine_b.start();
+        engine_b.initialize_handshake().await.unwrap();
+        let list_b = engine_b.get_sensor_list().await.unwrap();
+
+        let engines: EnginesMap = Arc::new(tokio::sync::Mutex::new(HashMap::new()));
+        engines.lock().await.insert("DONGLE_B".to_string(), engine_b);
+
+        let manager = Arc::new(Mutex::new(SensorManager::new(
+            dir.join("sensors.yaml").to_string_lossy().to_string(),
+            dir.join("state.yaml").to_string_lossy().to_string(),
+        )));
+        manager.lock().unwrap().assign_dongle("DONGLE_B", &list_b);
+
+        // DONGLE_A comes back online still carrying stale SHARED01 plus its own ONLY_A01.
+        let dongle_a = VirtualDongle::new("DONGLE_A", "V2.3.9")
+            .with_sensors(vec!["SHARED01".to_string(), "ONLY_A01".to_string()]);
+        let mut engine_a = Engine::new(dongle_a.transport(), event_tx);
+        let exit_a = engine_a.start();
+        engine_a.initialize_handshake().await.unwrap();
+        let mut list_a = engine_a.get_sensor_list().await.unwrap();
+
+        let purged = purge_sensors_claimed_by_online_dongles(
+            &engines,
+            &manager,
+            "DONGLE_A",
+            &mut engine_a,
+            &mut list_a,
+        )
+        .await;
+        assert_eq!(purged, vec!["SHARED01".to_string()]);
+        assert_eq!(list_a, vec!["ONLY_A01".to_string()]);
+        assert!(!engine_a.has_paired_sensor("SHARED01"));
+        assert!(engine_a.has_paired_sensor("ONLY_A01"));
+
+        manager.lock().unwrap().assign_dongle("DONGLE_A", &list_a);
+        assert_eq!(
+            manager.lock().unwrap().get_sensors()["SHARED01"]
+                .dongle_mac
+                .as_deref(),
+            Some("DONGLE_B"),
+            "reconnecting DONGLE_A must not steal SHARED01 back from online DONGLE_B"
+        );
+        assert_eq!(
+            manager.lock().unwrap().get_sensors()["ONLY_A01"]
+                .dongle_mac
+                .as_deref(),
+            Some("DONGLE_A")
+        );
+        assert_eq!(
+            count_deletes_for(&dongle_a.replay_transport().get_written(), b"SHARED01"),
+            1
+        );
+        assert_eq!(
+            count_deletes_for(&dongle_a.replay_transport().get_written(), b"ONLY_A01"),
+            0
+        );
+
+        drop(exit_a);
+        drop(exit_b);
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

@@ -89,6 +89,7 @@ impl LocalDongles {
         let mut engine = Engine::new(transport, self.event_tx.clone());
         engine.transport_label = "local".to_string();
         engine.device_path = Some(device_path.to_string());
+        engine.attach_peer_context(&self.engines, &self.sensor_manager);
         // Held for the life of the session; dropping it stops the engine worker.
         let exit_tx = engine.start();
 
@@ -106,7 +107,17 @@ impl LocalDongles {
 
         info!("Warming up paired sensors cache from NVRAM for dongle {}...", mac);
         match engine.get_sensor_list().await {
-            Ok(sensors) => self.load_sensors(&mac, &sensors),
+            Ok(mut sensors) => {
+                crate::engine::purge_sensors_claimed_by_online_dongles(
+                    &self.engines,
+                    &self.sensor_manager,
+                    &mac,
+                    &mut engine,
+                    &mut sensors,
+                )
+                .await;
+                self.load_sensors(&mac, &sensors);
+            }
             Err(e) => warn!("Failed to warm up sensors cache for dongle {}: {}", mac, e),
         }
 

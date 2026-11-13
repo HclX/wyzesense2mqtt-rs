@@ -1005,12 +1005,15 @@ impl SensorManager {
             )
         };
 
-        // 3. Construct and insert the in-memory sensor object
+        // 3. Construct and insert the in-memory sensor object (preserving any
+        // existing dongle association when upgrading an Unknown sensor)
+        let existing_dongle = self.sensors.get(&mac).and_then(|s| s.dongle_mac.clone());
         let mut sensor = WyzeSensor::new(
             mac.clone(),
             sensor_type,
             name.clone(),
         );
+        sensor.dongle_mac = existing_dongle;
 
         // Set version from scan data if available
         if let Some(v) = version {
@@ -1107,12 +1110,22 @@ impl SensorManager {
             }
             return false;
         }
+        // A scan advertisement only means the sensor is in pairing mode within
+        // radio range; it is not paired with the scanning dongle until
+        // verification finishes and emits TelemetryData::Paired.
+        if matches!(event.data, TelemetryData::Scanned { .. }) {
+            return false;
+        }
+        let paired_version = match event.data {
+            TelemetryData::Paired { version } if version > 0 => Some(version),
+            _ => None,
+        };
         if !self.sensors.contains_key(&event.mac) {
-            if matches!(event.data, TelemetryData::Scanned { .. }) || matches!(event.data, TelemetryData::Offline) {
+            if matches!(event.data, TelemetryData::Offline) {
                 return false;
             }
             info!("Auto-Discovering and registering newly paired sensor: {}", event.mac);
-            if let Err(e) = self.register_and_persist_sensor(event.mac.clone(), event.sensor_type, None) {
+            if let Err(e) = self.register_and_persist_sensor(event.mac.clone(), event.sensor_type, paired_version) {
                 error!("Failed to auto-register discovered sensor {}: {}", event.mac, e);
                 return false;
             }
@@ -1124,9 +1137,11 @@ impl SensorManager {
 
             if is_unknown && !matches!(event.sensor_type, SensorType::Unknown(_)) {
                 info!("Upgrading auto-discovered sensor {} from Unknown to {:?}", event.mac, event.sensor_type);
-                if let Err(e) = self.register_and_persist_sensor(event.mac.clone(), event.sensor_type, None) {
+                if let Err(e) = self.register_and_persist_sensor(event.mac.clone(), event.sensor_type, paired_version) {
                     error!("Failed to upgrade sensor type for {}: {}", event.mac, e);
                 }
+            } else if let (Some(v), Some(sensor)) = (paired_version, self.sensors.get_mut(&event.mac)) {
+                sensor.sw_version = v.to_string();
             }
         }
 
@@ -1499,6 +1514,57 @@ mod tests {
         assert_eq!(config.sensors["AABBCCDD"].name, "Front Door");
 
         assert!(manager.rename_sensor("NOPE0000", "x").is_err());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn scanned_event_does_not_relink_existing_sensor_until_paired() {
+        let dir = std::env::temp_dir().join(format!("wyze-scan-relink-{}", std::process::id()));
+        let config_path = dir.join("sensors.yaml");
+        let state_path = dir.join("state.yaml");
+        let mut manager = SensorManager::new(
+            config_path.to_string_lossy().to_string(),
+            state_path.to_string_lossy().to_string(),
+        );
+
+        // Sensor starts known on DONGLE_A as Unknown type (as after NVRAM warm-up).
+        manager.assign_dongle("DONGLE_A", &["SHARED01".to_string()]);
+        assert_eq!(
+            manager.get_sensors()["SHARED01"].dongle_mac.as_deref(),
+            Some("DONGLE_A")
+        );
+
+        // Scanning SHARED01 on DONGLE_B must leave it associated with DONGLE_A.
+        let scan_evt = DongleEvent {
+            mac: "SHARED01".to_string(),
+            timestamp: SystemTime::now(),
+            sensor_type: SensorType::ContactV2,
+            event_type: 0xA3,
+            data: TelemetryData::Scanned { version: 25 },
+            dongle_mac: Some("DONGLE_B".to_string()),
+        };
+        assert!(!manager.dispatch_event(&scan_evt));
+        assert_eq!(
+            manager.get_sensors()["SHARED01"].dongle_mac.as_deref(),
+            Some("DONGLE_A"),
+            "Scanned advertisement must not re-link sensor before verification"
+        );
+
+        // Once verification succeeds and emits Paired, SensorManager upgrades and re-links it.
+        let paired_evt = DongleEvent {
+            mac: "SHARED01".to_string(),
+            timestamp: SystemTime::now(),
+            sensor_type: SensorType::ContactV2,
+            event_type: 0xFE,
+            data: TelemetryData::Paired { version: 25 },
+            dongle_mac: Some("DONGLE_B".to_string()),
+        };
+        assert!(manager.dispatch_event(&paired_evt));
+        let sensor = &manager.get_sensors()["SHARED01"];
+        assert_eq!(sensor.dongle_mac.as_deref(), Some("DONGLE_B"));
+        assert_eq!(sensor.sensor_type, SensorType::ContactV2);
+        assert_eq!(sensor.sw_version, "25");
+
         let _ = std::fs::remove_dir_all(dir);
     }
 }
