@@ -1182,7 +1182,10 @@ const HTML_CONTENT: &str = concat!(r##"
                         <div class="font-semibold text-sm text-slate-200 truncate">${esc(s.name || s.mac)}</div>
                         <div class="font-mono text-[11px] text-teal-500/80">${emac}</div>
                     </div>
-                    <button onclick="openRename('${emac}')" class="shrink-0 inline-flex items-center gap-1.5 py-1.5 px-3 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-lg border border-slate-700 transition">✏️ Rename</button>
+                    <div class="shrink-0 flex items-center gap-1.5">
+                        <button onclick="openRename('${emac}')" class="inline-flex items-center gap-1.5 py-1.5 px-3 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-lg border border-slate-700 transition">✏️ Rename</button>
+                        <button onclick="deleteSensor('${emac}')" class="inline-flex items-center gap-1.5 py-1.5 px-3 bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 text-xs font-semibold rounded-lg border border-rose-900/50 transition">🗑️ Delete</button>
+                    </div>
                 </div>
                 <div class="grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-3">
                     ${detailCell("Sensor type", esc(typeLabel(s.sensor_type)))}
@@ -1838,6 +1841,18 @@ const HTML_CONTENT: &str = concat!(r##"
             render();
             if (!openSensors.has(mac)) toggleSensor(mac);
             document.querySelector(`[data-sensor-row="${CSS.escape(mac)}"]`)?.scrollIntoView({block: "nearest"});
+        }
+
+        async function deleteSensor(mac) {
+            if (!confirm(`Delete ${sensorName(mac)} (${mac})? This removes it from the dashboard and any connected dongle.`)) return;
+            try {
+                const r = await fetch(`${API}/api/sensors/${encodeURIComponent(mac)}`, { method: "DELETE" });
+                const data = await r.json().catch(() => ({}));
+                if (!r.ok) { toast(data.error || "Delete failed", "error"); return; }
+                openSensors.delete(mac);
+                toast(`Deleted ${mac}`, "ok");
+                await loadDongles();
+            } catch (e) { toast("Delete failed", "error"); }
         }
 
         // ===== Toast =====
@@ -2617,6 +2632,7 @@ const mk = () => ({
 const ctx = {
   console, Date, Math, Number, String, Object, Array, Set, Map, Promise,
   encodeURIComponent, parseInt, isNaN, isFinite, fetch,
+  confirm: () => true,
   setTimeout: (fn, ms) => { if (ms === 0) fn(); return 1; },
   clearTimeout: () => {},
   setInterval: () => 1,
@@ -2688,6 +2704,12 @@ vm.runInContext(scriptCode, ctx);
   els.get("rename-input").value = "Back Patio";
   await ctx.saveRename();
   assert(!els.get("rename-modal").classList.contains("open"), "saveRename should close rename modal");
+  assert(els.get("dongles-container").innerHTML.includes("Back Patio"), "renamed sensor should render with new name");
+
+  // Delete button removes the sensor via DELETE /api/sensors/:mac.
+  assert(els.get("dongles-container").innerHTML.includes("deleteSensor('77AB1234')"), "sensor detail should render Delete button");
+  await ctx.deleteSensor("77AB1234");
+  assert(!els.get("dongles-container").innerHTML.includes("77AB1234"), "deleted sensor should no longer render in list");
 })().catch(e => { console.error(e); process.exit(1); });
 "#;
 
@@ -2710,10 +2732,90 @@ vm.runInContext(scriptCode, ctx);
             "dashboard pairing confirmation JS test failed: {}",
             String::from_utf8_lossy(&out.stderr)
         );
-        assert_eq!(
-            state.sensor_manager.lock().unwrap().get_sensors()["77AB1234"].friendly_name,
-            "Back Patio",
-            "Rename shortcut in pairing dialog should persist the new sensor name"
+        assert!(
+            !state.sensor_manager.lock().unwrap().get_sensors().contains_key("77AB1234"),
+            "Delete button should remove the sensor from SensorManager"
         );
+    }
+
+    #[tokio::test]
+    async fn delete_sensor_handles_unassociated_associated_and_multi_dongle_nvram() {
+        let (_client, state, _status_rx) = start_server(fast_settings()).await;
+
+        let d1 = VirtualDongle::new("DONGLE01", "V1.0")
+            .with_sensors(vec!["77ASSOC1".into(), "77MULTI1".into()]);
+        let d2 = VirtualDongle::new("DONGLE02", "V1.0")
+            .with_sensors(vec!["77MULTI1".into()]);
+
+        let (tx1, _) = mpsc::channel(16);
+        let mut e1 = Engine::new(d1.transport(), tx1);
+        let _exit1 = e1.start();
+        e1.initialize_handshake().await.unwrap();
+        assert_eq!(e1.get_sensor_list().await.unwrap(), vec!["77ASSOC1", "77MULTI1"]);
+
+        let (tx2, _) = mpsc::channel(16);
+        let mut e2 = Engine::new(d2.transport(), tx2);
+        let _exit2 = e2.start();
+        e2.initialize_handshake().await.unwrap();
+        assert_eq!(e2.get_sensor_list().await.unwrap(), vec!["77MULTI1"]);
+
+        // Queue a delete response for each of the 3 DELETE calls on both dongles.
+        let del_ack = crate::protocol::packet::Packet::new_async(0x26, vec![0x01]).to_bytes();
+        for _ in 0..2 {
+            d1.replay_transport().register_response(crate::protocol::packet::commands::CMD_DELETE_SENSOR, del_ack.clone());
+            d2.replay_transport().register_response(crate::protocol::packet::commands::CMD_DELETE_SENSOR, del_ack.clone());
+        }
+
+        {
+            let mut mgr = state.sensor_manager.lock().unwrap();
+            let _ = mgr.load_sensors(&["77UNASS1".into()]);
+            mgr.assign_dongle("DONGLE01", &["77ASSOC1".into(), "77MULTI1".into()]);
+        }
+        {
+            let mut engines = state.engines.lock().await;
+            engines.insert("DONGLE01".into(), e1);
+            engines.insert("DONGLE02".into(), e2);
+        }
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = router(Arc::clone(&state)).into_make_service_with_connect_info::<SocketAddr>();
+        tokio::spawn(async move { axum::serve(listener, app).await });
+
+        let http = reqwest::Client::new();
+
+        // 1. Unassociated sensor: not in any dongle NVRAM, removed from SensorManager.
+        let r1 = http.delete(format!("http://{}/api/sensors/77UNASS1", addr)).send().await.unwrap();
+        assert_eq!(r1.status(), StatusCode::OK);
+        assert!(!state.sensor_manager.lock().unwrap().get_sensors().contains_key("77UNASS1"));
+
+        // 2. Associated sensor: removed from DONGLE01 paired_sensors (via CMD_DELETE_SENSOR) and SensorManager.
+        d1.replay_transport().clear_written();
+        let r2 = http.delete(format!("http://{}/api/sensors/77ASSOC1", addr)).send().await.unwrap();
+        assert_eq!(r2.status(), StatusCode::OK);
+        assert!(!state.sensor_manager.lock().unwrap().get_sensors().contains_key("77ASSOC1"));
+        {
+            let engines = state.engines.lock().await;
+            assert!(!engines["DONGLE01"].has_paired_sensor("77ASSOC1"));
+            assert!(engines["DONGLE01"].has_paired_sensor("77MULTI1"));
+        }
+        assert!(parse_written_commands(&d1.replay_transport().get_written())
+            .contains(&crate::protocol::packet::commands::CMD_DELETE_SENSOR));
+
+        // 3. Sensor present in multiple dongles' NVRAMs: CMD_DELETE_SENSOR sent to both dongles and removed from both + SensorManager.
+        d1.replay_transport().clear_written();
+        d2.replay_transport().clear_written();
+        let r3 = http.delete(format!("http://{}/api/sensors/77MULTI1", addr)).send().await.unwrap();
+        assert_eq!(r3.status(), StatusCode::OK);
+        assert!(!state.sensor_manager.lock().unwrap().get_sensors().contains_key("77MULTI1"));
+        {
+            let engines = state.engines.lock().await;
+            assert!(!engines["DONGLE01"].has_paired_sensor("77MULTI1"));
+            assert!(!engines["DONGLE02"].has_paired_sensor("77MULTI1"));
+        }
+        assert!(parse_written_commands(&d1.replay_transport().get_written())
+            .contains(&crate::protocol::packet::commands::CMD_DELETE_SENSOR));
+        assert!(parse_written_commands(&d2.replay_transport().get_written())
+            .contains(&crate::protocol::packet::commands::CMD_DELETE_SENSOR));
     }
 }
