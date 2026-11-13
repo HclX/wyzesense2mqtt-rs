@@ -986,10 +986,10 @@ const HTML_CONTENT: &str = concat!(r##"
     <div id="pair-confirm-modal" class="modal-backdrop" onclick="if(event.target===this)closePairConfirm()">
         <div class="modal-panel p-5">
             <div class="flex items-center justify-between mb-1">
-                <h3 class="font-bold text-base text-teal-400">✅ Sensor paired</h3>
+                <h3 id="pair-confirm-title" class="font-bold text-base text-teal-400">✅ Sensor paired</h3>
                 <button onclick="closePairConfirm()" class="text-slate-500 hover:text-slate-300 text-xl leading-none px-2">✕</button>
             </div>
-            <p class="text-xs text-slate-500 mb-4">The following sensor was just paired. Check the details before you put it to use.</p>
+            <p id="pair-confirm-subtitle" class="text-xs text-slate-500 mb-4">The following sensor was just paired. Check the details before you put it to use.</p>
             <div id="pair-confirm-list" class="flex flex-col gap-2"></div>
             <div class="flex justify-end gap-2 mt-5">
                 <button onclick="closePairConfirm()" class="py-2 px-4 bg-teal-600 hover:bg-teal-500 text-white text-sm font-semibold rounded-xl">Done</button>
@@ -1606,8 +1606,7 @@ const HTML_CONTENT: &str = concat!(r##"
                 if (!ok) { toast(data.error || "Scan toggle failed", "error"); return; }
                 if (data.scan_active) {
                     clearScanTimers(mac);
-                    const beforeMacs = new Set(allSensors().map(s => s.mac));
-                    scanState[mac] = {active: true, secondsLeft: 60, beforeMacs};
+                    scanState[mac] = {active: true, secondsLeft: 60, beforeSensors: snapshotSensors()};
                     scanState[mac].timer = setInterval(() => {
                         const s = scanState[mac];
                         if (!s) return;
@@ -1711,20 +1710,19 @@ const HTML_CONTENT: &str = concat!(r##"
                 const r = await fetch(`${API}/api/dongles`);
                 if (!r.ok) throw new Error(`HTTP ${r.status}`);
                 donglesData = await r.json();
-                // Reflect a scan started or stopped; clean up timers and confirm only when a genuinely new sensor paired.
+                // Reflect a scan started or stopped; clean up timers and confirm new or re-paired sensors.
                 (donglesData.dongles || []).forEach(d => {
                     const ss = scanState[d.mac];
                     if (d.scanning && !ss?.active) {
-                        const beforeMacs = new Set(allSensors().map(s => s.mac));
-                        scanState[d.mac] = {active: true, secondsLeft: null, beforeMacs};
+                        scanState[d.mac] = {active: true, secondsLeft: null, beforeSensors: snapshotSensors()};
                         gatewaysFolderOpen = true;
                         openDongles.add(d.mac);
                     }
                     if (!d.scanning && ss?.active) {
-                        const pairedSensors = ss.beforeMacs ? (d.sensors || []).filter(s => !ss.beforeMacs.has(s.mac)) : [];
+                        const pairedItems = ss.beforeSensors ? findPairedSensors(d, ss.beforeSensors) : [];
                         clearScanTimers(d.mac);
                         scanState[d.mac] = {active: false};
-                        if (pairedSensors.length) showPairConfirm(pairedSensors, d);
+                        if (pairedItems.length) showPairConfirm(pairedItems, d);
                     }
                 });
                 Object.keys(scanState).forEach(mac => {
@@ -1743,13 +1741,53 @@ const HTML_CONTENT: &str = concat!(r##"
         }
 
         // ===== Pairing confirmation =====
-        // Shown when a scan finishes and new sensor(s) appeared: names the
-        // device(s) that were just paired instead of a bare "Sensor paired".
-        function showPairConfirm(pairedSensors, dongle) {
+        // Snapshot each sensor's gateway before a scan so we can distinguish
+        // brand-new pairings from existing sensors re-paired from another gateway.
+        function snapshotSensors() {
+            const snap = new Map();
+            (donglesData.dongles || []).forEach(d => {
+                (d.sensors || []).forEach(s => {
+                    snap.set(s.mac, { dongleMac: d.mac, dongleLabel: d.name || dongleName(d.mac) });
+                });
+            });
+            (donglesData.unassociated_sensors || []).forEach(s => {
+                const prevMac = s.dongle_mac || null;
+                snap.set(s.mac, { dongleMac: prevMac, dongleLabel: prevMac ? dongleName(prevMac) : "Unassociated" });
+            });
+            return snap;
+        }
+        function findPairedSensors(dongle, beforeSensors) {
+            return (dongle.sensors || []).reduce((acc, s) => {
+                const prev = beforeSensors.get(s.mac);
+                if (!prev) {
+                    acc.push({ sensor: s, repaired: false, fromMac: null, fromLabel: null });
+                } else if (prev.dongleMac !== dongle.mac) {
+                    acc.push({ sensor: s, repaired: true, fromMac: prev.dongleMac, fromLabel: prev.dongleLabel });
+                }
+                return acc;
+            }, []);
+        }
+        // Shown when a scan finishes and new or re-paired sensor(s) appeared.
+        function showPairConfirm(pairedItems, dongle) {
             const list = document.getElementById("pair-confirm-list");
             if (!list) return;
-            list.innerHTML = pairedSensors.map(s => {
+            const allRepaired = pairedItems.every(item => item.repaired);
+            const titleEl = document.getElementById("pair-confirm-title");
+            const subEl = document.getElementById("pair-confirm-subtitle");
+            if (titleEl) titleEl.textContent = allRepaired ? "🔁 Sensor re-paired" : "✅ Sensor paired";
+            if (subEl) subEl.textContent = allRepaired
+                ? "The following existing sensor was re-paired to this gateway."
+                : "The following sensor was just paired. Check the details before you put it to use.";
+            const newGwLabel = dongle.name || dongleName(dongle.mac);
+            list.innerHTML = pairedItems.map(item => {
+                const s = item.sensor;
                 const emac = esc(s.mac);
+                const repairedTag = item.repaired
+                    ? `<span class="tag border border-amber-900 bg-amber-950/20 text-amber-400">🔁 Re-paired</span>`
+                    : "";
+                const moveInfo = item.repaired
+                    ? `<div class="mt-1.5 text-[11px] text-amber-300/90">From <span class="font-semibold">${esc(item.fromLabel || "Unassociated")}</span> → <span class="font-semibold">${esc(newGwLabel)}</span></div>`
+                    : "";
                 return `<div class="rounded-xl border border-slate-800 bg-slate-950/70 p-3">
                     <div class="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2">
                         <div class="min-w-0">
@@ -1761,7 +1799,8 @@ const HTML_CONTENT: &str = concat!(r##"
                             <button onclick="viewPairedSensor('${emac}')" class="py-1.5 px-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-lg border border-slate-700 transition">View</button>
                         </div>
                     </div>
-                    <div class="mt-2 flex flex-wrap items-center gap-1.5">${typeTag(s)}${gatewayTag(s, dongle)}</div>
+                    <div class="mt-2 flex flex-wrap items-center gap-1.5">${repairedTag}${typeTag(s)}${gatewayTag(s, dongle)}</div>
+                    ${moveInfo}
                     <div class="mt-1.5 text-[11px] text-slate-500">Seen ${relSeen(s.last_seen)}</div>
                 </div>`;
             }).join("");
@@ -2340,7 +2379,7 @@ const mk = () => ({
   contains: () => false,
 });
 const ctx = {
-  console, Date, Math, Number, String, Object, Array, Set, Promise,
+  console, Date, Math, Number, String, Object, Array, Set, Map, Promise,
   encodeURIComponent, parseInt, isNaN, isFinite,
   setTimeout: () => 1, clearTimeout: () => {}, setInterval: () => 1, clearInterval: () => {},
   CSS: { escape: s => s },
@@ -2557,7 +2596,7 @@ const mk = () => ({
   contains: () => false,
 });
 const ctx = {
-  console, Date, Math, Number, String, Object, Array, Set, Promise,
+  console, Date, Math, Number, String, Object, Array, Set, Map, Promise,
   encodeURIComponent, parseInt, isNaN, isFinite, fetch,
   setTimeout: (fn, ms) => { if (ms === 0) fn(); return 1; },
   clearTimeout: () => {},
@@ -2587,10 +2626,16 @@ vm.runInContext(scriptCode, ctx);
   await fetch(`${ctrl}/relink-existing`, { method: "POST" });
   await ctx.loadDongles();
   assert(
-    !els.get("pair-confirm-modal")?.classList.contains("open"),
-    "re-linking an already-known sensor during a scan must not trigger a false pairing dialog"
+    els.get("pair-confirm-modal")?.classList.contains("open"),
+    "re-pairing an existing sensor from another gateway should open the confirmation modal"
   );
+  assert.strictEqual(els.get("pair-confirm-title").textContent, "🔁 Sensor re-paired");
+  const repairedHtml = els.get("pair-confirm-list").innerHTML;
+  assert(repairedHtml.includes("77000001"), "re-pair dialog should show sensor MAC");
+  assert(repairedHtml.includes("Re-paired"), "re-pair dialog should show Re-paired badge");
+  assert(repairedHtml.includes("DONGLE0A") && repairedHtml.includes("Living Room"), "re-pair dialog should show source and destination gateways");
   assert(!toasts.some(t => t.includes("Sensor paired")), "generic 'Sensor paired' toast must not appear");
+  ctx.closePairConfirm();
 
   // Start a new scan on DONGLE0B from the dashboard, then pair a brand-new sensor.
   await ctx.toggleScan("DONGLE0B");
@@ -2601,7 +2646,9 @@ vm.runInContext(scriptCode, ctx);
     els.get("pair-confirm-modal").classList.contains("open"),
     "newly paired sensor should open the confirmation modal"
   );
+  assert.strictEqual(els.get("pair-confirm-title").textContent, "✅ Sensor paired");
   const cardHtml = els.get("pair-confirm-list").innerHTML;
+  assert(!cardHtml.includes("Re-paired"), "new sensor should not be labeled Re-paired");
   assert(cardHtml.includes("Wyze SWITCHV2 1234"), "dialog should show sensor default name");
   assert(cardHtml.includes("77AB1234"), "dialog should show sensor MAC");
   assert(cardHtml.includes("Contact"), "dialog should show sensor type tag");
